@@ -9,7 +9,7 @@ ip: $(LIB_DIR)/Makefile
 
 $(LIB_DIR)/Makefile:
 	mkdir -p $(LIB_DIR)
-	cd $(LIB_DIR) && $(CMAKE) $(abspath lib/fpga-network-stack)
+	cd $(LIB_DIR) && $(CMAKE) -$(CMAKE_ARGS) $(abspath lib/fpga-network-stack)
 
-clean:
+clean_ip:
 	rm -rf $(BUILD_DIR)
