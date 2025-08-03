@@ -1,4 +1,4 @@
-.PHONY: fpga synth vivado tmpclean clean distclean
+.PHONY: offrac synth vivado tmpclean clean distclean
 
 .PRECIOUS: %.xpr %.bit %.bin %.mcs %.prm
 
@@ -17,9 +17,9 @@ endif
 
 # Targets
 
-all: fpga
+all: offrac
 
-fpga: $(PROJECT).bit
+offrac: $(PROJECT).bit
 
 vivado: $(PROJECT).xpr
 	vivado $(PROJECT).xpr

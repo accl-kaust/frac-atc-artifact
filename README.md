@@ -7,5 +7,5 @@ $ make ip
 
 ### Finally to build OffRAC
 ``` sh
-$ make fpga
+$ make offrac
 ```
