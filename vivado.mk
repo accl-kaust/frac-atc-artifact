@@ -17,7 +17,7 @@ endif
 
 # Targets
 
-all: offrac
+all: ip offrac
 
 offrac: $(PROJECT).bit
 
@@ -37,6 +37,8 @@ clean:: tmpclean
 
 distclean:: clean
 	-rm -rf rev
+
+cleanall:: distclean clean_ip
 
 # Target Implementations
 # Vivado project file
