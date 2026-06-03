@@ -163,12 +163,7 @@ reg       finishPulse;
 // Wires and Variables
 ///////////////////////////////////////////////////////////////////////////////
 
-reg areset ;
-
-// Register and invert reset signal.
-always @(posedge ap_clk) begin
-  areset <= ~ap_rst_n;
-end
+wire rst = ~ap_rst_n;
 
 assign interrupt = 1'b0;
 ///////////////////////////////////////////////////////////////////////////////
@@ -176,13 +171,13 @@ assign interrupt = 1'b0;
 ///////////////////////////////////////////////////////////////////////////////
 
   assign uclk = ap_clk;
-  assign urst = areset;
+  assign urst = rst;
 
   wire fclk;
   wire frst;
 
   assign fclk = ap_clk;
-  assign frst = areset;
+  assign frst = rst;
 
 
   /* CUT OFF UDP */
@@ -251,59 +246,59 @@ assign m_axis_tcp_tx_meta_tlast = 1;
 tcp_top_loopback top_instance (
 
 
-.aclk(ap_clk),
-.aresetn(ap_rst_n),
+.clk(ap_clk),
+.rst(rst),
 
-.m_axis_open_connection_TVALID(m_axis_tcp_open_connection_tvalid),
-.m_axis_open_connection_TREADY(m_axis_tcp_open_connection_tready),
-.m_axis_open_connection_TDATA(m_axis_tcp_open_connection_tdata),
-.s_axis_open_status_TVALID(s_axis_tcp_open_status_tvalid),
-.s_axis_open_status_TREADY(s_axis_tcp_open_status_tready),
-.s_axis_open_status_TDATA(s_axis_tcp_open_status_tdata),
+.m_axis_open_connection_tvalid(m_axis_tcp_open_connection_tvalid),
+.m_axis_open_connection_tready(m_axis_tcp_open_connection_tready),
+.m_axis_open_connection_tdata(m_axis_tcp_open_connection_tdata),
+.s_axis_open_status_tvalid(s_axis_tcp_open_status_tvalid),
+.s_axis_open_status_tready(s_axis_tcp_open_status_tready),
+.s_axis_open_status_tdata(s_axis_tcp_open_status_tdata),
 
-.m_axis_close_connection_TVALID(m_axis_tcp_close_connection_tvalid),
-.m_axis_close_connection_TREADY(m_axis_tcp_close_connection_tready),
-.m_axis_close_connection_TDATA(m_axis_tcp_close_connection_tdata),
+.m_axis_close_connection_tvalid(m_axis_tcp_close_connection_tvalid),
+.m_axis_close_connection_tready(m_axis_tcp_close_connection_tready),
+.m_axis_close_connection_tdata(m_axis_tcp_close_connection_tdata),
 
-.m_axis_listen_port_TVALID(m_axis_tcp_listen_port_tvalid),
-.m_axis_listen_port_TREADY(m_axis_tcp_listen_port_tready),
-.m_axis_listen_port_TDATA(m_axis_tcp_listen_port_tdata),
+.m_axis_listen_port_tvalid(m_axis_tcp_listen_port_tvalid),
+.m_axis_listen_port_tready(m_axis_tcp_listen_port_tready),
+.m_axis_listen_port_tdata(m_axis_tcp_listen_port_tdata),
 
-.s_axis_listen_port_status_TVALID(s_axis_tcp_port_status_tvalid),
-.s_axis_listen_port_status_TREADY(s_axis_tcp_port_status_tready),
-.s_axis_listen_port_status_TDATA(s_axis_tcp_port_status_tdata),
+.s_axis_listen_port_status_tvalid(s_axis_tcp_port_status_tvalid),
+.s_axis_listen_port_status_tready(s_axis_tcp_port_status_tready),
+.s_axis_listen_port_status_tdata(s_axis_tcp_port_status_tdata),
 
-.s_axis_notifications_TVALID(s_axis_tcp_notification_tvalid),
-.s_axis_notifications_TREADY(s_axis_tcp_notification_tready),
-.s_axis_notifications_TDATA(s_axis_tcp_notification_tdata),
+.s_axis_notifications_tvalid(s_axis_tcp_notification_tvalid),
+.s_axis_notifications_tready(s_axis_tcp_notification_tready),
+.s_axis_notifications_tdata(s_axis_tcp_notification_tdata),
 
-.m_axis_read_package_TVALID(m_axis_tcp_read_pkg_tvalid),
-.m_axis_read_package_TREADY(m_axis_tcp_read_pkg_tready),
-.m_axis_read_package_TDATA(m_axis_tcp_read_pkg_tdata),
+.m_axis_read_package_tvalid(m_axis_tcp_read_pkg_tvalid),
+.m_axis_read_package_tready(m_axis_tcp_read_pkg_tready),
+.m_axis_read_package_tdata(m_axis_tcp_read_pkg_tdata),
 
-.m_axis_tx_data_TVALID(m_axis_tcp_tx_data_tvalid),
-.m_axis_tx_data_TREADY(m_axis_tcp_tx_data_tready),
-.m_axis_tx_data_TDATA(m_axis_tcp_tx_data_tdata),
-.m_axis_tx_data_TKEEP(m_axis_tcp_tx_data_tkeep),
-.m_axis_tx_data_TLAST(m_axis_tcp_tx_data_tlast),
+.m_axis_tx_data_tvalid(m_axis_tcp_tx_data_tvalid),
+.m_axis_tx_data_tready(m_axis_tcp_tx_data_tready),
+.m_axis_tx_data_tdata(m_axis_tcp_tx_data_tdata),
+.m_axis_tx_data_tkeep(m_axis_tcp_tx_data_tkeep),
+.m_axis_tx_data_tlast(m_axis_tcp_tx_data_tlast),
 
-.m_axis_tx_metadata_TVALID(m_axis_tcp_tx_meta_tvalid),
-.m_axis_tx_metadata_TREADY(m_axis_tcp_tx_meta_tready),
-.m_axis_tx_metadata_TDATA(m_axis_tcp_tx_meta_tdata),
+.m_axis_tx_metadata_tvalid(m_axis_tcp_tx_meta_tvalid),
+.m_axis_tx_metadata_tready(m_axis_tcp_tx_meta_tready),
+.m_axis_tx_metadata_tdata(m_axis_tcp_tx_meta_tdata),
 
-.s_axis_tx_status_TVALID(s_axis_tcp_tx_status_tvalid),
-.s_axis_tx_status_TREADY(s_axis_tcp_tx_status_tready),
-.s_axis_tx_status_TDATA(s_axis_tcp_tx_status_tdata),
+.s_axis_tx_status_tvalid(s_axis_tcp_tx_status_tvalid),
+.s_axis_tx_status_tready(s_axis_tcp_tx_status_tready),
+.s_axis_tx_status_tdata(s_axis_tcp_tx_status_tdata),
 
-.s_axis_rx_data_TVALID(s_axis_tcp_rx_data_tvalid),
-.s_axis_rx_data_TREADY(s_axis_tcp_rx_data_tready),
-.s_axis_rx_data_TDATA(s_axis_tcp_rx_data_tdata),
-.s_axis_rx_data_TKEEP(s_axis_tcp_rx_data_tkeep),
-.s_axis_rx_data_TLAST(s_axis_tcp_rx_data_tlast),
+.s_axis_rx_data_tvalid(s_axis_tcp_rx_data_tvalid),
+.s_axis_rx_data_tready(s_axis_tcp_rx_data_tready),
+.s_axis_rx_data_tdata(s_axis_tcp_rx_data_tdata),
+.s_axis_rx_data_tkeep(s_axis_tcp_rx_data_tkeep),
+.s_axis_rx_data_tlast(s_axis_tcp_rx_data_tlast),
 
-.s_axis_rx_metadata_TVALID(s_axis_tcp_rx_meta_tvalid),
-.s_axis_rx_metadata_TREADY(s_axis_tcp_rx_meta_tready),
-.s_axis_rx_metadata_TDATA(s_axis_tcp_rx_meta_tdata)
+.s_axis_rx_metadata_tvalid(s_axis_tcp_rx_meta_tvalid),
+.s_axis_rx_metadata_tready(s_axis_tcp_rx_meta_tready),
+.s_axis_rx_metadata_tdata(s_axis_tcp_rx_meta_tdata)
 			  
 			  
 			  
@@ -331,7 +326,7 @@ wire[63:0] timeInCycles;
 // is asserted
 always @(posedge ap_clk) begin
    
-  if (~ap_rst_n) begin
+  if (rst) begin
     finishExperiment <= 1;
     countDown <= 0;
   end
@@ -379,7 +374,7 @@ user_krnl_control_s_axi #(
 )
 inst_control_s_axi (
   .ACLK                   ( ap_clk                 ),
-  .ARESET                 ( ~ap_rst_n              ),
+  .ARESET                 ( rst                    ),
   .ACLK_EN                ( 1'b1                   ),
   .AWVALID                ( s_axi_control_awvalid  ), 
   .AWREADY                ( s_axi_control_awready  ),

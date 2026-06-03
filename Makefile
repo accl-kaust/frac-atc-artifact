@@ -52,6 +52,8 @@ RTL_FILES += lib/axis/rtl/sync_reset.v
 RTL_FILES += lib/axis/rtl/reset_gen.v
 RTL_FILES += lib/axis/rtl/axis_fifo_ultra.v
 RTL_FILES += lib/axis/rtl/axis_reg.v
+RTL_FILES += lib/taxi/axis/rtl/taxi_axis_if.sv
+RTL_FILES += lib/taxi/axis/rtl/taxi_axis_fifo.sv
 
 # common
 RTL_FILES += kernels/common/types/network_intf.svh
@@ -82,36 +84,25 @@ RTL_FILES += kernels/network_krnl/rtl/axis_data_reg_array.sv
 RTL_FILES += kernels/network_krnl/rtl/mem_single_inf.sv
 
 #user krnl
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/top_mul.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/pkt_logic.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/scheduler.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/dispatcher.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/pkt_sender.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/top_mul.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/top_k_krnl.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/top_k_unit.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/top_k_block.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/nukv_fifogen.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/echo_workload.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/pkt_receiver.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/top_k_workload.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/EventAcceptor.vhd
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/MM_4_4_workload.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/ipcore_top_top_k.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/tcp_top_loopback.v
-RTL_FILES += kernels/user_krnl/top_k_krnl/rtl/user_krnl_control_s_axi.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/user_krnl.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_fifo_taxi.sv
+RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_data_fifo_replacements.sv
+RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_register.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_pipeline_register.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/dispatcher.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/dummy_delayed_app.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/ipcore_top_top_k.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_logic.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_receiver.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_sender.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/scheduler.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/tcp_top_loopback.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/user_krnl_control_s_axi.v
 
 #XDC
 XDC_FILES = offrac/xdc/fpga_u280.xdc
 XDC_FILES += lib/axis/xdc/sync_reset.tcl
 XDC_FILES += offrac/xdc/floorplan.xdc
-
-# IP
-XCI_FILES = kernels/user_krnl/top_k_krnl/ip/axis_data_fifo_0.xci
-XCI_FILES += kernels/user_krnl/top_k_krnl/ip/axis_data_fifo_1.xci
-XCI_FILES += kernels/user_krnl/top_k_krnl/ip/axis_data_fifo_3.xci
-XCI_FILES += kernels/user_krnl/top_k_krnl/ip/axis_data_fifo_88.xci
-XCI_FILES += kernels/user_krnl/top_k_krnl/ip/axis_data_fifo_513.xci
 
 IP_TCL_FILES = kernels/network_krnl/ip/network_stack.tcl
 IP_TCL_FILES += kernels/network_krnl/ip/network_infrastructure.tcl
