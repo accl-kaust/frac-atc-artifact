@@ -58,6 +58,63 @@ wire hbm_cattrip_0;
 
 assign hbm_cattrip = hbm_cattrip_0;
 
+wire hbm_rst = ~hbm_rstn;
+
+wire vio_hbm_start;
+wire vio_hbm_clear;
+wire [32:0] vio_hbm_base_addr;
+wire [15:0] vio_hbm_word_count;
+wire [1:0] vio_hbm_pattern_select;
+
+wire [3:0] hbm_dbg_state;
+wire hbm_dbg_busy;
+wire hbm_dbg_done;
+wire hbm_dbg_pass;
+wire hbm_dbg_fail;
+wire hbm_dbg_bresp_error;
+wire hbm_dbg_rresp_error;
+wire hbm_dbg_rlast_error;
+wire [31:0] hbm_dbg_write_count;
+wire [31:0] hbm_dbg_read_count;
+wire [32:0] hbm_dbg_current_addr;
+wire [32:0] hbm_dbg_first_bad_addr;
+wire [255:0] hbm_dbg_expected_data;
+wire [255:0] hbm_dbg_observed_data;
+wire [31:0] hbm_dbg_expected_low = hbm_dbg_expected_data[31:0];
+wire [31:0] hbm_dbg_observed_low = hbm_dbg_observed_data[31:0];
+
+wire [32:0] hbm_dbg_awaddr;
+wire [1:0] hbm_dbg_awburst;
+wire [5:0] hbm_dbg_awid;
+wire [3:0] hbm_dbg_awlen;
+wire [2:0] hbm_dbg_awsize;
+wire hbm_dbg_awvalid;
+wire hbm_dbg_awready;
+wire [255:0] hbm_dbg_wdata;
+wire [31:0] hbm_dbg_wstrb;
+wire [31:0] hbm_dbg_wdata_parity;
+wire hbm_dbg_wlast;
+wire hbm_dbg_wvalid;
+wire hbm_dbg_wready;
+wire [5:0] hbm_dbg_bid;
+wire [1:0] hbm_dbg_bresp;
+wire hbm_dbg_bvalid;
+wire hbm_dbg_bready;
+wire [32:0] hbm_dbg_araddr;
+wire [1:0] hbm_dbg_arburst;
+wire [5:0] hbm_dbg_arid;
+wire [3:0] hbm_dbg_arlen;
+wire [2:0] hbm_dbg_arsize;
+wire hbm_dbg_arvalid;
+wire hbm_dbg_arready;
+wire [5:0] hbm_dbg_rid;
+wire [255:0] hbm_dbg_rdata;
+wire [31:0] hbm_dbg_rdata_parity;
+wire [1:0] hbm_dbg_rresp;
+wire hbm_dbg_rlast;
+wire hbm_dbg_rvalid;
+wire hbm_dbg_rready;
+
 wire [63:0]axi_dwidth_converter_0_m_axi_araddr;
 wire [1:0] axi_dwidth_converter_0_m_axi_arburst;
 wire [3:0] axi_dwidth_converter_0_m_axi_arcache;
@@ -478,13 +535,123 @@ axi_prot_conv m01_axi_prot_conv_inst(
 //    .probe0(hbm_rstn)
 // );
 
+hbm_debug_axi_master hbm_debug_axi_master_inst (
+    .clk(hbm_clk),
+    .rst(hbm_rst),
+    .start(vio_hbm_start),
+    .clear(vio_hbm_clear),
+    .base_addr(vio_hbm_base_addr),
+    .word_count(vio_hbm_word_count),
+    .pattern_select(vio_hbm_pattern_select),
+    .state(hbm_dbg_state),
+    .busy(hbm_dbg_busy),
+    .done(hbm_dbg_done),
+    .pass(hbm_dbg_pass),
+    .fail(hbm_dbg_fail),
+    .bresp_error(hbm_dbg_bresp_error),
+    .rresp_error(hbm_dbg_rresp_error),
+    .rlast_error(hbm_dbg_rlast_error),
+    .write_count(hbm_dbg_write_count),
+    .read_count(hbm_dbg_read_count),
+    .current_addr(hbm_dbg_current_addr),
+    .first_bad_addr(hbm_dbg_first_bad_addr),
+    .expected_data(hbm_dbg_expected_data),
+    .observed_data(hbm_dbg_observed_data),
+    .m_axi_awaddr(hbm_dbg_awaddr),
+    .m_axi_awburst(hbm_dbg_awburst),
+    .m_axi_awid(hbm_dbg_awid),
+    .m_axi_awlen(hbm_dbg_awlen),
+    .m_axi_awsize(hbm_dbg_awsize),
+    .m_axi_awvalid(hbm_dbg_awvalid),
+    .m_axi_awready(hbm_dbg_awready),
+    .m_axi_wdata(hbm_dbg_wdata),
+    .m_axi_wstrb(hbm_dbg_wstrb),
+    .m_axi_wdata_parity(hbm_dbg_wdata_parity),
+    .m_axi_wlast(hbm_dbg_wlast),
+    .m_axi_wvalid(hbm_dbg_wvalid),
+    .m_axi_wready(hbm_dbg_wready),
+    .m_axi_bid(hbm_dbg_bid),
+    .m_axi_bresp(hbm_dbg_bresp),
+    .m_axi_bvalid(hbm_dbg_bvalid),
+    .m_axi_bready(hbm_dbg_bready),
+    .m_axi_araddr(hbm_dbg_araddr),
+    .m_axi_arburst(hbm_dbg_arburst),
+    .m_axi_arid(hbm_dbg_arid),
+    .m_axi_arlen(hbm_dbg_arlen),
+    .m_axi_arsize(hbm_dbg_arsize),
+    .m_axi_arvalid(hbm_dbg_arvalid),
+    .m_axi_arready(hbm_dbg_arready),
+    .m_axi_rid(hbm_dbg_rid),
+    .m_axi_rdata(hbm_dbg_rdata),
+    .m_axi_rresp(hbm_dbg_rresp),
+    .m_axi_rlast(hbm_dbg_rlast),
+    .m_axi_rvalid(hbm_dbg_rvalid),
+    .m_axi_rready(hbm_dbg_rready)
+);
+
+vio_hbm_debug vio_hbm_debug_inst (
+    .clk(hbm_clk),
+    .probe_in0(hbm_dbg_busy),
+    .probe_in1(hbm_dbg_done),
+    .probe_in2(hbm_dbg_pass),
+    .probe_in3(hbm_dbg_fail),
+    .probe_in4(hbm_dbg_state),
+    .probe_in5(hbm_dbg_write_count),
+    .probe_in6(hbm_dbg_read_count),
+    .probe_in7(hbm_dbg_first_bad_addr),
+    .probe_in8(hbm_dbg_bresp_error),
+    .probe_in9(hbm_dbg_rresp_error),
+    .probe_in10(hbm_dbg_rlast_error),
+    .probe_in11(hbm_dbg_expected_low),
+    .probe_in12(hbm_dbg_observed_low),
+    .probe_out0(vio_hbm_start),
+    .probe_out1(vio_hbm_clear),
+    .probe_out2(vio_hbm_base_addr),
+    .probe_out3(vio_hbm_word_count),
+    .probe_out4(vio_hbm_pattern_select)
+);
+
+ila_hbm_debug ila_hbm_debug_inst (
+    .clk(hbm_clk),
+    .probe0(hbm_dbg_state),
+    .probe1(hbm_dbg_awvalid),
+    .probe2(hbm_dbg_awready),
+    .probe3(hbm_dbg_wvalid),
+    .probe4(hbm_dbg_wready),
+    .probe5(hbm_dbg_bvalid),
+    .probe6(hbm_dbg_bready),
+    .probe7(hbm_dbg_bresp),
+    .probe8(hbm_dbg_arvalid),
+    .probe9(hbm_dbg_arready),
+    .probe10(hbm_dbg_rvalid),
+    .probe11(hbm_dbg_rready),
+    .probe12(hbm_dbg_rresp),
+    .probe13(hbm_dbg_rlast),
+    .probe14(hbm_dbg_current_addr),
+    .probe15(hbm_dbg_write_count),
+    .probe16(hbm_dbg_read_count),
+    .probe17(hbm_dbg_expected_data),
+    .probe18(hbm_dbg_observed_data),
+    .probe19(hbm_dbg_fail),
+    .probe20(hbm_dbg_done),
+    .probe21(hbm_cattrip),
+    .probe22(vio_hbm_start)
+);
 
 hbm_0 hbm_0_inst(
+    .APB_0_PWDATA(32'd0),
+    .APB_0_PADDR(22'd0),
     .APB_0_PCLK(apb_0_clk),
+    .APB_0_PENABLE(1'b0),
     .APB_0_PRESET_N(apb_rstn),
+    .APB_0_PSEL(1'b0),
+    .APB_0_PWRITE(1'b0),
 
     .AXI_00_ACLK(hbm_clk),
     .AXI_00_ARESET_N(hbm_rstn),
+
+    .AXI_01_ACLK(hbm_clk),
+    .AXI_01_ARESET_N(hbm_rstn),
 
     .AXI_02_ACLK(hbm_clk),
     .AXI_02_ARESET_N(hbm_rstn),
@@ -520,6 +687,38 @@ hbm_0 hbm_0_inst(
     .AXI_00_WSTRB(axi_protocol_convert_1_m_axi_wstrb),
     .AXI_00_WVALID(axi_protocol_convert_1_m_axi_wvalid),
 
+    .AXI_01_ARADDR(hbm_dbg_araddr),
+    .AXI_01_ARBURST(hbm_dbg_arburst),
+    .AXI_01_ARID(hbm_dbg_arid),
+    .AXI_01_ARLEN(hbm_dbg_arlen),
+    .AXI_01_ARREADY(hbm_dbg_arready),
+    .AXI_01_ARSIZE(hbm_dbg_arsize),
+    .AXI_01_ARVALID(hbm_dbg_arvalid),
+    .AXI_01_AWADDR(hbm_dbg_awaddr),
+    .AXI_01_AWBURST(hbm_dbg_awburst),
+    .AXI_01_AWID(hbm_dbg_awid),
+    .AXI_01_AWLEN(hbm_dbg_awlen),
+    .AXI_01_AWREADY(hbm_dbg_awready),
+    .AXI_01_AWSIZE(hbm_dbg_awsize),
+    .AXI_01_AWVALID(hbm_dbg_awvalid),
+    .AXI_01_BID(hbm_dbg_bid),
+    .AXI_01_BREADY(hbm_dbg_bready),
+    .AXI_01_BRESP(hbm_dbg_bresp),
+    .AXI_01_BVALID(hbm_dbg_bvalid),
+    .AXI_01_RDATA(hbm_dbg_rdata),
+    .AXI_01_RDATA_PARITY(hbm_dbg_rdata_parity),
+    .AXI_01_RID(hbm_dbg_rid),
+    .AXI_01_RLAST(hbm_dbg_rlast),
+    .AXI_01_RREADY(hbm_dbg_rready),
+    .AXI_01_RRESP(hbm_dbg_rresp),
+    .AXI_01_RVALID(hbm_dbg_rvalid),
+    .AXI_01_WDATA(hbm_dbg_wdata),
+    .AXI_01_WDATA_PARITY(hbm_dbg_wdata_parity),
+    .AXI_01_WLAST(hbm_dbg_wlast),
+    .AXI_01_WREADY(hbm_dbg_wready),
+    .AXI_01_WSTRB(hbm_dbg_wstrb),
+    .AXI_01_WVALID(hbm_dbg_wvalid),
+
     .AXI_02_ARADDR(axi_protocol_convert_0_m_axi_araddr[32:0]),
     .AXI_02_ARBURST(axi_protocol_convert_0_m_axi_arburst),
     .AXI_02_ARID({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
@@ -549,7 +748,13 @@ hbm_0 hbm_0_inst(
     .AXI_02_WSTRB(axi_protocol_convert_0_m_axi_wstrb),
     .AXI_02_WVALID(axi_protocol_convert_0_m_axi_wvalid),
 
-    .DRAM_0_STAT_CATTRIP(hbm_cattrip_0)
+    .APB_0_PRDATA(),
+    .APB_0_PREADY(),
+    .APB_0_PSLVERR(),
+    .apb_complete_0(),
+
+    .DRAM_0_STAT_CATTRIP(hbm_cattrip_0),
+    .DRAM_0_STAT_TEMP()
 );
 
 endmodule // offrac_hbm

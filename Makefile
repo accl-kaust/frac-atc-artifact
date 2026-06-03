@@ -43,6 +43,7 @@ CMAKE_ARGS += \
 RTL_FILES = offrac/rtl/offrac_top.v
 RTL_FILES += offrac/rtl/offrac.v
 RTL_FILES += offrac/rtl/offrac_hbm.v
+RTL_FILES += offrac/rtl/hbm_debug_axi_master.v
 
 #lib
 RTL_FILES += lib/axis/rtl/axis_fifo.v
