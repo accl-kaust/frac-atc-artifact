@@ -57,8 +57,7 @@ set_property -dict [list \
                         CONFIG.C_PROBE_OUT1_WIDTH {1} \
                         CONFIG.C_PROBE_OUT2_WIDTH {33} \
                         CONFIG.C_PROBE_OUT3_WIDTH {16} \
-                        CONFIG.C_PROBE_OUT4_WIDTH {2} \
-                        CONFIG.Component_Name {vio_hbm_debug}
+                        CONFIG.C_PROBE_OUT4_WIDTH {2}
                    ] [get_ips vio_hbm_debug]
 
 create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_hbm_debug
@@ -90,6 +89,5 @@ set_property -dict [list \
                         CONFIG.C_PROBE19_WIDTH {1} \
                         CONFIG.C_PROBE20_WIDTH {1} \
                         CONFIG.C_PROBE21_WIDTH {1} \
-                        CONFIG.C_PROBE22_WIDTH {1} \
-                        CONFIG.Component_Name {ila_hbm_debug}
+                        CONFIG.C_PROBE22_WIDTH {1}
                    ] [get_ips ila_hbm_debug]
