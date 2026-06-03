@@ -1,8 +1,7 @@
 create_ip -name hbm -vendor xilinx.com -library ip -module_name hbm_0
 
 set_property -dict [list \
-                        CONFIG.USER_HBM_DENSITY {8GB} \
-                        CONFIG.USER_HBM_STACK {2} \
+                        CONFIG.USER_HBM_DENSITY {4GB} \
                         CONFIG.USER_APB_PCLK_0 {50} \
                         CONFIG.USER_APB_PCLK_PERIOD_0 {20.0} \
                         CONFIG.USER_TEMP_POLL_CNT_0 {50000} \

@@ -55,9 +55,8 @@ module offrac_hbm (
 
 
 wire hbm_cattrip_0;
-wire hbm_cattrip_1;
 
-assign hbm_cattrip = hbm_cattrip_0 | hbm_cattrip_1;
+assign hbm_cattrip = hbm_cattrip_0;
 
 wire [63:0]axi_dwidth_converter_0_m_axi_araddr;
 wire [1:0] axi_dwidth_converter_0_m_axi_arburst;
@@ -491,7 +490,6 @@ hbm_0 hbm_0_inst(
     .AXI_02_ARESET_N(hbm_rstn),
 
     .HBM_REF_CLK_0(hbm_ref_clk),
-    .HBM_REF_CLK_1(hbm_ref_clk),
 
     .AXI_00_ARADDR(axi_protocol_convert_1_m_axi_araddr[32:0]),
     .AXI_00_ARBURST(axi_protocol_convert_1_m_axi_arburst),
@@ -551,8 +549,7 @@ hbm_0 hbm_0_inst(
     .AXI_02_WSTRB(axi_protocol_convert_0_m_axi_wstrb),
     .AXI_02_WVALID(axi_protocol_convert_0_m_axi_wvalid),
 
-    .DRAM_0_STAT_CATTRIP(hbm_cattrip_0),
-    .DRAM_1_STAT_CATTRIP(hbm_cattrip_1)
+    .DRAM_0_STAT_CATTRIP(hbm_cattrip_0)
 );
 
 endmodule // offrac_hbm
