@@ -639,13 +639,8 @@ ila_hbm_debug ila_hbm_debug_inst (
 );
 
 hbm_0 hbm_0_inst(
-    .APB_0_PWDATA(32'd0),
-    .APB_0_PADDR(22'd0),
     .APB_0_PCLK(apb_0_clk),
-    .APB_0_PENABLE(1'b0),
     .APB_0_PRESET_N(apb_rstn),
-    .APB_0_PSEL(1'b0),
-    .APB_0_PWRITE(1'b0),
 
     .AXI_00_ACLK(hbm_clk),
     .AXI_00_ARESET_N(hbm_rstn),
@@ -748,9 +743,6 @@ hbm_0 hbm_0_inst(
     .AXI_02_WSTRB(axi_protocol_convert_0_m_axi_wstrb),
     .AXI_02_WVALID(axi_protocol_convert_0_m_axi_wvalid),
 
-    .APB_0_PRDATA(),
-    .APB_0_PREADY(),
-    .APB_0_PSLVERR(),
     .apb_complete_0(),
 
     .DRAM_0_STAT_CATTRIP(hbm_cattrip_0),
