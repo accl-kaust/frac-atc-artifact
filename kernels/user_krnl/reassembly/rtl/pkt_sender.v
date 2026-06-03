@@ -91,7 +91,7 @@ module pkt_sender (
 
     //reg [31:0]  metadata_rx_tdata;//original 16-bit
     reg         metadata_rx_tvalid;
-    wire        metadata_rx_tready = 1;
+    wire        metadata_rx_tready;
     //For debug
     wire [31:0] metadata_notification;
     assign metadata_notification = pkt_rx_tdata[512 + 32: 512 + 1];

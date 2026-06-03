@@ -166,7 +166,6 @@
             input_META_single = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
             for (reset_i = 0; reset_i < QUEUE_NUM; reset_i = reset_i + 1) begin
                 credits[reset_i] = 8'b0;
-                output_deduct_credits[reset_i] = 8'b0;
                 input_META[reset_i] = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
                 counter[reset_i] = 32'd0;
                 counter_inst[reset_i] = 32'd0;

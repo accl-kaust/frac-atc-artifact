@@ -63,7 +63,6 @@ module tcp_top_loopback #(parameter IS_SIM = 0)
     assign m_axis_close_connection_tvalid   = 0;
     assign s_axis_listen_port_status_tready = 1;
     assign s_axis_rx_metadata_tready        = 1;
-    assign s_axis_tx_status_tready          = 1;
 
     assign m_axis_open_connection_tvalid = 0;
     assign s_axis_open_status_tready     = 1;
