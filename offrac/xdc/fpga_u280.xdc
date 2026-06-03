@@ -23,6 +23,11 @@ set_property -dict {LOC BH6 IOSTANDARD LVDS} [get_ports clk_100mhz_1_p]
 set_property -dict {LOC BJ6 IOSTANDARD LVDS} [get_ports clk_100mhz_1_n]
 create_clock -period 10.000 -name clk_100mhz_1 [get_ports clk_100mhz_1_p]
 
+# HBM overtemp
+set_property -dict {LOC D32 IOSTANDARD LVCMOS18} [get_ports hbm_cattrip]
+set_false_path -to [get_ports hbm_cattrip]
+set_output_delay 0.000 [get_ports hbm_cattrip]
+
 set_property -dict {LOC L53} [get_ports {qsfp0_rx_p[0]}]
 set_property -dict {LOC L54} [get_ports {qsfp0_rx_n[0]}]
 set_property -dict {LOC L48} [get_ports {qsfp0_tx_p[0]}]
@@ -70,5 +75,4 @@ set_false_path -to [get_ports msp_uart_txd]
 set_output_delay 0.000 [get_ports msp_uart_txd]
 set_false_path -from [get_ports {{msp_gpio[*]} msp_uart_rxd}]
 set_input_delay 0.000 [get_ports {{msp_gpio[*]} msp_uart_rxd}]
-
 

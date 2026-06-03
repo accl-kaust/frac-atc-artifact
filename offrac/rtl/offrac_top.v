@@ -17,6 +17,8 @@ module offrac_top (
     output wire [3:0] qsfp0_tx_p,
     output wire [3:0] qsfp0_tx_n,
 
+    output wire  hbm_cattrip,
+
     output wire  qsfp0_refclk_oe_b,
     output wire  qsfp0_refclk_fs,
 
@@ -221,6 +223,8 @@ reset_gen(
 offrac offrac_inst
     (
     .free_run_clk(clk_50mhz_int),
+    .hbm_ref_clk(clk_100mhz_0_ibufg),
+    .hbm_cattrip(hbm_cattrip),
     .qsfp0_refclk_n(qsfp0_mgt_refclk_1_n),
     .qsfp0_refclk_p(qsfp0_mgt_refclk_1_p),
     .qsfp0_rx_n(qsfp0_rx_n),

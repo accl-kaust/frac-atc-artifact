@@ -7,14 +7,13 @@ ifeq ($(FDEV_NAME),u280)
     FPGA_PART        := xcu280-fsvh2892-2L-e
     FNS_PLATFORM     := xilinx_u280_xdma_201920_3
     FNS_PLATFORM_PART:= xcu280-fsvh2892-2L-e
-    NETWORK_KRNL_MEM := HBM[15]
     CMAC_SLR         := SLR2
 endif
 
 NETWORK_BANDWIDTH            ?= 100
 NETWORK_INTERFACE            ?= 100
 DATA_WIDTH                   ?= 64
-CLOCK_PERIOD                 ?= 3.2
+CLOCK_PERIOD                 ?= 5.0
 TCP_STACK_EN                 ?= 0
 UDP_STACK_EN                 ?= 1
 FNS_TCP_STACK_RX_DDR_BYPASS_EN ?= 1
@@ -27,7 +26,6 @@ CMAKE_ARGS += \
     -DFPGA_PART=$(FPGA_PART) \
     -DFNS_PLATFORM=$(FNS_PLATFORM) \
     -DFNS_PLATFORM_PART=$(FNS_PLATFORM_PART) \
-    -DNETWORK_KRNL_MEM=$(NETWORK_KRNL_MEM) \
     -DCMAC_SLR=$(CMAC_SLR)\
     -DNETWORK_BANDWIDTH=$(NETWORK_BANDWIDTH) \
     -DNETWORK_INTERFACE=$(NETWORK_INTERFACE) \

@@ -4,6 +4,8 @@
 
 module offrac (
     input wire        free_run_clk,
+    input wire        hbm_ref_clk,
+    output wire       hbm_cattrip,
     input wire        qsfp0_refclk_n,
     input wire        qsfp0_refclk_p,
     input wire [3:0]  qsfp0_rx_n,
@@ -27,7 +29,7 @@ wire hbm_apb_rstn;
 wire hbm_apb_rst;
 
 assign rstn = ~rst;
-assign hbm_apb_rstn = ~rst;
+assign hbm_apb_rstn = ~hbm_apb_rst;
 
 wire cmac_axis_rx_tvalid;
 wire cmac_axis_rx_tready;
@@ -197,7 +199,7 @@ MMCME4_BASE #(
     .CLKOUT0_DIVIDE_F(5),
     .CLKOUT0_DUTY_CYCLE(0.5),
     .CLKOUT0_PHASE(0),
-    .CLKOUT1_DIVIDE(25),
+    .CLKOUT1_DIVIDE(20),
     .CLKOUT1_DUTY_CYCLE(0.5),
     .CLKOUT1_PHASE(0),
     .CLKOUT2_DIVIDE(1),
@@ -215,7 +217,7 @@ MMCME4_BASE #(
     .CLKOUT6_DIVIDE(1),
     .CLKOUT6_DUTY_CYCLE(0.5),
     .CLKOUT6_PHASE(0),
-    .CLKFBOUT_MULT_F(12.5),
+    .CLKFBOUT_MULT_F(10),
     .CLKFBOUT_PHASE(0),
     .DIVCLK_DIVIDE(1),
     .REF_JITTER1(0.010),
@@ -615,10 +617,12 @@ axis_tcp_stat_width_conv tcp_open_status_width_conv_inst (
 );
 
 offrac_hbm offrac_hbm_inst (
+    .hbm_ref_clk(hbm_ref_clk),
     .hbm_clk(clk),
     .hbm_rstn(rstn),
     .apb_0_clk(hbm_apb_clk),
     .apb_rstn(hbm_apb_rstn),
+    .hbm_cattrip(hbm_cattrip),
 
     .m00_axi_araddr(m00_axi_araddr),
     .m00_axi_arlen(m00_axi_arlen),

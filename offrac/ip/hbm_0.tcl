@@ -1,6 +1,8 @@
 create_ip -name hbm -vendor xilinx.com -library ip -module_name hbm_0
 
 set_property -dict [list \
+                        CONFIG.USER_HBM_DENSITY {8GB} \
+                        CONFIG.USER_HBM_STACK {2} \
                         CONFIG.USER_APB_PCLK_0 {50} \
                         CONFIG.USER_APB_PCLK_PERIOD_0 {20.0} \
                         CONFIG.USER_TEMP_POLL_CNT_0 {50000} \
@@ -26,10 +28,10 @@ set_property -dict [list \
                         CONFIG.USER_SAXI_13 {false} \
                         CONFIG.USER_SAXI_14 {false} \
                         CONFIG.USER_SAXI_15 {false} \
-                        CONFIG.USER_AXI_INPUT_CLK_FREQ {250} \
-                        CONFIG.USER_AXI_INPUT_CLK_NS {4.000} \
-                        CONFIG.USER_AXI_INPUT_CLK_PS {4000} \
-                        CONFIG.USER_AXI_INPUT_CLK_XDC {4.000} \
+                        CONFIG.USER_AXI_INPUT_CLK_FREQ {200} \
+                        CONFIG.USER_AXI_INPUT_CLK_NS {5.000} \
+                        CONFIG.USER_AXI_INPUT_CLK_PS {5000} \
+                        CONFIG.USER_AXI_INPUT_CLK_XDC {5.000} \
                         CONFIG.HBM_MMCM_FBOUT_MULT0 {18} \
                         CONFIG.USER_APB_EN {false}
                    ] [get_ips hbm_0]

@@ -4,10 +4,12 @@
 
 
 module offrac_hbm (
+    input wire          hbm_ref_clk,
     input wire          hbm_clk,
     input wire          hbm_rstn,
     input wire          apb_0_clk,
     input wire          apb_rstn,
+    output wire         hbm_cattrip,
 
     input wire          m00_axi_awvalid,
     output wire         m00_axi_awready,
@@ -51,6 +53,11 @@ module offrac_hbm (
 
 );
 
+
+wire hbm_cattrip_0;
+wire hbm_cattrip_1;
+
+assign hbm_cattrip = hbm_cattrip_0 | hbm_cattrip_1;
 
 wire [63:0]axi_dwidth_converter_0_m_axi_araddr;
 wire [1:0] axi_dwidth_converter_0_m_axi_arburst;
@@ -483,7 +490,8 @@ hbm_0 hbm_0_inst(
     .AXI_02_ACLK(hbm_clk),
     .AXI_02_ARESET_N(hbm_rstn),
 
-    .HBM_REF_CLK_0(hbm_clk),
+    .HBM_REF_CLK_0(hbm_ref_clk),
+    .HBM_REF_CLK_1(hbm_ref_clk),
 
     .AXI_00_ARADDR(axi_protocol_convert_1_m_axi_araddr[32:0]),
     .AXI_00_ARBURST(axi_protocol_convert_1_m_axi_arburst),
@@ -541,7 +549,10 @@ hbm_0 hbm_0_inst(
     .AXI_02_WLAST(axi_protocol_convert_0_m_axi_wlast),
     .AXI_02_WREADY(axi_protocol_convert_0_m_axi_wready),
     .AXI_02_WSTRB(axi_protocol_convert_0_m_axi_wstrb),
-    .AXI_02_WVALID(axi_protocol_convert_0_m_axi_wvalid)
+    .AXI_02_WVALID(axi_protocol_convert_0_m_axi_wvalid),
+
+    .DRAM_0_STAT_CATTRIP(hbm_cattrip_0),
+    .DRAM_1_STAT_CATTRIP(hbm_cattrip_1)
 );
 
 endmodule // offrac_hbm
