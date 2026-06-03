@@ -61,6 +61,9 @@ $(PROJECT).xpr: create_project.tcl
 $(PROJECT).runs/synth_1/$(PROJECT).dcp: create_project.tcl $(RTL_FILES_REL) $(INC_FILES_REL) $(XDC_FILES_REL) | $(PROJECT).xpr
 	echo "open_project $(PROJECT).xpr" > run_synth.tcl
 	echo "reset_run synth_1" >> run_synth.tcl
+	echo "catch {set_property STEPS.SYNTH_DESIGN.ARGS.INCREMENTAL_MODE off [get_runs synth_1]}" >> run_synth.tcl
+	echo "catch {set_property STEPS.SYNTH_DESIGN.ARGS.INCREMENTAL_CHECKPOINT {} [get_runs synth_1]}" >> run_synth.tcl
+	echo "catch {set_property INCREMENTAL_CHECKPOINT {} [get_runs synth_1]}" >> run_synth.tcl
 	echo "launch_runs -jobs 4 synth_1" >> run_synth.tcl
 	echo "wait_on_run synth_1" >> run_synth.tcl
 	vivado -nojournal -nolog -mode batch -source run_synth.tcl
