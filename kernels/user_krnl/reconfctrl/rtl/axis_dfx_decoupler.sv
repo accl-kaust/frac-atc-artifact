@@ -10,52 +10,46 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-module axis_dfx_decoupler (
-    input  wire logic decouple,
+module axis_dfx_decoupler #(
+    parameter int DATA_W = 512,
+    parameter int KEEP_W = DATA_W/8,
+    parameter int ID_W   = 1,
+    parameter int DEST_W = 1,
+    parameter int USER_W = 1
+) (
+    input  wire                  decouple,
 
-    taxi_axis_if.snk  s_axis,
-    taxi_axis_if.src  m_axis
+    input  wire [DATA_W-1:0]     s_axis_tdata,
+    input  wire [KEEP_W-1:0]     s_axis_tkeep,
+    input  wire [KEEP_W-1:0]     s_axis_tstrb,
+    input  wire                  s_axis_tvalid,
+    output wire                  s_axis_tready,
+    input  wire                  s_axis_tlast,
+    input  wire [DEST_W-1:0]     s_axis_tdest,
+    input  wire [ID_W-1:0]       s_axis_tid,
+    input  wire [USER_W-1:0]     s_axis_tuser,
+
+    output wire [DATA_W-1:0]     m_axis_tdata,
+    output wire [KEEP_W-1:0]     m_axis_tkeep,
+    output wire [KEEP_W-1:0]     m_axis_tstrb,
+    output wire                  m_axis_tvalid,
+    input  wire                  m_axis_tready,
+    output wire                  m_axis_tlast,
+    output wire [DEST_W-1:0]     m_axis_tdest,
+    output wire [ID_W-1:0]       m_axis_tid,
+    output wire [USER_W-1:0]     m_axis_tuser
 );
 
-    localparam int DATA_W = s_axis.DATA_W;
-    localparam int KEEP_W = s_axis.KEEP_W;
-    localparam int ID_W   = s_axis.ID_W;
-    localparam int DEST_W = s_axis.DEST_W;
-    localparam int USER_W = s_axis.USER_W;
+    assign s_axis_tready = decouple ? 1'b0 : m_axis_tready;
 
-    initial begin
-        if (m_axis.DATA_W != DATA_W)
-            $fatal(0, "axis_dfx_decoupler: DATA_W mismatch");
-        if (m_axis.KEEP_W != KEEP_W)
-            $fatal(0, "axis_dfx_decoupler: KEEP_W mismatch");
-        if (m_axis.ID_W != ID_W)
-            $fatal(0, "axis_dfx_decoupler: ID_W mismatch");
-        if (m_axis.DEST_W != DEST_W)
-            $fatal(0, "axis_dfx_decoupler: DEST_W mismatch");
-        if (m_axis.USER_W != USER_W)
-            $fatal(0, "axis_dfx_decoupler: USER_W mismatch");
-        if (m_axis.KEEP_EN != s_axis.KEEP_EN)
-            $fatal(0, "axis_dfx_decoupler: KEEP_EN mismatch");
-        if (m_axis.LAST_EN != s_axis.LAST_EN)
-            $fatal(0, "axis_dfx_decoupler: LAST_EN mismatch");
-        if (m_axis.ID_EN != s_axis.ID_EN)
-            $fatal(0, "axis_dfx_decoupler: ID_EN mismatch");
-        if (m_axis.DEST_EN != s_axis.DEST_EN)
-            $fatal(0, "axis_dfx_decoupler: DEST_EN mismatch");
-        if (m_axis.USER_EN != s_axis.USER_EN)
-            $fatal(0, "axis_dfx_decoupler: USER_EN mismatch");
-    end
-
-    assign s_axis.tready = decouple ? 1'b0 : m_axis.tready;
-
-    assign m_axis.tvalid = decouple ? 1'b0 : s_axis.tvalid;
-    assign m_axis.tdata  = decouple ? '0   : s_axis.tdata;
-    assign m_axis.tkeep  = decouple ? '0   : s_axis.tkeep;
-    assign m_axis.tstrb  = decouple ? '0   : s_axis.tstrb;
-    assign m_axis.tlast  = decouple ? 1'b0 : s_axis.tlast;
-    assign m_axis.tid    = decouple ? '0   : s_axis.tid;
-    assign m_axis.tdest  = decouple ? '0   : s_axis.tdest;
-    assign m_axis.tuser  = decouple ? '0   : s_axis.tuser;
+    assign m_axis_tvalid = decouple ? 1'b0 : s_axis_tvalid;
+    assign m_axis_tdata  = decouple ? {DATA_W{1'b0}} : s_axis_tdata;
+    assign m_axis_tkeep  = decouple ? {KEEP_W{1'b0}} : s_axis_tkeep;
+    assign m_axis_tstrb  = decouple ? {KEEP_W{1'b0}} : s_axis_tstrb;
+    assign m_axis_tlast  = decouple ? 1'b0 : s_axis_tlast;
+    assign m_axis_tdest  = decouple ? {DEST_W{1'b0}} : s_axis_tdest;
+    assign m_axis_tid    = decouple ? {ID_W{1'b0}} : s_axis_tid;
+    assign m_axis_tuser  = decouple ? {USER_W{1'b0}} : s_axis_tuser;
 
 endmodule
 

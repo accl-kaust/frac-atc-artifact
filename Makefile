@@ -88,7 +88,6 @@ RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_data_fifo_replacements.sv
 RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_register.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_pipeline_register.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/dispatcher.v
-RTL_FILES += kernels/user_krnl/reassembly/rtl/dummy_delayed_app.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/ipcore_top_top_k.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_logic.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_receiver.v

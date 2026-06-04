@@ -249,123 +249,145 @@ module pkt_logic #(
     wire [512:0] pattern_tx_payload;
     wire         pattern_tx_valid;
     reg          pattern_tx_ready;
-    wire [31:0]  pattern_tx_meta;
-    wire         pattern_meta_valid;
+    wire [31:0]  pattern_tx_meta = app_rx_meta;
     wire         pattern_app_ready;
+    wire [511:0] pattern_decoupled_tdata;
+    wire         pattern_decoupled_tvalid;
+    wire         pattern_decoupled_tready;
+    wire         pattern_decoupled_tlast;
+    wire [511:0] pattern_slot_tx_data;
+    wire         pattern_slot_tx_last;
 
-    taxi_axis_if #(
-        .DATA_W(513),
-        .KEEP_EN(1'b0),
-        .STRB_EN(1'b0),
-        .LAST_EN(1'b0),
-        .ID_EN(1'b0),
-        .DEST_EN(1'b0),
-        .USER_EN(1'b0)
-    ) pattern_slot_s_axis();
+    assign pattern_rx_ready = pattern_decoupled_tready;
+    assign pattern_tx_payload = {pattern_slot_tx_last, pattern_slot_tx_data};
 
-    taxi_axis_if #(
-        .DATA_W(513),
-        .KEEP_EN(1'b0),
-        .STRB_EN(1'b0),
-        .LAST_EN(1'b0),
-        .ID_EN(1'b0),
-        .DEST_EN(1'b0),
-        .USER_EN(1'b0)
-    ) pattern_slot_m_axis();
-
-    assign pattern_slot_s_axis.tdata = app_rx_payload;
-    assign pattern_slot_s_axis.tkeep = '1;
-    assign pattern_slot_s_axis.tstrb = '1;
-    assign pattern_slot_s_axis.tlast = 1'b1;
-    assign pattern_slot_s_axis.tid = '0;
-    assign pattern_slot_s_axis.tdest = '0;
-    assign pattern_slot_s_axis.tuser = '0;
-    assign pattern_slot_s_axis.tvalid = pattern_rx_valid;
-    assign pattern_slot_m_axis.tready = pattern_app_ready;
-    assign pattern_rx_ready = pattern_slot_s_axis.tready;
-
-    axis_dfx_decoupler pattern_slot_decoupler_inst (
+    axis_dfx_decoupler #(
+        .DATA_W(512),
+        .KEEP_W(64),
+        .DEST_W(1),
+        .ID_W(1),
+        .USER_W(1)
+    ) pattern_slot_decoupler_inst (
         .decouple(slot_decouple[0]),
-        .s_axis(pattern_slot_s_axis),
-        .m_axis(pattern_slot_m_axis)
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
+        .s_axis_tvalid(pattern_rx_valid),
+        .s_axis_tready(pattern_decoupled_tready),
+        .s_axis_tlast(app_rx_payload[512]),
+        .s_axis_tdest(1'b0),
+        .s_axis_tid(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(pattern_decoupled_tdata),
+        .m_axis_tkeep(),
+        .m_axis_tstrb(),
+        .m_axis_tvalid(pattern_decoupled_tvalid),
+        .m_axis_tready(pattern_app_ready),
+        .m_axis_tlast(pattern_decoupled_tlast),
+        .m_axis_tdest(),
+        .m_axis_tid(),
+        .m_axis_tuser()
     );
 
-    dummy_delayed_app #(
-        .MODE(0),
-        .DELAY_CYCLES(APP_DELAY_CYCLES)
-    ) pattern_app_inst (
+    cell_bbx #(
+        .AXIS_DATA_W(512),
+        .KEEP_W(64),
+        .TDEST_W(1),
+        .TID_W(1),
+        .USER_W(1)
+    ) c00_bbx_inst (
         .clk(clk),
         .rst(rst),
-        .rx_tdata(pattern_slot_m_axis.tdata),
-        .rx_tvalid(pattern_slot_m_axis.tvalid),
-        .rx_tready(pattern_app_ready),
-        .meta_tdata(app_rx_meta),
-        .pkt_tx_tdata_payload(pattern_tx_payload),
-        .tx_data_tvalid(pattern_tx_valid),
-        .tx_data_tready(pattern_tx_ready),
-        .meta_tdata_out(pattern_tx_meta),
-        .meta_tvalid_out(pattern_meta_valid)
+        .s_axis_tdata(pattern_decoupled_tdata),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
+        .s_axis_tvalid(pattern_decoupled_tvalid),
+        .s_axis_tready(pattern_app_ready),
+        .s_axis_tlast(pattern_decoupled_tlast),
+        .s_axis_tdest(1'b0),
+        .s_axis_tid(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(pattern_slot_tx_data),
+        .m_axis_tkeep(),
+        .m_axis_tstrb(),
+        .m_axis_tvalid(pattern_tx_valid),
+        .m_axis_tready(pattern_tx_ready),
+        .m_axis_tlast(pattern_slot_tx_last),
+        .m_axis_tdest(),
+        .m_axis_tid(),
+        .m_axis_tuser()
     );
 
     wire [512:0] or_tx_payload;
     wire         or_tx_valid;
     reg          or_tx_ready;
-    wire [31:0]  or_tx_meta;
-    wire         or_meta_valid;
+    wire [31:0]  or_tx_meta = app_rx_meta;
     wire         or_app_ready;
+    wire [511:0] or_decoupled_tdata;
+    wire         or_decoupled_tvalid;
+    wire         or_decoupled_tready;
+    wire         or_decoupled_tlast;
+    wire [511:0] or_slot_tx_data;
+    wire         or_slot_tx_last;
 
-    taxi_axis_if #(
-        .DATA_W(513),
-        .KEEP_EN(1'b0),
-        .STRB_EN(1'b0),
-        .LAST_EN(1'b0),
-        .ID_EN(1'b0),
-        .DEST_EN(1'b0),
-        .USER_EN(1'b0)
-    ) or_slot_s_axis();
+    assign or_rx_ready = or_decoupled_tready;
+    assign or_tx_payload = {or_slot_tx_last, or_slot_tx_data};
 
-    taxi_axis_if #(
-        .DATA_W(513),
-        .KEEP_EN(1'b0),
-        .STRB_EN(1'b0),
-        .LAST_EN(1'b0),
-        .ID_EN(1'b0),
-        .DEST_EN(1'b0),
-        .USER_EN(1'b0)
-    ) or_slot_m_axis();
-
-    assign or_slot_s_axis.tdata = app_rx_payload;
-    assign or_slot_s_axis.tkeep = '1;
-    assign or_slot_s_axis.tstrb = '1;
-    assign or_slot_s_axis.tlast = 1'b1;
-    assign or_slot_s_axis.tid = '0;
-    assign or_slot_s_axis.tdest = '0;
-    assign or_slot_s_axis.tuser = '0;
-    assign or_slot_s_axis.tvalid = or_rx_valid;
-    assign or_slot_m_axis.tready = or_app_ready;
-    assign or_rx_ready = or_slot_s_axis.tready;
-
-    axis_dfx_decoupler or_slot_decoupler_inst (
+    axis_dfx_decoupler #(
+        .DATA_W(512),
+        .KEEP_W(64),
+        .DEST_W(1),
+        .ID_W(1),
+        .USER_W(1)
+    ) or_slot_decoupler_inst (
         .decouple(slot_decouple[1]),
-        .s_axis(or_slot_s_axis),
-        .m_axis(or_slot_m_axis)
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
+        .s_axis_tvalid(or_rx_valid),
+        .s_axis_tready(or_decoupled_tready),
+        .s_axis_tlast(app_rx_payload[512]),
+        .s_axis_tdest(1'b0),
+        .s_axis_tid(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(or_decoupled_tdata),
+        .m_axis_tkeep(),
+        .m_axis_tstrb(),
+        .m_axis_tvalid(or_decoupled_tvalid),
+        .m_axis_tready(or_app_ready),
+        .m_axis_tlast(or_decoupled_tlast),
+        .m_axis_tdest(),
+        .m_axis_tid(),
+        .m_axis_tuser()
     );
 
-    dummy_delayed_app #(
-        .MODE(1),
-        .DELAY_CYCLES(APP_DELAY_CYCLES)
-    ) or_app_inst (
+    cell_bbx #(
+        .AXIS_DATA_W(512),
+        .KEEP_W(64),
+        .TDEST_W(1),
+        .TID_W(1),
+        .USER_W(1)
+    ) c01_bbx_inst (
         .clk(clk),
         .rst(rst),
-        .rx_tdata(or_slot_m_axis.tdata),
-        .rx_tvalid(or_slot_m_axis.tvalid),
-        .rx_tready(or_app_ready),
-        .meta_tdata(app_rx_meta),
-        .pkt_tx_tdata_payload(or_tx_payload),
-        .tx_data_tvalid(or_tx_valid),
-        .tx_data_tready(or_tx_ready),
-        .meta_tdata_out(or_tx_meta),
-        .meta_tvalid_out(or_meta_valid)
+        .s_axis_tdata(or_decoupled_tdata),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
+        .s_axis_tvalid(or_decoupled_tvalid),
+        .s_axis_tready(or_app_ready),
+        .s_axis_tlast(or_decoupled_tlast),
+        .s_axis_tdest(1'b0),
+        .s_axis_tid(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(or_slot_tx_data),
+        .m_axis_tkeep(),
+        .m_axis_tstrb(),
+        .m_axis_tvalid(or_tx_valid),
+        .m_axis_tready(or_tx_ready),
+        .m_axis_tlast(or_slot_tx_last),
+        .m_axis_tdest(),
+        .m_axis_tid(),
+        .m_axis_tuser()
     );
 
     reg output_active = 1'b0;

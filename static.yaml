@@ -51,7 +51,6 @@ rtl:
   - kernels/user_krnl/reassembly/rtl/axis_register.v
   - kernels/user_krnl/reassembly/rtl/axis_pipeline_register.v
   - kernels/user_krnl/reassembly/rtl/dispatcher.v
-  - kernels/user_krnl/reassembly/rtl/dummy_delayed_app.v
   - kernels/user_krnl/reassembly/rtl/ipcore_top_top_k.v
   - kernels/user_krnl/reassembly/rtl/pkt_logic.v
   - kernels/user_krnl/reassembly/rtl/pkt_receiver.v
