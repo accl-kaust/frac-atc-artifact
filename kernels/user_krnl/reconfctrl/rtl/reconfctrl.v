@@ -6,7 +6,8 @@ module reconfctrl #(
     parameter ADDR_WIDTH = 33,
     parameter AXI_DATA_WIDTH = 256,
     parameter AXIS_DATA_WIDTH = 512,
-    parameter ICAP_DATA_WIDTH = 32
+    parameter ICAP_DATA_WIDTH = 32,
+    parameter SLOT_COUNT = 2
 ) (
     input  wire                         clk,
     input  wire                         rst,
@@ -27,6 +28,12 @@ module reconfctrl #(
     input  wire                         m_axis_icap_tready,
     output reg  [ICAP_DATA_WIDTH-1:0]   m_axis_icap_tdata,
     output reg                          m_axis_icap_tlast,
+
+    input  wire                         icap_pr_done,
+    input  wire                         icap_pr_err,
+    input  wire                         icap_avail,
+
+    output reg  [SLOT_COUNT-1:0]        slot_decouple,
 
     output reg  [ADDR_WIDTH-1:0]        m_axi_awaddr,
     output wire [1:0]                   m_axi_awburst,
@@ -65,13 +72,19 @@ module reconfctrl #(
     output reg                          m_axi_rready,
 
     output wire [3:0]                   state,
-    output reg  [7:0]                   last_error
+    output reg  [7:0]                   last_error,
+    output wire                         reconf_active,
+    output wire [7:0]                   active_slot_id,
+    output wire [7:0]                   last_slot_id,
+    output wire [63:0]                  reconf_cycles,
+    output wire [63:0]                  last_reconf_cycles
 );
 
 localparam [7:0]
     OP_WRITE_HBM   = 8'd1,
     OP_READ_HBM    = 8'd2,
-    OP_RECONF_ICAP = 8'd3;
+    OP_RECONF_ICAP = 8'd3,
+    OP_QUERY_STATUS = 8'd4;
 
 localparam [7:0]
     ERR_OK        = 8'd0,
@@ -81,7 +94,9 @@ localparam [7:0]
     ERR_ADDR      = 8'd4,
     ERR_AXI_BRESP = 8'd5,
     ERR_AXI_RRESP = 8'd6,
-    ERR_RLAST     = 8'd7;
+    ERR_RLAST     = 8'd7,
+    ERR_SLOT      = 8'd8,
+    ERR_ICAP      = 8'd9;
 
 localparam [3:0]
     STATE_IDLE            = 4'd0,
@@ -97,7 +112,8 @@ localparam [3:0]
     STATE_RECONF_ADDR     = 4'd10,
     STATE_RECONF_DATA     = 4'd11,
     STATE_RECONF_STREAM   = 4'd12,
-    STATE_SEND_STATUS     = 4'd13;
+    STATE_RECONF_WAIT_DONE = 4'd13,
+    STATE_SEND_STATUS     = 4'd14;
 
 localparam [ADDR_WIDTH-1:0] ADDR_INCR_32 = {{ADDR_WIDTH-6{1'b0}}, 6'd32};
 
@@ -112,8 +128,16 @@ reg [AXIS_DATA_WIDTH-1:0] read_response_reg = {AXIS_DATA_WIDTH{1'b0}};
 reg [AXI_DATA_WIDTH-1:0] read_data_reg = {AXI_DATA_WIDTH{1'b0}};
 reg [2:0] icap_word_index_reg = 3'd0;
 reg [7:0] status_reg = ERR_OK;
+reg reconf_active_reg = 1'b0;
+reg [7:0] active_slot_id_reg = 8'd0;
+reg [7:0] last_slot_id_reg = 8'd0;
+reg [63:0] reconf_cycles_reg = 64'd0;
+reg [63:0] last_reconf_cycles_reg = 64'd0;
+reg icap_pr_done_seen_reg = 1'b0;
+reg icap_pr_err_seen_reg = 1'b0;
 
 wire [7:0] cmd_opcode = s_axis_tdata[7:0];
+wire [7:0] cmd_slot_id = s_axis_tdata[15:8];
 wire [63:0] cmd_addr = s_axis_tdata[127:64];
 wire [63:0] cmd_size = s_axis_tdata[191:128];
 wire cmd_addr_fits = cmd_addr[63:ADDR_WIDTH] == {(64-ADDR_WIDTH){1'b0}};
@@ -121,8 +145,14 @@ wire cmd_addr_aligned = cmd_addr[4:0] == 5'd0;
 wire cmd_size_nonzero = cmd_size != 64'd0;
 wire cmd_read_size_ok = cmd_size <= 64'd64;
 wire cmd_reconf_size_ok = cmd_size[1:0] == 2'd0;
+wire cmd_slot_ok = cmd_slot_id < SLOT_COUNT;
 
 assign state = state_reg;
+assign reconf_active = reconf_active_reg;
+assign active_slot_id = active_slot_id_reg;
+assign last_slot_id = last_slot_id_reg;
+assign reconf_cycles = reconf_cycles_reg;
+assign last_reconf_cycles = last_reconf_cycles_reg;
 assign m_axi_awid = 6'd0;
 assign m_axi_awlen = 8'd0;
 assign m_axi_awsize = 3'd5;
@@ -246,6 +276,40 @@ begin
 end
 endtask
 
+task start_query_status;
+    reg [AXIS_DATA_WIDTH-1:0] status_data;
+begin
+    status_data = {AXIS_DATA_WIDTH{1'b0}};
+    status_data[7:0] = ERR_OK;
+    status_data[15:8] = {7'd0, reconf_active_reg};
+    status_data[23:16] = last_slot_id_reg;
+    status_data[31:24] = last_error;
+    status_data[39:32] = {7'd0, icap_avail};
+    status_data[47:40] = {7'd0, icap_pr_done_seen_reg};
+    status_data[55:48] = {7'd0, icap_pr_err_seen_reg};
+    status_data[127:64] = last_reconf_cycles_reg;
+    status_data[191:128] = reconf_active_reg ? reconf_cycles_reg : 64'd0;
+
+    status_reg <= ERR_OK;
+    m_axis_tdata <= status_data;
+    m_axis_tkeep <= {(AXIS_DATA_WIDTH/8){1'b1}};
+    m_axis_tlast <= 1'b1;
+    m_axis_tvalid <= 1'b1;
+    state_reg <= STATE_SEND_STATUS;
+end
+endtask
+
+task finish_reconf;
+    input [7:0] status;
+begin
+    slot_decouple[active_slot_id_reg] <= 1'b0;
+    last_slot_id_reg <= active_slot_id_reg;
+    last_reconf_cycles_reg <= reconf_cycles_reg;
+    reconf_active_reg <= 1'b0;
+    start_status(status);
+end
+endtask
+
 always @(posedge clk) begin
     if (rst) begin
         state_reg <= STATE_IDLE;
@@ -257,6 +321,7 @@ always @(posedge clk) begin
         m_axis_icap_tvalid <= 1'b0;
         m_axis_icap_tdata <= {ICAP_DATA_WIDTH{1'b0}};
         m_axis_icap_tlast <= 1'b0;
+        slot_decouple <= {SLOT_COUNT{1'b0}};
         m_axi_awaddr <= {ADDR_WIDTH{1'b0}};
         m_axi_awvalid <= 1'b0;
         m_axi_wdata <= {AXI_DATA_WIDTH{1'b0}};
@@ -278,7 +343,24 @@ always @(posedge clk) begin
         icap_word_index_reg <= 3'd0;
         status_reg <= ERR_OK;
         last_error <= ERR_OK;
+        reconf_active_reg <= 1'b0;
+        active_slot_id_reg <= 8'd0;
+        last_slot_id_reg <= 8'd0;
+        reconf_cycles_reg <= 64'd0;
+        last_reconf_cycles_reg <= 64'd0;
+        icap_pr_done_seen_reg <= 1'b0;
+        icap_pr_err_seen_reg <= 1'b0;
     end else begin
+        if (reconf_active_reg) begin
+            reconf_cycles_reg <= reconf_cycles_reg + 64'd1;
+            if (icap_pr_done) begin
+                icap_pr_done_seen_reg <= 1'b1;
+            end
+            if (icap_pr_err) begin
+                icap_pr_err_seen_reg <= 1'b1;
+            end
+        end
+
         case (state_reg)
             STATE_IDLE: begin
                 s_axis_tready <= 1'b1;
@@ -296,8 +378,11 @@ always @(posedge clk) begin
                 if (s_axis_tvalid && s_axis_tready) begin
                     s_axis_tready <= 1'b0;
 
-                    if (cmd_opcode != OP_WRITE_HBM && cmd_opcode != OP_READ_HBM && cmd_opcode != OP_RECONF_ICAP) begin
+                    if (cmd_opcode != OP_WRITE_HBM && cmd_opcode != OP_READ_HBM &&
+                        cmd_opcode != OP_RECONF_ICAP && cmd_opcode != OP_QUERY_STATUS) begin
                         start_status(ERR_OPCODE);
+                    end else if (cmd_opcode == OP_QUERY_STATUS) begin
+                        start_query_status();
                     end else if (!cmd_addr_fits) begin
                         start_status(ERR_ADDR);
                     end else if (!cmd_addr_aligned) begin
@@ -308,6 +393,8 @@ always @(posedge clk) begin
                         start_status(ERR_SIZE);
                     end else if (cmd_opcode == OP_RECONF_ICAP && !cmd_reconf_size_ok) begin
                         start_status(ERR_SIZE);
+                    end else if (cmd_opcode == OP_RECONF_ICAP && !cmd_slot_ok) begin
+                        start_status(ERR_SLOT);
                     end else if (cmd_opcode == OP_WRITE_HBM) begin
                         current_addr_reg <= cmd_addr[ADDR_WIDTH-1:0];
                         remaining_bytes_reg <= cmd_size;
@@ -321,6 +408,12 @@ always @(posedge clk) begin
                         current_addr_reg <= cmd_addr[ADDR_WIDTH-1:0];
                         icap_words_remaining_reg <= {2'd0, cmd_size[63:2]};
                         icap_word_index_reg <= 3'd0;
+                        active_slot_id_reg <= cmd_slot_id;
+                        reconf_cycles_reg <= 64'd0;
+                        reconf_active_reg <= 1'b1;
+                        icap_pr_done_seen_reg <= 1'b0;
+                        icap_pr_err_seen_reg <= 1'b0;
+                        slot_decouple[cmd_slot_id] <= 1'b1;
                         state_reg <= STATE_RECONF_ADDR;
                     end
                 end
@@ -491,7 +584,7 @@ always @(posedge clk) begin
                         icap_words_remaining_reg <= 64'd0;
                         m_axis_icap_tvalid <= 1'b0;
                         m_axis_icap_tlast <= 1'b0;
-                        start_status(ERR_OK);
+                        state_reg <= STATE_RECONF_WAIT_DONE;
                     end else begin
                         icap_words_remaining_reg <= icap_words_remaining_reg - 64'd1;
 
@@ -507,6 +600,14 @@ always @(posedge clk) begin
                             m_axis_icap_tlast <= icap_words_remaining_reg == 64'd2;
                         end
                     end
+                end
+            end
+
+            STATE_RECONF_WAIT_DONE: begin
+                if (icap_pr_err || icap_pr_err_seen_reg) begin
+                    finish_reconf(ERR_ICAP);
+                end else if (icap_pr_done || icap_pr_done_seen_reg) begin
+                    finish_reconf(ERR_OK);
                 end
             end
 
