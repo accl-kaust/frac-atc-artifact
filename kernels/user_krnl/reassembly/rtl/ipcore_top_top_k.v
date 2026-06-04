@@ -156,11 +156,6 @@ module ipcore_top_top_k
   input  wire                                                   m_axi_reconf_rvalid              ,
   output wire                                                   m_axi_reconf_rready              ,
 
-  output wire                                                   m_axis_icap_tvalid               ,
-  input  wire                                                   m_axis_icap_tready               ,
-  output wire [31:0]                                            m_axis_icap_tdata                ,
-  output wire                                                   m_axis_icap_tlast                ,
-
 
   // AXI4-Lite slave interface
   input  wire                                                   s_axi_control_awvalid             ,
@@ -367,11 +362,7 @@ tcp_top_loopback top_instance (
 .m_axi_rresp(m_axi_reconf_rresp),
 .m_axi_rlast(m_axi_reconf_rlast),
 .m_axi_rvalid(m_axi_reconf_rvalid),
-.m_axi_rready(m_axi_reconf_rready),
-.m_axis_icap_tvalid(m_axis_icap_tvalid),
-.m_axis_icap_tready(m_axis_icap_tready),
-.m_axis_icap_tdata(m_axis_icap_tdata),
-.m_axis_icap_tlast(m_axis_icap_tlast)
+.m_axi_rready(m_axi_reconf_rready)
 			  
 			  
 			  

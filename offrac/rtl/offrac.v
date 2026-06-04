@@ -216,13 +216,6 @@ wire         reconf_axi_rlast;
 wire         reconf_axi_rvalid;
 wire         reconf_axi_rready;
 
-wire         reconf_axis_icap_tvalid;
-wire         reconf_axis_icap_tready;
-wire [31:0]  reconf_axis_icap_tdata;
-wire         reconf_axis_icap_tlast;
-
-assign reconf_axis_icap_tready = 1'b1;
-
 IBUFGDS #(
    .DIFF_TERM("FALSE"),
    .IBUF_LOW_PWR("FALSE")
@@ -651,10 +644,6 @@ user_krnl #(
     .m_axi_reconf_rlast(reconf_axi_rlast),
     .m_axi_reconf_rvalid(reconf_axi_rvalid),
     .m_axi_reconf_rready(reconf_axi_rready),
-    .m_axis_icap_tvalid(reconf_axis_icap_tvalid),
-    .m_axis_icap_tready(reconf_axis_icap_tready),
-    .m_axis_icap_tdata(reconf_axis_icap_tdata),
-    .m_axis_icap_tlast(reconf_axis_icap_tlast),
     .s_axi_control_awvalid(),
     .s_axi_control_awready(),
     .s_axi_control_awaddr(),

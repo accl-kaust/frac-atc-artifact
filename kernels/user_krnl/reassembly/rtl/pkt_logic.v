@@ -45,12 +45,7 @@ module pkt_logic #(
     input  wire [1:0]               m_axi_rresp,
     input  wire                     m_axi_rlast,
     input  wire                     m_axi_rvalid,
-    output wire                     m_axi_rready,
-
-    output wire                     m_axis_icap_tvalid,
-    input  wire                     m_axis_icap_tready,
-    output wire [31:0]              m_axis_icap_tdata,
-    output wire                     m_axis_icap_tlast
+    output wire                     m_axi_rready
 );
 
     wire [512 + 32 + 32 + 16:0] dispatcher_tdata;
@@ -109,6 +104,9 @@ module pkt_logic #(
     wire [3:0]   reconf_state;
     wire [7:0]   reconf_last_error;
     reg  [31:0]  reconf_tx_meta = 32'd0;
+    wire         reconf_axis_icap_tvalid;
+    wire [31:0]  reconf_axis_icap_tdata;
+    wire         reconf_axis_icap_tlast;
 
     always @* begin
         if (reconf_header_line) begin
@@ -140,10 +138,10 @@ module pkt_logic #(
         .m_axis_tdata(reconf_tx_tdata),
         .m_axis_tkeep(reconf_tx_tkeep),
         .m_axis_tlast(reconf_tx_tlast),
-        .m_axis_icap_tvalid(m_axis_icap_tvalid),
-        .m_axis_icap_tready(m_axis_icap_tready),
-        .m_axis_icap_tdata(m_axis_icap_tdata),
-        .m_axis_icap_tlast(m_axis_icap_tlast),
+        .m_axis_icap_tvalid(reconf_axis_icap_tvalid),
+        .m_axis_icap_tready(1'b1),
+        .m_axis_icap_tdata(reconf_axis_icap_tdata),
+        .m_axis_icap_tlast(reconf_axis_icap_tlast),
         .m_axi_awaddr(m_axi_awaddr),
         .m_axi_awburst(m_axi_awburst),
         .m_axi_awid(m_axi_awid),

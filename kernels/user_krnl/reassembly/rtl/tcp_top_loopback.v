@@ -90,12 +90,7 @@ module tcp_top_loopback #(parameter IS_SIM = 0)
       input wire [1:0]   m_axi_rresp,
       input wire         m_axi_rlast,
       input wire         m_axi_rvalid,
-      output wire        m_axi_rready,
-
-      output wire        m_axis_icap_tvalid,
-      input wire         m_axis_icap_tready,
-      output wire [31:0] m_axis_icap_tdata,
-      output wire        m_axis_icap_tlast);
+      output wire        m_axi_rready);
 
     assign m_axis_close_connection_tvalid   = 0;
     assign s_axis_listen_port_status_tready = 1;
@@ -215,11 +210,7 @@ module tcp_top_loopback #(parameter IS_SIM = 0)
         .m_axi_rresp(m_axi_rresp),
         .m_axi_rlast(m_axi_rlast),
         .m_axi_rvalid(m_axi_rvalid),
-        .m_axi_rready(m_axi_rready),
-        .m_axis_icap_tvalid(m_axis_icap_tvalid),
-        .m_axis_icap_tready(m_axis_icap_tready),
-        .m_axis_icap_tdata(m_axis_icap_tdata),
-        .m_axis_icap_tlast(m_axis_icap_tlast)
+        .m_axi_rready(m_axi_rready)
     );
 
 

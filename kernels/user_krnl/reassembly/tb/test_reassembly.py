@@ -130,9 +130,6 @@ class TB:
         self.tx_data_sink = AxiStreamSink(
             AxiStreamBus.from_prefix(dut, "m_axis_tx_data"), dut.clk, dut.rst
         )
-        self.icap_sink = AxiStreamSink(
-            AxiStreamBus.from_prefix(dut, "m_axis_icap"), dut.clk, dut.rst
-        )
         self.axi_ram = AxiRam(AxiBus.from_prefix(dut, "m_axi"), dut.clk, dut.rst, size=2**20)
 
     def init_static_inputs(self):
