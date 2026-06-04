@@ -110,6 +110,7 @@ IP_TCL_FILES += offrac/ip/proc_sys_reset.tcl
 IP_TCL_FILES += offrac/ip/axis_data_width_conv.tcl
 IP_TCL_FILES += kernels/cmac_krnl/ip/cmac.tcl
 IP_TCL_FILES += offrac/ip/hbm_0.tcl
+IP_TCL_FILES += offrac/ip/ila_icap.tcl
 IP_TCL_FILES += offrac/ip/axi_prot_conv.tcl
 IP_TCL_FILES += offrac/ip/axi_data_width_conv.tcl
 

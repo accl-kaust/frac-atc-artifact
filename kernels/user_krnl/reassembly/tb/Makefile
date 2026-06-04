@@ -30,6 +30,7 @@ VERILOG_SOURCES += $(RTL_DIR)/tcp_top_loopback.v
 
 ifeq ($(SIM), verilator)
     COMPILE_ARGS += --sv
+    COMPILE_ARGS += -DSIMULATION
     COMPILE_ARGS += -Wno-PINMISSING -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
     ifeq ($(WAVES), 1)
         COMPILE_ARGS += --trace-fst

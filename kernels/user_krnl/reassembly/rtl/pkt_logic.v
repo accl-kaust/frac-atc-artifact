@@ -177,6 +177,16 @@ module pkt_logic #(
         .last_error(reconf_last_error)
     );
 
+`ifndef SIMULATION
+    ila_icap ila_icap_inst (
+        .clk(clk),
+        .probe0(reconf_axis_icap_tvalid),
+        .probe1(1'b1),
+        .probe2(reconf_axis_icap_tdata),
+        .probe3(reconf_axis_icap_tlast)
+    );
+`endif
+
     always @(posedge clk) begin
         if (rst) begin
             reconf_seen_header <= 1'b0;
