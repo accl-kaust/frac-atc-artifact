@@ -251,6 +251,44 @@ module pkt_logic #(
     reg          pattern_tx_ready;
     wire [31:0]  pattern_tx_meta;
     wire         pattern_meta_valid;
+    wire         pattern_app_ready;
+
+    taxi_axis_if #(
+        .DATA_W(513),
+        .KEEP_EN(1'b0),
+        .STRB_EN(1'b0),
+        .LAST_EN(1'b0),
+        .ID_EN(1'b0),
+        .DEST_EN(1'b0),
+        .USER_EN(1'b0)
+    ) pattern_slot_s_axis();
+
+    taxi_axis_if #(
+        .DATA_W(513),
+        .KEEP_EN(1'b0),
+        .STRB_EN(1'b0),
+        .LAST_EN(1'b0),
+        .ID_EN(1'b0),
+        .DEST_EN(1'b0),
+        .USER_EN(1'b0)
+    ) pattern_slot_m_axis();
+
+    assign pattern_slot_s_axis.tdata = app_rx_payload;
+    assign pattern_slot_s_axis.tkeep = '1;
+    assign pattern_slot_s_axis.tstrb = '1;
+    assign pattern_slot_s_axis.tlast = 1'b1;
+    assign pattern_slot_s_axis.tid = '0;
+    assign pattern_slot_s_axis.tdest = '0;
+    assign pattern_slot_s_axis.tuser = '0;
+    assign pattern_slot_s_axis.tvalid = pattern_rx_valid;
+    assign pattern_slot_m_axis.tready = pattern_app_ready;
+    assign pattern_rx_ready = pattern_slot_s_axis.tready;
+
+    axis_dfx_decoupler pattern_slot_decoupler_inst (
+        .decouple(slot_decouple[0]),
+        .s_axis(pattern_slot_s_axis),
+        .m_axis(pattern_slot_m_axis)
+    );
 
     dummy_delayed_app #(
         .MODE(0),
@@ -258,9 +296,9 @@ module pkt_logic #(
     ) pattern_app_inst (
         .clk(clk),
         .rst(rst),
-        .rx_tdata(app_rx_payload),
-        .rx_tvalid(pattern_rx_valid),
-        .rx_tready(pattern_rx_ready),
+        .rx_tdata(pattern_slot_m_axis.tdata),
+        .rx_tvalid(pattern_slot_m_axis.tvalid),
+        .rx_tready(pattern_app_ready),
         .meta_tdata(app_rx_meta),
         .pkt_tx_tdata_payload(pattern_tx_payload),
         .tx_data_tvalid(pattern_tx_valid),
@@ -274,6 +312,44 @@ module pkt_logic #(
     reg          or_tx_ready;
     wire [31:0]  or_tx_meta;
     wire         or_meta_valid;
+    wire         or_app_ready;
+
+    taxi_axis_if #(
+        .DATA_W(513),
+        .KEEP_EN(1'b0),
+        .STRB_EN(1'b0),
+        .LAST_EN(1'b0),
+        .ID_EN(1'b0),
+        .DEST_EN(1'b0),
+        .USER_EN(1'b0)
+    ) or_slot_s_axis();
+
+    taxi_axis_if #(
+        .DATA_W(513),
+        .KEEP_EN(1'b0),
+        .STRB_EN(1'b0),
+        .LAST_EN(1'b0),
+        .ID_EN(1'b0),
+        .DEST_EN(1'b0),
+        .USER_EN(1'b0)
+    ) or_slot_m_axis();
+
+    assign or_slot_s_axis.tdata = app_rx_payload;
+    assign or_slot_s_axis.tkeep = '1;
+    assign or_slot_s_axis.tstrb = '1;
+    assign or_slot_s_axis.tlast = 1'b1;
+    assign or_slot_s_axis.tid = '0;
+    assign or_slot_s_axis.tdest = '0;
+    assign or_slot_s_axis.tuser = '0;
+    assign or_slot_s_axis.tvalid = or_rx_valid;
+    assign or_slot_m_axis.tready = or_app_ready;
+    assign or_rx_ready = or_slot_s_axis.tready;
+
+    axis_dfx_decoupler or_slot_decoupler_inst (
+        .decouple(slot_decouple[1]),
+        .s_axis(or_slot_s_axis),
+        .m_axis(or_slot_m_axis)
+    );
 
     dummy_delayed_app #(
         .MODE(1),
@@ -281,9 +357,9 @@ module pkt_logic #(
     ) or_app_inst (
         .clk(clk),
         .rst(rst),
-        .rx_tdata(app_rx_payload),
-        .rx_tvalid(or_rx_valid),
-        .rx_tready(or_rx_ready),
+        .rx_tdata(or_slot_m_axis.tdata),
+        .rx_tvalid(or_slot_m_axis.tvalid),
+        .rx_tready(or_app_ready),
         .meta_tdata(app_rx_meta),
         .pkt_tx_tdata_payload(or_tx_payload),
         .tx_data_tvalid(or_tx_valid),
