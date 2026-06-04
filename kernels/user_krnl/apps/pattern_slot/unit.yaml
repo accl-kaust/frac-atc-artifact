@@ -1,0 +1,25 @@
+name: pattern_slot
+moduletype: recon
+top: pattern_slot
+build: synth
+build_dir: build
+version: 0.1.0
+part: xcu280-fsvh2892-2L-e
+arch: ultraplus
+
+rtl:
+  dir: "src/rtl"
+  files:
+    - pattern_slot.v
+
+xdc:
+  dir: "src/xdc"
+  files:
+
+xci:
+  dir: "src/xci"
+  files:
+
+ip:
+  dir: "src/ip"
+  files:

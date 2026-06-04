@@ -1,0 +1,47 @@
+units:
+- name: pattern_slot
+  path: kernels/user_krnl/apps/pattern_slot
+  moduletype: recon
+  top: pattern_slot
+  build: synth
+  build_dir: build
+  rtl:
+    dir: src/rtl
+    files:
+    - pattern_slot.v
+  xdc:
+    dir: src/xdc
+    files: null
+  xci:
+    dir: src/xci
+    files: null
+  ip:
+    dir: src/ip
+    files: null
+  utilization:
+    slices: 1
+    ramb36: 0
+    dsp: 0
+- name: or_slot
+  path: kernels/user_krnl/apps/or_slot
+  moduletype: recon
+  top: or_slot
+  build: synth
+  build_dir: build
+  rtl:
+    dir: src/rtl
+    files:
+    - or_slot.v
+  xdc:
+    dir: src/xdc
+    files: null
+  xci:
+    dir: src/xci
+    files: null
+  ip:
+    dir: src/ip
+    files: null
+  utilization:
+    slices: 1
+    ramb36: 0
+    dsp: 0
