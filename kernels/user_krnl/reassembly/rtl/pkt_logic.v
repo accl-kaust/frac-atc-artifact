@@ -4,7 +4,8 @@ module pkt_logic #(
     parameter PATTERN_APP = 16'h0000,
     parameter OR_APP = 16'h0001,
     parameter RECONF_APP = 16'h00ab,
-    parameter integer APP_DELAY_CYCLES = 16
+    parameter integer APP_DELAY_CYCLES = 16,
+    parameter integer SLOT_COUNT = 2
 ) (
     input  wire                     clk,
     input  wire                     rst,
@@ -107,6 +108,16 @@ module pkt_logic #(
     wire         reconf_axis_icap_tvalid;
     wire [31:0]  reconf_axis_icap_tdata;
     wire         reconf_axis_icap_tlast;
+    wire         reconf_axis_icap_tready;
+    wire         icap_pr_done;
+    wire         icap_pr_err;
+    wire         icap_avail;
+    wire [SLOT_COUNT-1:0] slot_decouple;
+    wire         reconf_active;
+    wire [7:0]   reconf_active_slot_id;
+    wire [7:0]   reconf_last_slot_id;
+    wire [63:0]  reconf_cycles;
+    wire [63:0]  reconf_last_cycles;
 
     always @* begin
         if (reconf_header_line) begin
@@ -124,7 +135,8 @@ module pkt_logic #(
         .ADDR_WIDTH(33),
         .AXI_DATA_WIDTH(256),
         .AXIS_DATA_WIDTH(512),
-        .ICAP_DATA_WIDTH(32)
+        .ICAP_DATA_WIDTH(32),
+        .SLOT_COUNT(SLOT_COUNT)
     ) reconfctrl_inst (
         .clk(clk),
         .rst(rst),
@@ -139,9 +151,13 @@ module pkt_logic #(
         .m_axis_tkeep(reconf_tx_tkeep),
         .m_axis_tlast(reconf_tx_tlast),
         .m_axis_icap_tvalid(reconf_axis_icap_tvalid),
-        .m_axis_icap_tready(1'b1),
+        .m_axis_icap_tready(reconf_axis_icap_tready),
         .m_axis_icap_tdata(reconf_axis_icap_tdata),
         .m_axis_icap_tlast(reconf_axis_icap_tlast),
+        .icap_pr_done(icap_pr_done),
+        .icap_pr_err(icap_pr_err),
+        .icap_avail(icap_avail),
+        .slot_decouple(slot_decouple),
         .m_axi_awaddr(m_axi_awaddr),
         .m_axi_awburst(m_axi_awburst),
         .m_axi_awid(m_axi_awid),
@@ -174,16 +190,47 @@ module pkt_logic #(
         .m_axi_rvalid(m_axi_rvalid),
         .m_axi_rready(m_axi_rready),
         .state(reconf_state),
-        .last_error(reconf_last_error)
+        .last_error(reconf_last_error),
+        .reconf_active(reconf_active),
+        .active_slot_id(reconf_active_slot_id),
+        .last_slot_id(reconf_last_slot_id),
+        .reconf_cycles(reconf_cycles),
+        .last_reconf_cycles(reconf_last_cycles)
+    );
+
+    icap_ctrl #(
+        .DATA_WIDTH(32)
+    ) icap_ctrl_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(reconf_axis_icap_tdata),
+        .s_axis_tkeep(4'hf),
+        .s_axis_tlast(reconf_axis_icap_tlast),
+        .s_axis_tready(reconf_axis_icap_tready),
+        .s_axis_tvalid(reconf_axis_icap_tvalid),
+        .pr_done(icap_pr_done),
+        .pr_err(icap_pr_err),
+        .avail(icap_avail)
     );
 
 `ifndef SIMULATION
     ila_icap ila_icap_inst (
         .clk(clk),
         .probe0(reconf_axis_icap_tvalid),
-        .probe1(1'b1),
+        .probe1(reconf_axis_icap_tready),
         .probe2(reconf_axis_icap_tdata),
-        .probe3(reconf_axis_icap_tlast)
+        .probe3(reconf_axis_icap_tlast),
+        .probe4(icap_pr_done),
+        .probe5(icap_pr_err),
+        .probe6(icap_avail),
+        .probe7(slot_decouple),
+        .probe8(reconf_active),
+        .probe9(reconf_active_slot_id),
+        .probe10(reconf_last_slot_id),
+        .probe11(reconf_cycles),
+        .probe12(reconf_last_cycles),
+        .probe13(reconf_state),
+        .probe14(reconf_last_error)
     );
 `endif
 

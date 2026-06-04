@@ -97,6 +97,7 @@ RTL_FILES += kernels/user_krnl/reassembly/rtl/scheduler.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/tcp_top_loopback.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/user_krnl_control_s_axi.v
 RTL_FILES += kernels/user_krnl/reconfctrl/rtl/reconfctrl.v
+RTL_FILES += kernels/user_krnl/reconfctrl/rtl/icap_ctrl.v
 
 #XDC
 XDC_FILES = offrac/xdc/fpga_u280.xdc

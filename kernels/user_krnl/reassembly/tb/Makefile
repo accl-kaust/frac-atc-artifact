@@ -23,6 +23,7 @@ VERILOG_SOURCES += $(RTL_DIR)/dispatcher.v
 VERILOG_SOURCES += $(RTL_DIR)/dummy_delayed_app.v
 VERILOG_SOURCES += $(RTL_DIR)/scheduler.v
 VERILOG_SOURCES += $(RECONF_RTL_DIR)/reconfctrl.v
+VERILOG_SOURCES += $(RECONF_RTL_DIR)/icap_ctrl.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_logic.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_receiver.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_sender.v
