@@ -184,6 +184,45 @@ wire         m01_axi_rready;
 wire [511:0] m01_axi_rdata;
 wire         m01_axi_rlast;
 
+wire [32:0]  reconf_axi_awaddr;
+wire [1:0]   reconf_axi_awburst;
+wire [5:0]   reconf_axi_awid;
+wire [7:0]   reconf_axi_awlen;
+wire [2:0]   reconf_axi_awsize;
+wire         reconf_axi_awvalid;
+wire         reconf_axi_awready;
+wire [255:0] reconf_axi_wdata;
+wire [31:0]  reconf_axi_wstrb;
+wire [31:0]  reconf_axi_wdata_parity;
+wire         reconf_axi_wlast;
+wire         reconf_axi_wvalid;
+wire         reconf_axi_wready;
+wire [5:0]   reconf_axi_bid;
+wire [1:0]   reconf_axi_bresp;
+wire         reconf_axi_bvalid;
+wire         reconf_axi_bready;
+wire [32:0]  reconf_axi_araddr;
+wire [1:0]   reconf_axi_arburst;
+wire [5:0]   reconf_axi_arid;
+wire [7:0]   reconf_axi_arlen;
+wire [2:0]   reconf_axi_arsize;
+wire         reconf_axi_arvalid;
+wire         reconf_axi_arready;
+wire [5:0]   reconf_axi_rid;
+wire [255:0] reconf_axi_rdata;
+wire [31:0]  reconf_axi_rdata_parity;
+wire [1:0]   reconf_axi_rresp;
+wire         reconf_axi_rlast;
+wire         reconf_axi_rvalid;
+wire         reconf_axi_rready;
+
+wire         reconf_axis_icap_tvalid;
+wire         reconf_axis_icap_tready;
+wire [31:0]  reconf_axis_icap_tdata;
+wire         reconf_axis_icap_tlast;
+
+assign reconf_axis_icap_tready = 1'b1;
+
 IBUFGDS #(
    .DIFF_TERM("FALSE"),
    .IBUF_LOW_PWR("FALSE")
@@ -581,6 +620,41 @@ user_krnl #(
     .s_axis_tcp_tx_status_tdata(m_axis_tcp_tx_status_tdata),
     .s_axis_tcp_tx_status_tkeep(m_axis_tcp_tx_status_tkeep),
     .s_axis_tcp_tx_status_tlast(m_axis_tcp_tx_status_tlast),
+    .m_axi_reconf_awaddr(reconf_axi_awaddr),
+    .m_axi_reconf_awburst(reconf_axi_awburst),
+    .m_axi_reconf_awid(reconf_axi_awid),
+    .m_axi_reconf_awlen(reconf_axi_awlen),
+    .m_axi_reconf_awsize(reconf_axi_awsize),
+    .m_axi_reconf_awvalid(reconf_axi_awvalid),
+    .m_axi_reconf_awready(reconf_axi_awready),
+    .m_axi_reconf_wdata(reconf_axi_wdata),
+    .m_axi_reconf_wstrb(reconf_axi_wstrb),
+    .m_axi_reconf_wdata_parity(reconf_axi_wdata_parity),
+    .m_axi_reconf_wlast(reconf_axi_wlast),
+    .m_axi_reconf_wvalid(reconf_axi_wvalid),
+    .m_axi_reconf_wready(reconf_axi_wready),
+    .m_axi_reconf_bid(reconf_axi_bid),
+    .m_axi_reconf_bresp(reconf_axi_bresp),
+    .m_axi_reconf_bvalid(reconf_axi_bvalid),
+    .m_axi_reconf_bready(reconf_axi_bready),
+    .m_axi_reconf_araddr(reconf_axi_araddr),
+    .m_axi_reconf_arburst(reconf_axi_arburst),
+    .m_axi_reconf_arid(reconf_axi_arid),
+    .m_axi_reconf_arlen(reconf_axi_arlen),
+    .m_axi_reconf_arsize(reconf_axi_arsize),
+    .m_axi_reconf_arvalid(reconf_axi_arvalid),
+    .m_axi_reconf_arready(reconf_axi_arready),
+    .m_axi_reconf_rid(reconf_axi_rid),
+    .m_axi_reconf_rdata(reconf_axi_rdata),
+    .m_axi_reconf_rdata_parity(reconf_axi_rdata_parity),
+    .m_axi_reconf_rresp(reconf_axi_rresp),
+    .m_axi_reconf_rlast(reconf_axi_rlast),
+    .m_axi_reconf_rvalid(reconf_axi_rvalid),
+    .m_axi_reconf_rready(reconf_axi_rready),
+    .m_axis_icap_tvalid(reconf_axis_icap_tvalid),
+    .m_axis_icap_tready(reconf_axis_icap_tready),
+    .m_axis_icap_tdata(reconf_axis_icap_tdata),
+    .m_axis_icap_tlast(reconf_axis_icap_tlast),
     .s_axi_control_awvalid(),
     .s_axi_control_awready(),
     .s_axi_control_awaddr(),
@@ -661,7 +735,38 @@ offrac_hbm offrac_hbm_inst (
     .m01_axi_wlast(m01_axi_wlast),
     .m01_axi_wready(m01_axi_wready),
     .m01_axi_wstrb(m01_axi_wstrb),
-    .m01_axi_wvalid(m01_axi_wvalid)
+    .m01_axi_wvalid(m01_axi_wvalid),
+    .reconf_axi_awaddr(reconf_axi_awaddr),
+    .reconf_axi_awburst(reconf_axi_awburst),
+    .reconf_axi_awid(reconf_axi_awid),
+    .reconf_axi_awlen(reconf_axi_awlen),
+    .reconf_axi_awsize(reconf_axi_awsize),
+    .reconf_axi_awvalid(reconf_axi_awvalid),
+    .reconf_axi_awready(reconf_axi_awready),
+    .reconf_axi_wdata(reconf_axi_wdata),
+    .reconf_axi_wstrb(reconf_axi_wstrb),
+    .reconf_axi_wdata_parity(reconf_axi_wdata_parity),
+    .reconf_axi_wlast(reconf_axi_wlast),
+    .reconf_axi_wvalid(reconf_axi_wvalid),
+    .reconf_axi_wready(reconf_axi_wready),
+    .reconf_axi_bid(reconf_axi_bid),
+    .reconf_axi_bresp(reconf_axi_bresp),
+    .reconf_axi_bvalid(reconf_axi_bvalid),
+    .reconf_axi_bready(reconf_axi_bready),
+    .reconf_axi_araddr(reconf_axi_araddr),
+    .reconf_axi_arburst(reconf_axi_arburst),
+    .reconf_axi_arid(reconf_axi_arid),
+    .reconf_axi_arlen(reconf_axi_arlen),
+    .reconf_axi_arsize(reconf_axi_arsize),
+    .reconf_axi_arvalid(reconf_axi_arvalid),
+    .reconf_axi_arready(reconf_axi_arready),
+    .reconf_axi_rid(reconf_axi_rid),
+    .reconf_axi_rdata(reconf_axi_rdata),
+    .reconf_axi_rdata_parity(reconf_axi_rdata_parity),
+    .reconf_axi_rresp(reconf_axi_rresp),
+    .reconf_axi_rlast(reconf_axi_rlast),
+    .reconf_axi_rvalid(reconf_axi_rvalid),
+    .reconf_axi_rready(reconf_axi_rready)
 );
 
 endmodule

@@ -14,7 +14,7 @@ set_property -dict [list \
                         CONFIG.USER_MC_ENABLE_07 {FALSE} \
                         CONFIG.USER_SAXI_01 {true} \
                         CONFIG.USER_SAXI_02 {true} \
-                        CONFIG.USER_SAXI_03 {false} \
+                        CONFIG.USER_SAXI_03 {true} \
                         CONFIG.USER_SAXI_04 {false} \
                         CONFIG.USER_SAXI_05 {false} \
                         CONFIG.USER_SAXI_06 {false} \

@@ -7,6 +7,7 @@ COCOTB_HDL_TIMEUNIT = 1ns
 COCOTB_HDL_TIMEPRECISION = 1ps
 
 RTL_DIR = ../rtl
+RECONF_RTL_DIR = ../../reconfctrl/rtl
 TAXI_RTL_DIR = ../../../../lib/taxi/axis/rtl
 
 MODULE = test_reassembly
@@ -21,6 +22,7 @@ VERILOG_SOURCES += $(RTL_DIR)/axis_pipeline_register.v
 VERILOG_SOURCES += $(RTL_DIR)/dispatcher.v
 VERILOG_SOURCES += $(RTL_DIR)/dummy_delayed_app.v
 VERILOG_SOURCES += $(RTL_DIR)/scheduler.v
+VERILOG_SOURCES += $(RECONF_RTL_DIR)/reconfctrl.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_logic.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_receiver.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_sender.v
