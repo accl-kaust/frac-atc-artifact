@@ -31,7 +31,7 @@ module reconfctrl #(
     output reg  [ADDR_WIDTH-1:0]        m_axi_awaddr,
     output wire [1:0]                   m_axi_awburst,
     output wire [5:0]                   m_axi_awid,
-    output wire [3:0]                   m_axi_awlen,
+    output wire [7:0]                   m_axi_awlen,
     output wire [2:0]                   m_axi_awsize,
     output reg                          m_axi_awvalid,
     input  wire                         m_axi_awready,
@@ -51,7 +51,7 @@ module reconfctrl #(
     output reg  [ADDR_WIDTH-1:0]        m_axi_araddr,
     output wire [1:0]                   m_axi_arburst,
     output wire [5:0]                   m_axi_arid,
-    output wire [3:0]                   m_axi_arlen,
+    output wire [7:0]                   m_axi_arlen,
     output wire [2:0]                   m_axi_arsize,
     output reg                          m_axi_arvalid,
     input  wire                         m_axi_arready,
@@ -124,12 +124,12 @@ wire cmd_reconf_size_ok = cmd_size[1:0] == 2'd0;
 
 assign state = state_reg;
 assign m_axi_awid = 6'd0;
-assign m_axi_awlen = 4'd0;
+assign m_axi_awlen = 8'd0;
 assign m_axi_awsize = 3'd5;
 assign m_axi_awburst = 2'b01;
 assign m_axi_wdata_parity = {(AXI_DATA_WIDTH/8){1'b0}};
 assign m_axi_arid = 6'd0;
-assign m_axi_arlen = 4'd0;
+assign m_axi_arlen = 8'd0;
 assign m_axi_arsize = 3'd5;
 assign m_axi_arburst = 2'b01;
 
