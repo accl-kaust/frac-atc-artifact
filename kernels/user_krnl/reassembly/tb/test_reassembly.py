@@ -27,9 +27,10 @@ def assert_keep_all(frame, byte_count):
     assert frame.tkeep is None or frame.tkeep == [1] * byte_count
 
 
-def pack_reconf_command(opcode, addr, size):
+def pack_reconf_command(opcode, addr, size, slot_id=0):
     payload = bytearray(BYTE_LANES)
     payload[0] = opcode
+    payload[1] = slot_id
     payload[8:16] = int(addr).to_bytes(8, "little")
     payload[16:24] = int(size).to_bytes(8, "little")
     return bytes(payload)

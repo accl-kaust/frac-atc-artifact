@@ -10,14 +10,18 @@ from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStrea
 OP_WRITE_HBM = 1
 OP_READ_HBM = 2
 OP_RECONF_ICAP = 3
+OP_QUERY_ICAP_STATUS = 4
 ERR_OK = 0
 ERR_ALIGN = 2
+ERR_SLOT = 8
+ERR_ICAP = 9
 BYTE_LANES = 64
 
 
-def pack_command(opcode, addr, size):
+def pack_command(opcode, addr, size, slot_id=0):
     payload = bytearray(BYTE_LANES)
     payload[0] = opcode
+    payload[1] = slot_id
     payload[8:16] = int(addr).to_bytes(8, "little")
     payload[16:24] = int(size).to_bytes(8, "little")
     return bytes(payload)
@@ -44,6 +48,9 @@ class TB:
         self.axi_ram = AxiRam(AxiBus.from_prefix(dut, "m_axi"), dut.clk, dut.rst, size=2**20)
 
         dut.m_axi_rdata_parity.setimmediatevalue(0)
+        dut.icap_pr_done.setimmediatevalue(0)
+        dut.icap_pr_err.setimmediatevalue(0)
+        dut.icap_avail.setimmediatevalue(1)
 
     async def reset(self):
         self.dut.rst.setimmediatevalue(0)
@@ -61,6 +68,16 @@ class TB:
 
     async def recv_icap_frame(self):
         return await self.icap_sink.recv()
+
+    async def pulse_pr_done(self):
+        self.dut.icap_pr_done.value = 1
+        await RisingEdge(self.dut.clk)
+        self.dut.icap_pr_done.value = 0
+
+    async def pulse_pr_err(self):
+        self.dut.icap_pr_err.value = 1
+        await RisingEdge(self.dut.clk)
+        self.dut.icap_pr_err.value = 0
 
 
 @cocotb.test()
@@ -112,6 +129,7 @@ async def test_reconf_icap_dma_streams_all_words(dut):
 
     await tb.send_frame(pack_command(OP_RECONF_ICAP, addr, len(payload)))
     icap_frame = await tb.recv_icap_frame()
+    await tb.pulse_pr_done()
     response = await tb.recv_response()
 
     assert bytes(icap_frame.tdata) == payload
@@ -130,3 +148,129 @@ async def test_invalid_unaligned_address_returns_error(dut):
 
     assert bytes(response.tdata)[0] == ERR_ALIGN
     assert_keep_all(response, BYTE_LANES)
+
+
+@cocotb.test()
+async def test_reconf_icap_asserts_selected_slot_decouple(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x4000
+    payload = bytes(range(32))
+    tb.axi_ram.write(addr, payload)
+
+    await tb.send_frame(pack_command(OP_RECONF_ICAP, addr, len(payload), slot_id=1))
+    await wait_cycles(dut, 8)
+
+    assert int(dut.slot_decouple.value) == 0b10
+
+    icap_frame = await tb.recv_icap_frame()
+    assert bytes(icap_frame.tdata) == payload
+    assert int(dut.slot_decouple.value) == 0b10
+
+    await tb.pulse_pr_done()
+    response = await tb.recv_response()
+
+    assert bytes(response.tdata)[0] == ERR_OK
+    assert int(dut.slot_decouple.value) == 0
+
+
+@cocotb.test()
+async def test_reconf_icap_waits_for_prdone(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x5000
+    payload = bytes(range(16))
+    tb.axi_ram.write(addr, payload)
+
+    await tb.send_frame(pack_command(OP_RECONF_ICAP, addr, len(payload), slot_id=0))
+    icap_frame = await tb.recv_icap_frame()
+    assert bytes(icap_frame.tdata) == payload
+
+    response_task = cocotb.start_soon(tb.recv_response())
+    await wait_cycles(dut, 16)
+    assert not response_task.done()
+    assert int(dut.slot_decouple.value) == 0b01
+
+    await tb.pulse_pr_done()
+    response = await response_task
+
+    assert bytes(response.tdata)[0] == ERR_OK
+    assert int(dut.slot_decouple.value) == 0
+
+
+@cocotb.test()
+async def test_reconf_icap_prerror_returns_error(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x6000
+    payload = bytes(range(16))
+    tb.axi_ram.write(addr, payload)
+
+    await tb.send_frame(pack_command(OP_RECONF_ICAP, addr, len(payload), slot_id=1))
+    await tb.recv_icap_frame()
+    await tb.pulse_pr_err()
+    response = await tb.recv_response()
+
+    assert bytes(response.tdata)[0] == ERR_ICAP
+    assert int(dut.slot_decouple.value) == 0
+    assert int(dut.last_reconf_cycles.value) > 0
+
+
+@cocotb.test()
+async def test_reconf_invalid_slot_returns_error(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    await tb.send_frame(pack_command(OP_RECONF_ICAP, 0x7000, 4, slot_id=2))
+    response = await tb.recv_response()
+
+    assert bytes(response.tdata)[0] == ERR_SLOT
+    assert int(dut.slot_decouple.value) == 0
+
+
+@cocotb.test()
+async def test_query_icap_status_idle(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    await tb.send_frame(pack_command(OP_QUERY_ICAP_STATUS, 0, 0))
+    response = await tb.recv_response()
+    data = bytes(response.tdata)
+
+    assert data[0] == ERR_OK
+    assert data[1] == 0
+    assert data[2] == 0
+    assert data[3] == ERR_OK
+    assert data[4] == 1
+    assert int.from_bytes(data[8:16], "little") == 0
+    assert int.from_bytes(data[16:24], "little") == 0
+
+
+@cocotb.test()
+async def test_query_icap_status_after_reconf(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x8000
+    payload = bytes(range(16))
+    tb.axi_ram.write(addr, payload)
+
+    await tb.send_frame(pack_command(OP_RECONF_ICAP, addr, len(payload), slot_id=1))
+    await tb.recv_icap_frame()
+    await tb.pulse_pr_done()
+    response = await tb.recv_response()
+    assert bytes(response.tdata)[0] == ERR_OK
+
+    await tb.send_frame(pack_command(OP_QUERY_ICAP_STATUS, 0, 0))
+    response = await tb.recv_response()
+    data = bytes(response.tdata)
+
+    assert data[0] == ERR_OK
+    assert data[1] == 0
+    assert data[2] == 1
+    assert data[3] == ERR_OK
+    assert int.from_bytes(data[8:16], "little") > 0
+    assert int.from_bytes(data[16:24], "little") == 0
