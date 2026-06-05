@@ -30,8 +30,8 @@
      input wire [TDATA_SIZE - 1: 0] rx_tdata, // {packet_size, tx_selection, dstPort, rx_tdata}
      input wire rx_tvalid,
      output reg rx_tready,
-     // Output: {dstPort[15:0], workload_type[15:0], meta[31:0], tlast, payload[511:0]}
-     output wire [512 + 16 + 32 + 16:0] tx_tdata, // {16-bit dstPort, 16-bit Workload_type, 32-bit ConnID, 512+1 payload}
+     // Output: {request_end, dstPort[15:0], workload_type[15:0], meta[31:0], tcp_tlast, payload[511:0]}
+     output wire [512 + 16 + 32 + 16 + 1:0] tx_tdata,
      output wire tx_tvalid,
      input wire tx_tready
      );
@@ -43,6 +43,7 @@
      // Input format: {dstPort[15:0], packet_size[31:0], workload_selection[15:0], meta[31:0], tlast, payload[511:0]}
      // Bit positions: payload[511:0], tlast[512], meta[544:513], workload[560:545], packet_size[592:561], dstPort[608:593]
      wire [15:0] rx_dstPort = rx_tdata[608:593];
+     wire        rx_is_header = rx_tdata[447:0] == {448{1'b1}};
 
      //Normal queues input - widened by 16 bits for dstPort
      reg  [1 + 512 + 32 + 16 + 16: 0] input_tdata [QUEUE_NUM - 1: 0]; //last of message + dstPort + workload + meta + tlast + payload
@@ -183,7 +184,7 @@
        if(rx_tvalid == 1 && rx_tready == 1)begin
             //matches the meta
 
-            //The single packet situation, concatenating the first one
+            //The complete single-request situation, concatenating the first one
             // connID is in the lower 16 bits of meta at rx_tdata[528:513]
             // New input format: {dstPort[608:593], packet_size[592:561], workload[560:545], meta[544:513], tlast[512], payload[511:0]}
             if(rx_tdata[528:513] == input_META_single[CONN_ID - 1:0] && input_tready_single == 1) begin
@@ -237,22 +238,20 @@
                     //does not match the meta, the first dataline of the session
                     // New input format: {dstPort[608:593], packet_size[592:561], workload[560:545], meta[544:513], tlast[512], payload[511:0]}
                     // packet_size is at [592:561], length (from meta upper 16 bits) is at [544:529]
-                    // Single packet: packet_size == length
-                    if ((input_META_single == {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}}) && (rx_tdata[592:561] == {16'd0, rx_tdata[544:529]}) && (input_tready_single == 1)) begin
+                    // Single-beat complete request: declared request size fits this TCP packet and this is its only beat.
+                    if (rx_is_header && (input_META_single == {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}}) && (rx_tdata[592:561] == {16'd0, rx_tdata[544:529]}) && rx_tdata[512] && (input_tready_single == 1)) begin
                         input_tvalid_single = rx_tvalid;
                         // Output format: {message_end, dstPort, workload_type, meta, tlast, payload}
                         // rx_tdata[544:0] = {meta[31:0], tlast, payload[511:0]}
                         // workload_selection is at rx_tdata[560:545]
-                        input_tdata_single = {1'b0, rx_dstPort, rx_tdata[560:545], rx_tdata[544:0]};
-                        // Store {dstPort, workload_type, connID} in META
-                        // connID is at rx_tdata[528:513] (lower 16 bits of meta)
-                        input_META_single = {rx_dstPort, rx_tdata[560:545], rx_tdata[528:513]};
+                        input_tdata_single = {1'b1, rx_dstPort, rx_tdata[560:545], rx_tdata[544:0]};
+                        input_META_single = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
                         rx_tready = 1'b1;
                     end else begin
-                        // Multi-packet: packet_size != length
+                        // Multi-beat or multi-packet request: hold output until declared request size is complete.
                         allocated = 1'b0;
                         for (alloc_i = 0; alloc_i < QUEUE_NUM; alloc_i = alloc_i + 1) begin
-                            if (!allocated && (input_META[alloc_i] == {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}}) && (rx_tdata[592:561] != {16'd0, rx_tdata[544:529]})) begin
+                            if (!allocated && rx_is_header && (input_META[alloc_i] == {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}})) begin
                                 input_tvalid[alloc_i] = rx_tvalid;
                                 // Output format: {message_end, dstPort, workload_type, meta, tlast, payload}
                                 input_tdata[alloc_i] = {1'b0, rx_dstPort, rx_tdata[560:545], rx_tdata[544:0]};
@@ -338,8 +337,8 @@
 
 
     //output signal - widened by 16 bits for dstPort
-    // Format: {dstPort[15:0], workload_type[15:0], meta[31:0], tlast, payload[511:0]}
-    reg [512 + 32 + 16 + 16:0] output_queue_tdata;
+    // Format: {request_end, dstPort[15:0], workload_type[15:0], meta[31:0], tcp_tlast, payload[511:0]}
+    reg [512 + 32 + 16 + 16 + 1:0] output_queue_tdata;
     wire output_queue_tvalid_FIFO;
     reg output_queue_tvalid;
     reg [7:0] output_queue_number = 8'hFF;
@@ -352,10 +351,10 @@
     always @* begin
        if (output_queue_number < QUEUE_NUM) begin
             output_queue_tvalid = output_tvalid[output_queue_number] && output_tready_sel[output_queue_number];
-            output_queue_tdata = output_tdata[output_queue_number][512 + 32 + 16 + 16:0];
+            output_queue_tdata = output_tdata[output_queue_number][512 + 32 + 16 + 16 + 1:0];
        end else if (output_queue_number == QUEUE_NUM) begin
             output_queue_tvalid = output_tvalid_single && output_tready_single_FIFO;
-            output_queue_tdata = output_tdata_single[512 + 32 + 16 + 16:0];
+            output_queue_tdata = output_tdata_single[512 + 32 + 16 + 16 + 1:0];
        end else begin
             output_queue_tvalid = 0;
             output_queue_tdata = 0;

@@ -14,6 +14,7 @@ from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStrea
 BYTE_LANES = 64
 MAX_PACKET_BYTES = 512
 RECONF_APP = 0x00AB
+OP_WRITE_HBM = 1
 OP_READ_HBM = 2
 
 
@@ -159,8 +160,8 @@ class TB:
             await RisingEdge(self.dut.clk)
 
     async def send_notification(self, notification: TcpNotification) -> int:
-        await self.notifications_source.send(AxiStreamFrame(notification.to_bytes()))
-        read_cmd = await self.read_package_sink.recv()
+        await with_timeout(self.notifications_source.send(AxiStreamFrame(notification.to_bytes())), 2, "us")
+        read_cmd = await with_timeout(self.read_package_sink.recv(), 2, "us")
         return frame_to_int(read_cmd)
 
     async def expect_notification_rejected(self, notification: TcpNotification):
@@ -172,10 +173,10 @@ class TB:
         raise AssertionError("invalid notification produced a read command")
 
     async def send_rx_payload(self, payload: bytes):
-        await self.rx_data_source.send(AxiStreamFrame(payload))
+        await with_timeout(self.rx_data_source.send(AxiStreamFrame(payload)), 2, "us")
 
     async def send_tx_status_ok(self):
-        await self.tx_status_source.send(AxiStreamFrame(int_to_le_bytes(0, 8)))
+        await with_timeout(self.tx_status_source.send(AxiStreamFrame(int_to_le_bytes(0, 8))), 2, "us")
 
     async def recv_response(self):
         metadata_frame = await self.tx_metadata_sink.recv()
@@ -215,9 +216,30 @@ async def run_multi_packet_request(dut, workload_id, expected_payload):
 
     await tb.send_tx_status_ok()
 
-    metadata_frame, data_frame = await tb.recv_response()
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
     assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
+    assert bytes(data_frame.tdata) == expected_payload
+    assert_keep_all(data_frame, len(expected_payload))
+
+
+async def run_single_tcp_packet_multi_beat_app_request(dut, workload_id, expected_payload):
+    tb = TB(dut)
+    await tb.reset()
+
+    total_size = 2 * BYTE_LANES
+    notification = TcpNotification(length=total_size, conn_id=0x2456)
+    payload = RequestHeader(total_size=total_size, workload_id=workload_id).to_bytes() + bytes([0x5a] * BYTE_LANES)
+
+    read_cmd = await tb.send_notification(notification)
+    assert read_cmd == notification.pack()
+
+    await tb.send_rx_payload(payload)
+    await tb.send_tx_status_ok()
+
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+    assert frame_to_int(metadata_frame) == notification.pack()
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, len(expected_payload))
 
@@ -289,6 +311,15 @@ async def test_multi_packet_pattern_app(dut):
 
 
 @cocotb.test()
+async def test_single_tcp_packet_multi_beat_pattern_app(dut):
+    await run_single_tcp_packet_multi_beat_app_request(
+        dut,
+        workload_id=0x0000,
+        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+    )
+
+
+@cocotb.test()
 async def test_repeated_three_line_pattern_app(dut):
     await run_repeated_multi_packet_requests(
         dut,
@@ -345,6 +376,39 @@ async def test_reconf_read_hbm_request(dut):
     assert frame_to_int(metadata_frame) == notification.pack()
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, BYTE_LANES)
+
+
+@cocotb.test()
+async def test_reconf_write_hbm_uses_command_size(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x5000
+    write_size = 96
+    payload_capacity = 2 * BYTE_LANES
+    payload = bytes((0x80 + idx) & 0xFF for idx in range(payload_capacity))
+    original = bytes([0xee] * payload_capacity)
+    tb.axi_ram.write(addr, original)
+
+    request_payload = (
+        RequestHeader(total_size=BYTE_LANES + BYTE_LANES + payload_capacity, workload_id=RECONF_APP).to_bytes()
+        + pack_reconf_command(OP_WRITE_HBM, addr, write_size)
+        + payload
+    )
+    notification = TcpNotification(length=len(request_payload), conn_id=0x4567)
+
+    read_cmd = await tb.send_notification(notification)
+    assert read_cmd == notification.pack()
+
+    await tb.send_rx_payload(request_payload)
+    await tb.send_tx_status_ok()
+
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+    assert frame_to_int(metadata_frame) == notification.pack()
+    assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
+    assert_keep_all(data_frame, BYTE_LANES)
+    assert bytes(tb.axi_ram.read(addr, payload_capacity)) == payload[:write_size] + original[write_size:]
 
 
 @cocotb.test()

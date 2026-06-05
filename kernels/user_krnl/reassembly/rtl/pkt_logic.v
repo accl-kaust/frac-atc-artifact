@@ -52,6 +52,7 @@ module pkt_logic #(
     wire [512 + 32 + 32 + 16:0] dispatcher_tdata;
     wire                         dispatcher_tvalid;
     wire                         dispatcher_tready;
+    wire                         scheduler_rx_tready;
 
     dispatcher dispatcher_inst (
         .clk(clk),
@@ -64,16 +65,21 @@ module pkt_logic #(
         .tx_tready(dispatcher_tready)
     );
 
-    wire [512 + 16 + 32 + 16:0] scheduler_tdata;
+    wire [512 + 16 + 32 + 16 + 1:0] scheduler_tdata;
     wire                        scheduler_tvalid;
     reg                         scheduler_tready;
+
+    wire [512:0] dispatcher_payload = dispatcher_tdata[512:0];
+    wire [31:0]  dispatcher_meta = dispatcher_tdata[512+32:512+1];
+    wire [15:0]  dispatcher_workload = dispatcher_tdata[512+32+16:512+32+1];
+    wire         dispatcher_reconf_selected = dispatcher_workload == RECONF_APP;
 
     scheduler scheduler_inst (
         .clk(clk),
         .rst(rst),
         .rx_tdata(dispatcher_tdata),
-        .rx_tvalid(dispatcher_tvalid),
-        .rx_tready(dispatcher_tready),
+        .rx_tvalid(dispatcher_tvalid && !dispatcher_reconf_selected),
+        .rx_tready(scheduler_rx_tready),
         .tx_tdata(scheduler_tdata),
         .tx_tvalid(scheduler_tvalid),
         .tx_tready(scheduler_tready)
@@ -82,6 +88,7 @@ module pkt_logic #(
     wire [512:0] app_rx_payload = scheduler_tdata[512:0];
     wire [31:0]  app_rx_meta = scheduler_tdata[512+32:512+1];
     wire [15:0]  app_rx_workload = scheduler_tdata[512+32+16:512+32+1];
+    wire         app_rx_req_last = scheduler_tdata[512+32+16+16+1];
 
     wire pattern_rx_ready;
     wire or_rx_ready;
@@ -89,13 +96,12 @@ module pkt_logic #(
 
     reg  reconf_seen_header = 1'b0;
 
-    wire reconf_selected = app_rx_workload == RECONF_APP;
-    wire reconf_header_line = reconf_selected && !reconf_seen_header;
-    wire reconf_payload_line = reconf_selected && reconf_seen_header;
+    wire reconf_header_line = dispatcher_reconf_selected && !reconf_seen_header;
+    wire reconf_payload_line = dispatcher_reconf_selected && reconf_seen_header;
 
-    wire pattern_rx_valid = scheduler_tvalid && (app_rx_workload != OR_APP) && !reconf_selected;
+    wire pattern_rx_valid = scheduler_tvalid && (app_rx_workload != OR_APP);
     wire or_rx_valid = scheduler_tvalid && (app_rx_workload == OR_APP);
-    wire reconf_rx_valid = scheduler_tvalid && reconf_payload_line;
+    wire reconf_rx_valid = dispatcher_tvalid && reconf_payload_line;
 
     wire [511:0] reconf_tx_tdata;
     wire [63:0]  reconf_tx_tkeep;
@@ -222,12 +228,12 @@ module pkt_logic #(
         end
     end
 
+    assign dispatcher_tready = dispatcher_reconf_selected ?
+        (reconf_header_line ? (reconf_state == 4'd0) : reconf_rx_ready) :
+        scheduler_rx_tready;
+
     always @* begin
-        if (reconf_header_line) begin
-            scheduler_tready = reconf_state == 4'd0;
-        end else if (reconf_payload_line) begin
-            scheduler_tready = reconf_rx_ready;
-        end else if (app_rx_workload == OR_APP) begin
+        if (app_rx_workload == OR_APP) begin
             scheduler_tready = or_rx_ready;
         end else begin
             scheduler_tready = pattern_rx_ready;
@@ -245,9 +251,9 @@ module pkt_logic #(
         .rst(rst),
         .s_axis_tvalid(reconf_rx_valid),
         .s_axis_tready(reconf_rx_ready),
-        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tdata(dispatcher_payload[511:0]),
         .s_axis_tkeep({64{1'b1}}),
-        .s_axis_tlast(app_rx_payload[512]),
+        .s_axis_tlast(dispatcher_payload[512]),
         .m_axis_tvalid(reconf_tx_tvalid),
         .m_axis_tready(reconf_tx_tready),
         .m_axis_tdata(reconf_tx_tdata),
@@ -341,10 +347,10 @@ module pkt_logic #(
         if (rst) begin
             reconf_seen_header <= 1'b0;
             reconf_tx_meta <= 32'd0;
-        end else if (scheduler_tvalid && scheduler_tready && reconf_header_line) begin
-            reconf_tx_meta <= app_rx_meta;
-            reconf_seen_header <= !app_rx_payload[512];
-        end else if (scheduler_tvalid && scheduler_tready && reconf_payload_line && app_rx_payload[512]) begin
+        end else if (dispatcher_tvalid && dispatcher_tready && reconf_header_line) begin
+            reconf_tx_meta <= dispatcher_meta;
+            reconf_seen_header <= !dispatcher_payload[512];
+        end else if (dispatcher_tvalid && dispatcher_tready && reconf_payload_line && dispatcher_payload[512]) begin
             reconf_seen_header <= 1'b0;
         end
     end
@@ -383,7 +389,7 @@ module pkt_logic #(
         if (rst) begin
             pattern_rx_in_frame <= 1'b0;
         end else if (pattern_rx_valid && pattern_rx_ready) begin
-            pattern_rx_in_frame <= !app_rx_payload[512];
+            pattern_rx_in_frame <= !app_rx_req_last;
         end
     end
 
@@ -414,7 +420,7 @@ module pkt_logic #(
         .s_axis_tstrb(1'b1),
         .s_axis_tvalid(pattern_rx_valid && (pattern_rx_in_frame || pattern_meta_s_ready)),
         .s_axis_tready(pattern_decoupled_tready),
-        .s_axis_tlast(app_rx_payload[512]),
+        .s_axis_tlast(app_rx_req_last),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
@@ -550,7 +556,7 @@ module pkt_logic #(
         if (rst) begin
             or_rx_in_frame <= 1'b0;
         end else if (or_rx_valid && or_rx_ready) begin
-            or_rx_in_frame <= !app_rx_payload[512];
+            or_rx_in_frame <= !app_rx_req_last;
         end
     end
 
@@ -581,7 +587,7 @@ module pkt_logic #(
         .s_axis_tstrb(1'b1),
         .s_axis_tvalid(or_rx_valid && (or_rx_in_frame || or_meta_s_ready)),
         .s_axis_tready(or_decoupled_tready),
-        .s_axis_tlast(app_rx_payload[512]),
+        .s_axis_tlast(app_rx_req_last),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
