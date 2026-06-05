@@ -101,7 +101,7 @@ module pkt_logic #(
     wire [63:0]  reconf_tx_tkeep;
     wire         reconf_tx_tlast;
     wire         reconf_tx_tvalid;
-    reg          reconf_tx_tready;
+    wire         reconf_tx_tready;
     wire [3:0]   reconf_state;
     wire [7:0]   reconf_last_error;
     reg  [31:0]  reconf_tx_meta = 32'd0;
