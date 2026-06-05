@@ -23,10 +23,10 @@ module taxi_axis_switch #
     parameter M_COUNT = 4,
     // Output interface routing base tdest selection
     // Port selected if M_BASE <= tdest <= M_TOP
-    parameter M_BASE[M_COUNT] = '{M_COUNT{'0}},
+    parameter logic [31:0] M_BASE[M_COUNT] = '{M_COUNT{32'd0}},
     // Output interface routing top tdest selection
     // Port selected if M_BASE <= tdest <= M_TOP
-    parameter M_TOP[M_COUNT] = '{M_COUNT{'0}},
+    parameter logic [31:0] M_TOP[M_COUNT] = '{M_COUNT{32'd0}},
     // Set for default routing with tdest MSBs as port index
     parameter logic AUTO_ADDR = 1'b0,
     // Interface connection control
@@ -84,10 +84,10 @@ localparam S_DEST_W_INT = S_DEST_W > 0 ? S_DEST_W : 1;
 localparam M_DEST_W_INT = M_DEST_W > 0 ? M_DEST_W : 1;
 
 // check configuration
-if (m_axis.DATA_W != DATA_W)
+if (m_axis[0].DATA_W != DATA_W)
     $fatal(0, "Error: Interface DATA_W parameter mismatch (instance %m)");
 
-if (KEEP_EN && m_axis.KEEP_W != KEEP_W)
+if (KEEP_EN && m_axis[0].KEEP_W != KEEP_W)
     $fatal(0, "Error: Interface KEEP_W parameter mismatch (instance %m)");
 
 if (M_COUNT > 1) begin
@@ -150,17 +150,17 @@ logic [S_COUNT-1:0]  int_axis_tready[M_COUNT];
 for (genvar m = 0; m < S_COUNT; m = m + 1) begin : s_if
 
     taxi_axis_if #(
-        .DATA_W(s_axis.DATA_W),
-        .KEEP_EN(s_axis.KEEP_EN),
-        .KEEP_W(s_axis.KEEP_W),
-        .STRB_EN(s_axis.STRB_EN),
-        .LAST_EN(s_axis.LAST_EN),
-        .ID_EN(s_axis.ID_EN),
-        .ID_W(s_axis.ID_W),
-        .DEST_EN(s_axis.DEST_EN),
-        .DEST_W(s_axis.DEST_W),
-        .USER_EN(s_axis.USER_EN),
-        .USER_W(s_axis.USER_W)
+        .DATA_W(s_axis[0].DATA_W),
+        .KEEP_EN(s_axis[0].KEEP_EN),
+        .KEEP_W(s_axis[0].KEEP_W),
+        .STRB_EN(s_axis[0].STRB_EN),
+        .LAST_EN(s_axis[0].LAST_EN),
+        .ID_EN(s_axis[0].ID_EN),
+        .ID_W(s_axis[0].ID_W),
+        .DEST_EN(s_axis[0].DEST_EN),
+        .DEST_W(s_axis[0].DEST_W),
+        .USER_EN(s_axis[0].USER_EN),
+        .USER_W(s_axis[0].USER_W)
     ) int_axis();
 
     // S side register
@@ -266,17 +266,17 @@ end // s_if
 for (genvar n = 0; n < M_COUNT; n = n + 1) begin : m_if
 
     taxi_axis_if #(
-        .DATA_W(m_axis.DATA_W),
-        .KEEP_EN(m_axis.KEEP_EN),
-        .KEEP_W(m_axis.KEEP_W),
-        .STRB_EN(m_axis.STRB_EN),
-        .LAST_EN(m_axis.LAST_EN),
-        .ID_EN(m_axis.ID_EN),
-        .ID_W(m_axis.ID_W),
-        .DEST_EN(m_axis.DEST_EN),
-        .DEST_W(m_axis.DEST_W),
-        .USER_EN(m_axis.USER_EN),
-        .USER_W(m_axis.USER_W)
+        .DATA_W(m_axis[0].DATA_W),
+        .KEEP_EN(m_axis[0].KEEP_EN),
+        .KEEP_W(m_axis[0].KEEP_W),
+        .STRB_EN(m_axis[0].STRB_EN),
+        .LAST_EN(m_axis[0].LAST_EN),
+        .ID_EN(m_axis[0].ID_EN),
+        .ID_W(m_axis[0].ID_W),
+        .DEST_EN(m_axis[0].DEST_EN),
+        .DEST_W(m_axis[0].DEST_W),
+        .USER_EN(m_axis[0].USER_EN),
+        .USER_W(m_axis[0].USER_W)
     ) int_axis();
 
     if (S_COUNT == 1) begin
@@ -347,7 +347,7 @@ for (genvar n = 0; n < M_COUNT; n = n + 1) begin : m_if
 
     // M side register
     taxi_axis_register #(
-        .REG_TYPE(S_REG_TYPE)
+        .REG_TYPE(M_REG_TYPE)
     )
     reg_inst (
         .clk(clk),
