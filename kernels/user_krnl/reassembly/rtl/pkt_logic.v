@@ -352,7 +352,12 @@ module pkt_logic #(
     wire [512:0] pattern_tx_payload;
     wire         pattern_tx_valid;
     wire         pattern_tx_ready;
-    wire [31:0]  pattern_tx_meta = app_rx_meta;
+    wire         pattern_switch_ready;
+    wire [31:0]  pattern_tx_meta;
+    wire         pattern_meta_s_ready;
+    wire         pattern_meta_valid;
+    wire         pattern_meta_ready;
+    reg          pattern_rx_in_frame = 1'b0;
     wire         pattern_app_ready;
     wire [7:0]   pattern_decoupled_tdata;
     wire         pattern_decoupled_tvalid;
@@ -369,8 +374,32 @@ module pkt_logic #(
     wire [7:0]   pattern_slot_tx_data;
     wire         pattern_slot_tx_last;
 
-    assign pattern_rx_ready = pattern_decoupled_tready;
+    assign pattern_rx_ready = pattern_decoupled_tready && (pattern_rx_in_frame || pattern_meta_s_ready);
     assign pattern_tx_payload = {pattern_slot_tx_last, 504'd0, pattern_slot_tx_data};
+    assign pattern_tx_ready = pattern_slot_tx_last ? (pattern_meta_valid && pattern_switch_ready) : 1'b1;
+    assign pattern_meta_ready = pattern_tx_valid && pattern_slot_tx_last && pattern_switch_ready;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            pattern_rx_in_frame <= 1'b0;
+        end else if (pattern_rx_valid && pattern_rx_ready) begin
+            pattern_rx_in_frame <= !app_rx_payload[512];
+        end
+    end
+
+    axis_fifo_taxi #(
+        .DATA_WIDTH(32),
+        .DEPTH(32)
+    ) pattern_meta_fifo_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(app_rx_meta),
+        .s_axis_tvalid(pattern_rx_valid && pattern_rx_ready && !pattern_rx_in_frame),
+        .s_axis_tready(pattern_meta_s_ready),
+        .m_axis_tdata(pattern_tx_meta),
+        .m_axis_tvalid(pattern_meta_valid),
+        .m_axis_tready(pattern_meta_ready)
+    );
 
     axis_dfx_decoupler #(
         .DATA_W(8),
@@ -383,7 +412,7 @@ module pkt_logic #(
         .s_axis_tdata(app_rx_payload[7:0]),
         .s_axis_tkeep(1'b1),
         .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_rx_valid),
+        .s_axis_tvalid(pattern_rx_valid && (pattern_rx_in_frame || pattern_meta_s_ready)),
         .s_axis_tready(pattern_decoupled_tready),
         .s_axis_tlast(app_rx_payload[512]),
         .s_axis_tdest(1'b0),
@@ -490,7 +519,12 @@ module pkt_logic #(
     wire [512:0] or_tx_payload;
     wire         or_tx_valid;
     wire         or_tx_ready;
-    wire [31:0]  or_tx_meta = app_rx_meta;
+    wire         or_switch_ready;
+    wire [31:0]  or_tx_meta;
+    wire         or_meta_s_ready;
+    wire         or_meta_valid;
+    wire         or_meta_ready;
+    reg          or_rx_in_frame = 1'b0;
     wire         or_app_ready;
     wire [7:0]   or_decoupled_tdata;
     wire         or_decoupled_tvalid;
@@ -507,8 +541,32 @@ module pkt_logic #(
     wire [7:0]   or_slot_tx_data;
     wire         or_slot_tx_last;
 
-    assign or_rx_ready = or_decoupled_tready;
+    assign or_rx_ready = or_decoupled_tready && (or_rx_in_frame || or_meta_s_ready);
     assign or_tx_payload = {or_slot_tx_last, 504'd0, or_slot_tx_data};
+    assign or_tx_ready = or_slot_tx_last ? (or_meta_valid && or_switch_ready) : 1'b1;
+    assign or_meta_ready = or_tx_valid && or_slot_tx_last && or_switch_ready;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            or_rx_in_frame <= 1'b0;
+        end else if (or_rx_valid && or_rx_ready) begin
+            or_rx_in_frame <= !app_rx_payload[512];
+        end
+    end
+
+    axis_fifo_taxi #(
+        .DATA_WIDTH(32),
+        .DEPTH(32)
+    ) or_meta_fifo_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(app_rx_meta),
+        .s_axis_tvalid(or_rx_valid && or_rx_ready && !or_rx_in_frame),
+        .s_axis_tready(or_meta_s_ready),
+        .m_axis_tdata(or_tx_meta),
+        .m_axis_tvalid(or_meta_valid),
+        .m_axis_tready(or_meta_ready)
+    );
 
     axis_dfx_decoupler #(
         .DATA_W(8),
@@ -521,7 +579,7 @@ module pkt_logic #(
         .s_axis_tdata(app_rx_payload[7:0]),
         .s_axis_tkeep(1'b1),
         .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_rx_valid),
+        .s_axis_tvalid(or_rx_valid && (or_rx_in_frame || or_meta_s_ready)),
         .s_axis_tready(or_decoupled_tready),
         .s_axis_tlast(app_rx_payload[512]),
         .s_axis_tdest(1'b0),
@@ -632,11 +690,11 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s00_axis_tdata({pattern_tx_meta, pattern_tx_payload}),
-        .s00_axis_tvalid(pattern_tx_valid),
-        .s00_axis_tready(pattern_tx_ready),
+        .s00_axis_tvalid(pattern_tx_valid && pattern_slot_tx_last && pattern_meta_valid),
+        .s00_axis_tready(pattern_switch_ready),
         .s01_axis_tdata({or_tx_meta, or_tx_payload}),
-        .s01_axis_tvalid(or_tx_valid),
-        .s01_axis_tready(or_tx_ready),
+        .s01_axis_tvalid(or_tx_valid && or_slot_tx_last && or_meta_valid),
+        .s01_axis_tready(or_switch_ready),
         .s02_axis_tdata({reconf_tx_meta, reconf_tx_tlast, reconf_tx_tdata}),
         .s02_axis_tvalid(reconf_tx_tvalid),
         .s02_axis_tready(reconf_tx_tready),

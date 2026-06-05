@@ -90,8 +90,10 @@ module pkt_sender (
     /**********/
 
     //reg [31:0]  metadata_rx_tdata;//original 16-bit
-    reg         metadata_rx_tvalid;
     wire        metadata_rx_tready;
+    wire [31:0] metadata_tx_tdata;
+    wire        metadata_tx_tvalid;
+    wire        metadata_tx_tready;
     //For debug
     wire [31:0] metadata_notification;
     assign metadata_notification = pkt_rx_tdata[512 + 32: 512 + 1];
@@ -106,25 +108,40 @@ module pkt_sender (
         .s_axis_tdata(metadata_notification),
         .s_axis_tvalid(payload_rx_tvalid && pkt_rx_tdata[512]),
         .s_axis_tready(metadata_rx_tready),
-        .m_axis_tdata(m_axis_tx_metadata_tdata),
-        .m_axis_tvalid(m_axis_tx_metadata_tvalid),
-        .m_axis_tready(m_axis_tx_metadata_tready)
+        .m_axis_tdata(metadata_tx_tdata),
+        .m_axis_tvalid(metadata_tx_tvalid),
+        .m_axis_tready(metadata_tx_tready)
     );
     /**********/
 
 
 
-reg payload_tx_ready_hold = 0;
+reg tx_payload_active = 1'b0;
+reg tx_status_consumed = 1'b0;
+
+assign m_axis_tx_metadata_tdata = metadata_tx_tdata;
+assign m_axis_tx_metadata_tvalid = metadata_tx_tvalid && !tx_payload_active;
+assign metadata_tx_tready = m_axis_tx_metadata_tready && !tx_payload_active;
 
 assign pkt_rx_tready = metadata_rx_tready & payload_rx_tready;
 
 always @(posedge clk) begin
-    if (status_tx_tready) begin
-        // Set the hold register high when status_tx_tready is high
-        payload_tx_ready_hold <= 1'b1;
-    end else if (payload_tx_ready_hold == 1'b1 && payload_tx_tvalid == 1'b1 && output_tx[512] == 1'b1) begin
-        // Reset the hold register when TLAST is 1
-        payload_tx_ready_hold <= 1'b0;
+    if (rst) begin
+        tx_payload_active <= 1'b0;
+        tx_status_consumed <= 1'b0;
+    end else begin
+        if (!tx_payload_active && metadata_tx_tvalid && metadata_tx_tready) begin
+            tx_payload_active <= 1'b1;
+            tx_status_consumed <= 1'b0;
+        end else if (tx_payload_active && payload_tx_tvalid && payload_tx_tready) begin
+            if (!tx_status_consumed && status_tx_tvalid && !status_tx_tdata && !output_tx[512]) begin
+                tx_status_consumed <= 1'b1;
+            end
+            if (output_tx[512]) begin
+                tx_payload_active <= 1'b0;
+                tx_status_consumed <= 1'b0;
+            end
+        end
     end
 end
 
@@ -136,16 +153,16 @@ always @(*) begin
     payload_rx_tvalid = pkt_rx_tready & pkt_rx_tvalid;
     m_axis_tx_data_tkeep = {64{1'b1}};
 
-    if (status_tx_tvalid == 1'b1 && payload_tx_tvalid == 1'b1 && status_tx_tdata == 1'b1) begin //Payload sent the same time as status
+    if (tx_payload_active == 1'b1 && tx_status_consumed == 1'b0 && status_tx_tvalid == 1'b1 && payload_tx_tvalid == 1'b1 && status_tx_tdata == 1'b1) begin //Payload sent the same time as status
         // exception handler: sent to closed connection
         // discard payload and status
         m_axis_tx_data_tvalid = 1'b0;
         status_tx_tready = 1'b1;
         payload_tx_tready = 1'b1;
     end else begin
-        m_axis_tx_data_tvalid_inst = status_tx_tvalid & payload_tx_tvalid;
-        status_tx_tready = m_axis_tx_data_tvalid_inst & m_axis_tx_data_tready;
-        payload_tx_tready = payload_tx_ready_hold;
+        m_axis_tx_data_tvalid_inst = tx_payload_active & payload_tx_tvalid & (tx_status_consumed | status_tx_tvalid);
+        status_tx_tready = m_axis_tx_data_tvalid_inst & !tx_status_consumed & m_axis_tx_data_tready;
+        payload_tx_tready = m_axis_tx_data_tvalid_inst & m_axis_tx_data_tready;
         m_axis_tx_data_tvalid = payload_tx_tvalid & payload_tx_tready;
     end
 end

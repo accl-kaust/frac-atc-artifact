@@ -197,9 +197,9 @@ async def run_single_packet_request(dut, workload_id, expected_payload):
 
     metadata_frame, data_frame = await tb.recv_response()
 
-    assert frame_to_int(metadata_frame) == request.metadata
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, BYTE_LANES)
+    assert frame_to_int(metadata_frame) == request.metadata
 
 
 async def run_multi_packet_request(dut, workload_id, expected_payload):
@@ -222,9 +222,60 @@ async def run_multi_packet_request(dut, workload_id, expected_payload):
     assert_keep_all(data_frame, len(expected_payload))
 
 
+async def run_repeated_multi_packet_requests(dut, workload_id, line_count, request_count, expected_payload):
+    tb = TB(dut)
+    await tb.reset()
+
+    for request_idx in range(request_count):
+        request = MultiPacketRequest(
+            packet_lengths=tuple([BYTE_LANES] * line_count),
+            conn_id=0x5000 + request_idx,
+            workload_id=workload_id,
+        )
+
+        for notification, payload in zip(request.notifications, request.payloads):
+            read_cmd = await tb.send_notification(notification)
+            assert read_cmd == notification.pack()
+            await tb.send_rx_payload(payload)
+
+        await tb.send_tx_status_ok()
+
+        metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+        assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
+        assert bytes(data_frame.tdata) == expected_payload
+        assert_keep_all(data_frame, len(expected_payload))
+
+
+async def run_back_to_back_three_line_requests(dut, workload_id, expected_payload):
+    tb = TB(dut)
+    await tb.reset()
+
+    requests = [
+        MultiPacketRequest(packet_lengths=(BYTE_LANES, BYTE_LANES, BYTE_LANES), conn_id=0x5000, workload_id=workload_id),
+        MultiPacketRequest(packet_lengths=(BYTE_LANES, BYTE_LANES, BYTE_LANES), conn_id=0x5000, workload_id=workload_id),
+    ]
+
+    for request in requests:
+        for notification, payload in zip(request.notifications, request.payloads):
+            read_cmd = await tb.send_notification(notification)
+            assert read_cmd == notification.pack()
+            await tb.send_rx_payload(payload)
+
+    await tb.send_tx_status_ok()
+    await tb.send_tx_status_ok()
+
+    for request in requests:
+        metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+        assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
+        assert bytes(data_frame.tdata) == expected_payload
+        assert_keep_all(data_frame, len(expected_payload))
+
+
 @cocotb.test()
 async def test_single_packet_pattern_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01] * BYTE_LANES))
+    await run_single_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))
 
 
 @cocotb.test()
@@ -234,7 +285,38 @@ async def test_single_packet_or_app(dut):
 
 @cocotb.test()
 async def test_multi_packet_pattern_app(dut):
-    await run_multi_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01] * BYTE_LANES))
+    await run_multi_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))
+
+
+@cocotb.test()
+async def test_repeated_three_line_pattern_app(dut):
+    await run_repeated_multi_packet_requests(
+        dut,
+        workload_id=0x0000,
+        line_count=3,
+        request_count=8,
+        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+    )
+
+
+@cocotb.test()
+async def test_back_to_back_three_line_pattern_app(dut):
+    await run_back_to_back_three_line_requests(
+        dut,
+        workload_id=0x0000,
+        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+    )
+
+
+@cocotb.test()
+async def test_repeated_six_line_pattern_app(dut):
+    await run_repeated_multi_packet_requests(
+        dut,
+        workload_id=0x0000,
+        line_count=6,
+        request_count=8,
+        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+    )
 
 
 @cocotb.test()
@@ -302,7 +384,7 @@ def test_reassembly(request):
         os.path.join(rtl_dir, "scheduler.v"),
         os.path.join(rtl_dir, "slot_tx_axis_switch.sv"),
         os.path.join(reconf_rtl_dir, "axis_dfx_decoupler.sv"),
-        os.path.join(reconf_rtl_dir, "cell_bbx.sv"),
+        os.path.join(tests_dir, "cell_bbx_pattern_sim.sv"),
         os.path.join(reconf_rtl_dir, "reconfctrl.v"),
         os.path.join(reconf_rtl_dir, "icap_ctrl.v"),
         os.path.join(rtl_dir, "pkt_logic.v"),
