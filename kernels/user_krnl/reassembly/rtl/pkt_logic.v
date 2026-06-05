@@ -112,12 +112,115 @@ module pkt_logic #(
     wire         icap_pr_done;
     wire         icap_pr_err;
     wire         icap_avail;
+    wire         icap_pr_done_reconf;
+    wire         icap_pr_err_reconf;
+    wire         icap_avail_reconf;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg1 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg2 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg3 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg4 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg5 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg6 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg7 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg8 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg9 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_done_reg10 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg1 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg2 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg3 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg4 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg5 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg6 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg7 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg8 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg9 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_pr_err_reg10 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg1 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg2 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg3 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg4 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg5 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg6 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg7 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg8 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg9 = 1'b0;
+    (* shreg_extract = "no" *) reg icap_avail_reg10 = 1'b0;
     wire [SLOT_COUNT-1:0] slot_decouple;
     wire         reconf_active;
     wire [7:0]   reconf_active_slot_id;
     wire [7:0]   reconf_last_slot_id;
     wire [63:0]  reconf_cycles;
     wire [63:0]  reconf_last_cycles;
+
+    assign icap_pr_done_reconf = icap_pr_done_reg10;
+    assign icap_pr_err_reconf = icap_pr_err_reg10;
+    assign icap_avail_reconf = icap_avail_reg10;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            icap_pr_done_reg1 <= 1'b0;
+            icap_pr_done_reg2 <= 1'b0;
+            icap_pr_done_reg3 <= 1'b0;
+            icap_pr_done_reg4 <= 1'b0;
+            icap_pr_done_reg5 <= 1'b0;
+            icap_pr_done_reg6 <= 1'b0;
+            icap_pr_done_reg7 <= 1'b0;
+            icap_pr_done_reg8 <= 1'b0;
+            icap_pr_done_reg9 <= 1'b0;
+            icap_pr_done_reg10 <= 1'b0;
+            icap_pr_err_reg1 <= 1'b0;
+            icap_pr_err_reg2 <= 1'b0;
+            icap_pr_err_reg3 <= 1'b0;
+            icap_pr_err_reg4 <= 1'b0;
+            icap_pr_err_reg5 <= 1'b0;
+            icap_pr_err_reg6 <= 1'b0;
+            icap_pr_err_reg7 <= 1'b0;
+            icap_pr_err_reg8 <= 1'b0;
+            icap_pr_err_reg9 <= 1'b0;
+            icap_pr_err_reg10 <= 1'b0;
+            icap_avail_reg1 <= 1'b0;
+            icap_avail_reg2 <= 1'b0;
+            icap_avail_reg3 <= 1'b0;
+            icap_avail_reg4 <= 1'b0;
+            icap_avail_reg5 <= 1'b0;
+            icap_avail_reg6 <= 1'b0;
+            icap_avail_reg7 <= 1'b0;
+            icap_avail_reg8 <= 1'b0;
+            icap_avail_reg9 <= 1'b0;
+            icap_avail_reg10 <= 1'b0;
+        end else begin
+            icap_pr_done_reg1 <= icap_pr_done;
+            icap_pr_done_reg2 <= icap_pr_done_reg1;
+            icap_pr_done_reg3 <= icap_pr_done_reg2;
+            icap_pr_done_reg4 <= icap_pr_done_reg3;
+            icap_pr_done_reg5 <= icap_pr_done_reg4;
+            icap_pr_done_reg6 <= icap_pr_done_reg5;
+            icap_pr_done_reg7 <= icap_pr_done_reg6;
+            icap_pr_done_reg8 <= icap_pr_done_reg7;
+            icap_pr_done_reg9 <= icap_pr_done_reg8;
+            icap_pr_done_reg10 <= icap_pr_done_reg9;
+            icap_pr_err_reg1 <= icap_pr_err;
+            icap_pr_err_reg2 <= icap_pr_err_reg1;
+            icap_pr_err_reg3 <= icap_pr_err_reg2;
+            icap_pr_err_reg4 <= icap_pr_err_reg3;
+            icap_pr_err_reg5 <= icap_pr_err_reg4;
+            icap_pr_err_reg6 <= icap_pr_err_reg5;
+            icap_pr_err_reg7 <= icap_pr_err_reg6;
+            icap_pr_err_reg8 <= icap_pr_err_reg7;
+            icap_pr_err_reg9 <= icap_pr_err_reg8;
+            icap_pr_err_reg10 <= icap_pr_err_reg9;
+            icap_avail_reg1 <= icap_avail;
+            icap_avail_reg2 <= icap_avail_reg1;
+            icap_avail_reg3 <= icap_avail_reg2;
+            icap_avail_reg4 <= icap_avail_reg3;
+            icap_avail_reg5 <= icap_avail_reg4;
+            icap_avail_reg6 <= icap_avail_reg5;
+            icap_avail_reg7 <= icap_avail_reg6;
+            icap_avail_reg8 <= icap_avail_reg7;
+            icap_avail_reg9 <= icap_avail_reg8;
+            icap_avail_reg10 <= icap_avail_reg9;
+        end
+    end
 
     always @* begin
         if (reconf_header_line) begin
@@ -154,9 +257,9 @@ module pkt_logic #(
         .m_axis_icap_tready(reconf_axis_icap_tready),
         .m_axis_icap_tdata(reconf_axis_icap_tdata),
         .m_axis_icap_tlast(reconf_axis_icap_tlast),
-        .icap_pr_done(icap_pr_done),
-        .icap_pr_err(icap_pr_err),
-        .icap_avail(icap_avail),
+        .icap_pr_done(icap_pr_done_reconf),
+        .icap_pr_err(icap_pr_err_reconf),
+        .icap_avail(icap_avail_reconf),
         .slot_decouple(slot_decouple),
         .m_axi_awaddr(m_axi_awaddr),
         .m_axi_awburst(m_axi_awburst),
