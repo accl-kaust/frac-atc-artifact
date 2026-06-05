@@ -10,7 +10,7 @@ module axis_data_fifo_0 (
     input  wire         m_axis_tready,
     output wire [583:0] m_axis_tdata
 );
-    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(4096)) fifo_inst (
+    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(512)) fifo_inst (
         .clk(clk),
         .rst(rst),
         .s_axis_tvalid(s_axis_tvalid),
@@ -32,7 +32,7 @@ module axis_data_fifo_1 (
     input  wire         m_axis_tready,
     output wire [583:0] m_axis_tdata
 );
-    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(16384)) fifo_inst (
+    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(512)) fifo_inst (
         .clk(clk),
         .rst(rst),
         .s_axis_tvalid(s_axis_tvalid),

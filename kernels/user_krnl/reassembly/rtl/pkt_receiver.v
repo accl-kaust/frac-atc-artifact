@@ -42,6 +42,8 @@ module pkt_receiver (
         input wire                pkt_tx_tready
     );
 
+    localparam [15:0] MAX_PACKET_BYTES = 16'd512;
+
     wire [87:0] notif_tx_tdata;
     wire        notif_tx_tvalid;
     reg         notif_tx_tready;
@@ -112,8 +114,8 @@ module pkt_receiver (
     always @(*) begin
         m_axis_read_package_tdata = notif_tx_tdata[31:0];
     if (notif_tx_tvalid == 1'b1 &&
-        (notif_tx_tdata[31:16] % 64 != 0 || notif_tx_tdata[31:16] < 16'd64 || notif_tx_tdata[31:16] > 16'd8960)) begin
-            // discard rx_data that are larger than 1536B
+        (notif_tx_tdata[31:16] % 64 != 0 || notif_tx_tdata[31:16] < 16'd64 || notif_tx_tdata[31:16] > MAX_PACKET_BYTES)) begin
+            // discard invalid rx_data lengths
             // also handle conn_close notification (msg size = 0)
             notif_tx_tready = 1'b1;
             m_axis_read_package_tvalid = 1'b0;

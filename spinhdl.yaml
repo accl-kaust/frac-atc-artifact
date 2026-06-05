@@ -18,8 +18,11 @@ root:
       region:
         add: CLOCKREGION_X5Y3:CLOCKREGION_X6Y3
       components:
-      - name: pattern_slot
+      - name: or_slot
         id: 0
+        unit: or_slot
+      - name: pattern_slot
+        id: 1
         unit: pattern_slot
     - name: C1
       id: 1
@@ -28,5 +31,9 @@ root:
         add: CLOCKREGION_X5Y2:CLOCKREGION_X6Y2
       components:
       - name: or_slot
-        id: 1
+        id: 2
         unit: or_slot
+      - name: pattern_slot
+        id: 3
+        unit: pattern_slot
+

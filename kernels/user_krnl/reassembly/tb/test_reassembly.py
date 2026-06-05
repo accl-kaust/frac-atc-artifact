@@ -5,12 +5,14 @@ from dataclasses import dataclass
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.result import SimTimeoutError
+from cocotb.triggers import RisingEdge, with_timeout
 
 from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStreamSink, AxiStreamSource
 
 
 BYTE_LANES = 64
+MAX_PACKET_BYTES = 512
 RECONF_APP = 0x00AB
 OP_READ_HBM = 2
 
@@ -161,6 +163,14 @@ class TB:
         read_cmd = await self.read_package_sink.recv()
         return frame_to_int(read_cmd)
 
+    async def expect_notification_rejected(self, notification: TcpNotification):
+        await self.notifications_source.send(AxiStreamFrame(notification.to_bytes()))
+        try:
+            await with_timeout(self.read_package_sink.recv(), 200, "ns")
+        except SimTimeoutError:
+            return
+        raise AssertionError("invalid notification produced a read command")
+
     async def send_rx_payload(self, payload: bytes):
         await self.rx_data_source.send(AxiStreamFrame(payload))
 
@@ -255,6 +265,18 @@ async def test_reconf_read_hbm_request(dut):
     assert_keep_all(data_frame, BYTE_LANES)
 
 
+@cocotb.test()
+async def test_notification_length_limit(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    max_notification = TcpNotification(length=MAX_PACKET_BYTES, conn_id=0x4567)
+    read_cmd = await tb.send_notification(max_notification)
+    assert read_cmd == max_notification.pack()
+
+    await tb.expect_notification_rejected(TcpNotification(length=MAX_PACKET_BYTES + BYTE_LANES, conn_id=0x4567))
+
+
 tests_dir = os.path.dirname(__file__)
 rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "rtl"))
 reconf_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "reconfctrl", "rtl"))
@@ -272,9 +294,11 @@ def test_reassembly(request):
         os.path.join(rtl_dir, "axis_register.v"),
         os.path.join(rtl_dir, "axis_pipeline_register.v"),
         os.path.join(rtl_dir, "dispatcher.v"),
-        os.path.join(rtl_dir, "dummy_delayed_app.v"),
         os.path.join(rtl_dir, "scheduler.v"),
+        os.path.join(reconf_rtl_dir, "axis_dfx_decoupler.sv"),
+        os.path.join(reconf_rtl_dir, "cell_bbx.sv"),
         os.path.join(reconf_rtl_dir, "reconfctrl.v"),
+        os.path.join(reconf_rtl_dir, "icap_ctrl.v"),
         os.path.join(rtl_dir, "pkt_logic.v"),
         os.path.join(rtl_dir, "pkt_receiver.v"),
         os.path.join(rtl_dir, "pkt_sender.v"),
