@@ -281,6 +281,7 @@ tests_dir = os.path.dirname(__file__)
 rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "rtl"))
 reconf_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "reconfctrl", "rtl"))
 taxi_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "..", "..", "lib", "taxi", "axis", "rtl"))
+taxi_prim_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "..", "..", "lib", "taxi", "prim", "rtl"))
 
 
 def test_reassembly(request):
@@ -289,12 +290,17 @@ def test_reassembly(request):
     verilog_sources = [
         os.path.join(taxi_rtl_dir, "taxi_axis_if.sv"),
         os.path.join(taxi_rtl_dir, "taxi_axis_fifo.sv"),
+        os.path.join(taxi_prim_rtl_dir, "taxi_penc.sv"),
+        os.path.join(taxi_prim_rtl_dir, "taxi_arbiter.sv"),
+        os.path.join(taxi_rtl_dir, "taxi_axis_register.sv"),
+        os.path.join(taxi_rtl_dir, "taxi_axis_switch.sv"),
         os.path.join(rtl_dir, "axis_fifo_taxi.sv"),
         os.path.join(rtl_dir, "axis_data_fifo_replacements.sv"),
         os.path.join(rtl_dir, "axis_register.v"),
         os.path.join(rtl_dir, "axis_pipeline_register.v"),
         os.path.join(rtl_dir, "dispatcher.v"),
         os.path.join(rtl_dir, "scheduler.v"),
+        os.path.join(rtl_dir, "slot_tx_axis_switch.sv"),
         os.path.join(reconf_rtl_dir, "axis_dfx_decoupler.sv"),
         os.path.join(reconf_rtl_dir, "cell_bbx.sv"),
         os.path.join(reconf_rtl_dir, "reconfctrl.v"),

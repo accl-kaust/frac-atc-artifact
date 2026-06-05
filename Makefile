@@ -50,8 +50,12 @@ RTL_FILES += lib/axis/rtl/sync_reset.v
 RTL_FILES += lib/axis/rtl/reset_gen.v
 RTL_FILES += lib/axis/rtl/axis_fifo_ultra.v
 RTL_FILES += lib/axis/rtl/axis_reg.v
+RTL_FILES += lib/taxi/prim/rtl/taxi_penc.sv
+RTL_FILES += lib/taxi/prim/rtl/taxi_arbiter.sv
 RTL_FILES += lib/taxi/axis/rtl/taxi_axis_if.sv
 RTL_FILES += lib/taxi/axis/rtl/taxi_axis_fifo.sv
+RTL_FILES += lib/taxi/axis/rtl/taxi_axis_register.sv
+RTL_FILES += lib/taxi/axis/rtl/taxi_axis_switch.sv
 
 # common
 RTL_FILES += kernels/common/types/network_intf.svh
@@ -89,6 +93,7 @@ RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_register.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_pipeline_register.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/dispatcher.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/ipcore_top_top_k.v
+RTL_FILES += kernels/user_krnl/reassembly/rtl/slot_tx_axis_switch.sv
 RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_logic.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_receiver.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/pkt_sender.v

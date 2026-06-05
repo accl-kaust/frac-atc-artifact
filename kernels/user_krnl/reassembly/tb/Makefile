@@ -15,12 +15,17 @@ TOPLEVEL = tcp_top_loopback
 
 VERILOG_SOURCES += $(TAXI_RTL_DIR)/taxi_axis_if.sv
 VERILOG_SOURCES += $(TAXI_RTL_DIR)/taxi_axis_fifo.sv
+VERILOG_SOURCES += ../../../../lib/taxi/prim/rtl/taxi_penc.sv
+VERILOG_SOURCES += ../../../../lib/taxi/prim/rtl/taxi_arbiter.sv
+VERILOG_SOURCES += $(TAXI_RTL_DIR)/taxi_axis_register.sv
+VERILOG_SOURCES += $(TAXI_RTL_DIR)/taxi_axis_switch.sv
 VERILOG_SOURCES += $(RTL_DIR)/axis_fifo_taxi.sv
 VERILOG_SOURCES += $(RTL_DIR)/axis_data_fifo_replacements.sv
 VERILOG_SOURCES += $(RTL_DIR)/axis_register.v
 VERILOG_SOURCES += $(RTL_DIR)/axis_pipeline_register.v
 VERILOG_SOURCES += $(RTL_DIR)/dispatcher.v
 VERILOG_SOURCES += $(RTL_DIR)/scheduler.v
+VERILOG_SOURCES += $(RTL_DIR)/slot_tx_axis_switch.sv
 VERILOG_SOURCES += $(RECONF_RTL_DIR)/axis_dfx_decoupler.sv
 VERILOG_SOURCES += $(RECONF_RTL_DIR)/cell_bbx.sv
 VERILOG_SOURCES += $(RECONF_RTL_DIR)/reconfctrl.v

@@ -22,8 +22,12 @@ rtl:
   - lib/axis/rtl/reset_gen.v
   - lib/axis/rtl/axis_fifo_ultra.v
   - lib/axis/rtl/axis_reg.v
+  - lib/taxi/prim/rtl/taxi_penc.sv
+  - lib/taxi/prim/rtl/taxi_arbiter.sv
   - lib/taxi/axis/rtl/taxi_axis_if.sv
   - lib/taxi/axis/rtl/taxi_axis_fifo.sv
+  - lib/taxi/axis/rtl/taxi_axis_register.sv
+  - lib/taxi/axis/rtl/taxi_axis_switch.sv
   - kernels/common/types/network_intf.svh
   - kernels/common/types/network_types.svh
   - kernels/common/types/network_types.svh.in
@@ -52,6 +56,7 @@ rtl:
   - kernels/user_krnl/reassembly/rtl/axis_pipeline_register.v
   - kernels/user_krnl/reassembly/rtl/dispatcher.v
   - kernels/user_krnl/reassembly/rtl/ipcore_top_top_k.v
+  - kernels/user_krnl/reassembly/rtl/slot_tx_axis_switch.sv
   - kernels/user_krnl/reassembly/rtl/pkt_logic.v
   - kernels/user_krnl/reassembly/rtl/pkt_receiver.v
   - kernels/user_krnl/reassembly/rtl/pkt_sender.v

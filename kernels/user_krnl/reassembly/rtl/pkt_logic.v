@@ -12,8 +12,8 @@ module pkt_logic #(
     input  wire [512+88-1 + 1 : 0]  pkt_rx_tdata,
     input  wire                     pkt_rx_tvalid,
     output wire                     pkt_rx_tready,
-    output reg  [512+32-1 + 1: 0]   pkt_tx_tdata,
-    output reg                      pkt_tx_tvalid,
+    output wire [512+32-1 + 1: 0]   pkt_tx_tdata,
+    output wire                     pkt_tx_tvalid,
     input  wire                     pkt_tx_tready,
 
     output wire [32:0]              m_axi_awaddr,
@@ -248,13 +248,21 @@ module pkt_logic #(
 
     wire [512:0] pattern_tx_payload;
     wire         pattern_tx_valid;
-    reg          pattern_tx_ready;
+    wire         pattern_tx_ready;
     wire [31:0]  pattern_tx_meta = app_rx_meta;
     wire         pattern_app_ready;
     wire [511:0] pattern_decoupled_tdata;
     wire         pattern_decoupled_tvalid;
     wire         pattern_decoupled_tready;
     wire         pattern_decoupled_tlast;
+    wire [511:0] pattern_slot_tx_data_raw;
+    wire         pattern_slot_tx_valid_raw;
+    wire         pattern_slot_tx_ready_raw;
+    wire         pattern_slot_tx_last_raw;
+    wire [511:0] pattern_tx_decoupled_tdata;
+    wire         pattern_tx_decoupled_tvalid;
+    wire         pattern_tx_decoupled_tready;
+    wire         pattern_tx_decoupled_tlast;
     wire [511:0] pattern_slot_tx_data;
     wire         pattern_slot_tx_last;
 
@@ -307,26 +315,92 @@ module pkt_logic #(
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_slot_tx_data),
+        .m_axis_tdata(pattern_slot_tx_data_raw),
         .m_axis_tkeep(),
         .m_axis_tstrb(),
-        .m_axis_tvalid(pattern_tx_valid),
-        .m_axis_tready(pattern_tx_ready),
-        .m_axis_tlast(pattern_slot_tx_last),
+        .m_axis_tvalid(pattern_slot_tx_valid_raw),
+        .m_axis_tready(pattern_slot_tx_ready_raw),
+        .m_axis_tlast(pattern_slot_tx_last_raw),
         .m_axis_tdest(),
         .m_axis_tid(),
         .m_axis_tuser()
     );
 
+    axis_dfx_decoupler #(
+        .DATA_W(512),
+        .KEEP_W(64),
+        .DEST_W(1),
+        .ID_W(1),
+        .USER_W(1)
+    ) pattern_slot_tx_decoupler_inst (
+        .decouple(slot_decouple[0]),
+        .s_axis_tdata(pattern_slot_tx_data_raw),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
+        .s_axis_tvalid(pattern_slot_tx_valid_raw),
+        .s_axis_tready(pattern_slot_tx_ready_raw),
+        .s_axis_tlast(pattern_slot_tx_last_raw),
+        .s_axis_tdest(1'b0),
+        .s_axis_tid(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(pattern_tx_decoupled_tdata),
+        .m_axis_tkeep(),
+        .m_axis_tstrb(),
+        .m_axis_tvalid(pattern_tx_decoupled_tvalid),
+        .m_axis_tready(pattern_tx_decoupled_tready),
+        .m_axis_tlast(pattern_tx_decoupled_tlast),
+        .m_axis_tdest(),
+        .m_axis_tid(),
+        .m_axis_tuser()
+    );
+
+    axis_register #(
+        .DATA_WIDTH(512),
+        .KEEP_ENABLE(1),
+        .KEEP_WIDTH(64),
+        .LAST_ENABLE(1),
+        .ID_ENABLE(0),
+        .DEST_ENABLE(0),
+        .USER_ENABLE(0),
+        .REG_TYPE(2)
+    ) pattern_slot_tx_reg_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(pattern_tx_decoupled_tdata),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tvalid(pattern_tx_decoupled_tvalid),
+        .s_axis_tready(pattern_tx_decoupled_tready),
+        .s_axis_tlast(pattern_tx_decoupled_tlast),
+        .s_axis_tid(1'b0),
+        .s_axis_tdest(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(pattern_slot_tx_data),
+        .m_axis_tkeep(),
+        .m_axis_tvalid(pattern_tx_valid),
+        .m_axis_tready(pattern_tx_ready),
+        .m_axis_tlast(pattern_slot_tx_last),
+        .m_axis_tid(),
+        .m_axis_tdest(),
+        .m_axis_tuser()
+    );
+
     wire [512:0] or_tx_payload;
     wire         or_tx_valid;
-    reg          or_tx_ready;
+    wire         or_tx_ready;
     wire [31:0]  or_tx_meta = app_rx_meta;
     wire         or_app_ready;
     wire [511:0] or_decoupled_tdata;
     wire         or_decoupled_tvalid;
     wire         or_decoupled_tready;
     wire         or_decoupled_tlast;
+    wire [511:0] or_slot_tx_data_raw;
+    wire         or_slot_tx_valid_raw;
+    wire         or_slot_tx_ready_raw;
+    wire         or_slot_tx_last_raw;
+    wire [511:0] or_tx_decoupled_tdata;
+    wire         or_tx_decoupled_tvalid;
+    wire         or_tx_decoupled_tready;
+    wire         or_tx_decoupled_tlast;
     wire [511:0] or_slot_tx_data;
     wire         or_slot_tx_last;
 
@@ -379,71 +453,93 @@ module pkt_logic #(
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_slot_tx_data),
+        .m_axis_tdata(or_slot_tx_data_raw),
         .m_axis_tkeep(),
         .m_axis_tstrb(),
-        .m_axis_tvalid(or_tx_valid),
-        .m_axis_tready(or_tx_ready),
-        .m_axis_tlast(or_slot_tx_last),
+        .m_axis_tvalid(or_slot_tx_valid_raw),
+        .m_axis_tready(or_slot_tx_ready_raw),
+        .m_axis_tlast(or_slot_tx_last_raw),
         .m_axis_tdest(),
         .m_axis_tid(),
         .m_axis_tuser()
     );
 
-    reg output_active = 1'b0;
-    reg [1:0] output_sel = 2'd0;
-    reg [1:0] arb_sel;
+    axis_dfx_decoupler #(
+        .DATA_W(512),
+        .KEEP_W(64),
+        .DEST_W(1),
+        .ID_W(1),
+        .USER_W(1)
+    ) or_slot_tx_decoupler_inst (
+        .decouple(slot_decouple[1]),
+        .s_axis_tdata(or_slot_tx_data_raw),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
+        .s_axis_tvalid(or_slot_tx_valid_raw),
+        .s_axis_tready(or_slot_tx_ready_raw),
+        .s_axis_tlast(or_slot_tx_last_raw),
+        .s_axis_tdest(1'b0),
+        .s_axis_tid(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(or_tx_decoupled_tdata),
+        .m_axis_tkeep(),
+        .m_axis_tstrb(),
+        .m_axis_tvalid(or_tx_decoupled_tvalid),
+        .m_axis_tready(or_tx_decoupled_tready),
+        .m_axis_tlast(or_tx_decoupled_tlast),
+        .m_axis_tdest(),
+        .m_axis_tid(),
+        .m_axis_tuser()
+    );
 
-    always @* begin
-        pattern_tx_ready = 1'b0;
-        or_tx_ready = 1'b0;
-        reconf_tx_tready = 1'b0;
-        pkt_tx_tdata = 545'd0;
-        pkt_tx_tvalid = 1'b0;
+    axis_register #(
+        .DATA_WIDTH(512),
+        .KEEP_ENABLE(1),
+        .KEEP_WIDTH(64),
+        .LAST_ENABLE(1),
+        .ID_ENABLE(0),
+        .DEST_ENABLE(0),
+        .USER_ENABLE(0),
+        .REG_TYPE(2)
+    ) or_slot_tx_reg_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(or_tx_decoupled_tdata),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tvalid(or_tx_decoupled_tvalid),
+        .s_axis_tready(or_tx_decoupled_tready),
+        .s_axis_tlast(or_tx_decoupled_tlast),
+        .s_axis_tid(1'b0),
+        .s_axis_tdest(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(or_slot_tx_data),
+        .m_axis_tkeep(),
+        .m_axis_tvalid(or_tx_valid),
+        .m_axis_tready(or_tx_ready),
+        .m_axis_tlast(or_slot_tx_last),
+        .m_axis_tid(),
+        .m_axis_tdest(),
+        .m_axis_tuser()
+    );
 
-        if (output_active) begin
-            arb_sel = output_sel;
-        end else if (pattern_tx_valid) begin
-            arb_sel = 2'd0;
-        end else if (or_tx_valid) begin
-            arb_sel = 2'd1;
-        end else begin
-            arb_sel = 2'd2;
-        end
-
-        case (arb_sel)
-            2'd0: begin
-                pkt_tx_tdata = {pattern_tx_meta, pattern_tx_payload};
-                pkt_tx_tvalid = pattern_tx_valid;
-                pattern_tx_ready = pkt_tx_tready;
-            end
-            2'd1: begin
-                pkt_tx_tdata = {or_tx_meta, or_tx_payload};
-                pkt_tx_tvalid = or_tx_valid;
-                or_tx_ready = pkt_tx_tready;
-            end
-            default: begin
-                pkt_tx_tdata = {reconf_tx_meta, reconf_tx_tlast, reconf_tx_tdata};
-                pkt_tx_tvalid = reconf_tx_tvalid;
-                reconf_tx_tready = pkt_tx_tready;
-            end
-        endcase
-    end
-
-    always @(posedge clk) begin
-        if (rst) begin
-            output_active <= 1'b0;
-            output_sel <= 2'd0;
-        end else if (pkt_tx_tvalid) begin
-            if (!output_active) begin
-                output_active <= 1'b1;
-                output_sel <= arb_sel;
-            end
-
-            if (pkt_tx_tready && pkt_tx_tdata[512]) begin
-                output_active <= 1'b0;
-            end
-        end
-    end
+    slot_tx_axis_switch #(
+        .DATA_W(545),
+        .TLAST_IDX(512)
+    ) slot_tx_axis_switch_inst (
+        .clk(clk),
+        .rst(rst),
+        .s00_axis_tdata({pattern_tx_meta, pattern_tx_payload}),
+        .s00_axis_tvalid(pattern_tx_valid),
+        .s00_axis_tready(pattern_tx_ready),
+        .s01_axis_tdata({or_tx_meta, or_tx_payload}),
+        .s01_axis_tvalid(or_tx_valid),
+        .s01_axis_tready(or_tx_ready),
+        .s02_axis_tdata({reconf_tx_meta, reconf_tx_tlast, reconf_tx_tdata}),
+        .s02_axis_tvalid(reconf_tx_tvalid),
+        .s02_axis_tready(reconf_tx_tready),
+        .m_axis_tdata(pkt_tx_tdata),
+        .m_axis_tvalid(pkt_tx_tvalid),
+        .m_axis_tready(pkt_tx_tready)
+    );
 
 endmodule
