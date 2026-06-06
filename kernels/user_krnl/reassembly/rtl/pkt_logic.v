@@ -95,13 +95,15 @@ module pkt_logic #(
     wire reconf_rx_ready;
 
     reg  reconf_seen_header = 1'b0;
+    reg  reconf_drain_packet = 1'b0;
 
     wire reconf_header_line = dispatcher_reconf_selected && !reconf_seen_header;
     wire reconf_payload_line = dispatcher_reconf_selected && reconf_seen_header;
+    wire reconf_forward_line = reconf_payload_line && !reconf_drain_packet;
 
     wire pattern_rx_valid = scheduler_tvalid && (app_rx_workload != OR_APP);
     wire or_rx_valid = scheduler_tvalid && (app_rx_workload == OR_APP);
-    wire reconf_rx_valid = dispatcher_tvalid && reconf_payload_line;
+    wire reconf_rx_valid = dispatcher_tvalid && reconf_forward_line;
 
     wire [511:0] reconf_tx_tdata;
     wire [63:0]  reconf_tx_tkeep;
@@ -229,7 +231,7 @@ module pkt_logic #(
     end
 
     assign dispatcher_tready = dispatcher_reconf_selected ?
-        (reconf_header_line ? (reconf_state == 4'd0) : reconf_rx_ready) :
+        (reconf_header_line ? (reconf_state == 4'd0) : (reconf_drain_packet ? 1'b1 : reconf_rx_ready)) :
         scheduler_rx_tready;
 
     always @* begin
@@ -346,12 +348,17 @@ module pkt_logic #(
     always @(posedge clk) begin
         if (rst) begin
             reconf_seen_header <= 1'b0;
+            reconf_drain_packet <= 1'b0;
             reconf_tx_meta <= 32'd0;
         end else if (dispatcher_tvalid && dispatcher_tready && reconf_header_line) begin
             reconf_tx_meta <= dispatcher_meta;
             reconf_seen_header <= !dispatcher_payload[512];
+            reconf_drain_packet <= 1'b0;
         end else if (dispatcher_tvalid && dispatcher_tready && reconf_payload_line && dispatcher_payload[512]) begin
             reconf_seen_header <= 1'b0;
+            reconf_drain_packet <= 1'b0;
+        end else if (reconf_tx_tvalid && reconf_tx_tready && reconf_tx_tlast && reconf_seen_header) begin
+            reconf_drain_packet <= 1'b1;
         end
     end
 

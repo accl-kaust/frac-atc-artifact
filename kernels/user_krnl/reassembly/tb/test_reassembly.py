@@ -183,6 +183,13 @@ class TB:
         data_frame = await self.tx_data_sink.recv()
         return metadata_frame, data_frame
 
+    async def expect_no_response(self, timeout=500, units="ns"):
+        try:
+            metadata_frame = await with_timeout(self.tx_metadata_sink.recv(), timeout, units)
+        except SimTimeoutError:
+            return
+        raise AssertionError(f"unexpected extra response metadata 0x{frame_to_int(metadata_frame):08x}")
+
 
 async def run_single_packet_request(dut, workload_id, expected_payload):
     tb = TB(dut)
@@ -302,7 +309,7 @@ async def test_single_packet_pattern_app(dut):
 
 @cocotb.test()
 async def test_single_packet_or_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0001, expected_payload=bytes([0xff] * BYTE_LANES))
+    await run_single_packet_request(dut, workload_id=0x0001, expected_payload=bytes([0xff]) + bytes(BYTE_LANES - 1))
 
 
 @cocotb.test()
@@ -412,6 +419,150 @@ async def test_reconf_write_hbm_uses_command_size(dut):
 
 
 @cocotb.test()
+async def test_reconf_write_hbm_exact_board_packet_has_one_response(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x4000
+    payload = bytes((0x40 + idx) & 0xFF for idx in range(BYTE_LANES))
+    original = bytes([0xee] * BYTE_LANES)
+    tb.axi_ram.write(addr, original)
+
+    request_payload = (
+        RequestHeader(total_size=2 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
+        + pack_reconf_command(OP_WRITE_HBM, addr, BYTE_LANES)
+        + payload
+    )
+    notification = TcpNotification(length=len(request_payload), conn_id=0x6c00)
+
+    assert len(request_payload) == 3 * BYTE_LANES
+    assert request_payload[56:60] == bytes([0x80, 0x00, 0x00, 0x00])
+
+    read_cmd = await tb.send_notification(notification)
+    assert read_cmd == notification.pack()
+
+    await tb.send_rx_payload(request_payload)
+    await tb.send_tx_status_ok()
+
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+    assert frame_to_int(metadata_frame) == notification.pack()
+    assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
+    assert_keep_all(data_frame, BYTE_LANES)
+    assert bytes(tb.axi_ram.read(addr, BYTE_LANES)) == payload
+
+    await tb.expect_no_response()
+
+    await tb.send_tx_status_ok()
+    await tb.expect_no_response()
+
+    await tb.send_tx_status_ok()
+    await tb.expect_no_response()
+
+
+@cocotb.test()
+async def test_reconf_repeated_exact_write_hbm_has_one_response_each(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    for req_idx in range(3):
+        addr = 0x4000 + req_idx * BYTE_LANES
+        payload = bytes((0x40 + req_idx + idx) & 0xFF for idx in range(BYTE_LANES))
+        request_payload = (
+            RequestHeader(total_size=2 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
+            + pack_reconf_command(OP_WRITE_HBM, addr, BYTE_LANES)
+            + payload
+        )
+        notification = TcpNotification(length=len(request_payload), conn_id=0x6c00 + req_idx)
+
+        read_cmd = await tb.send_notification(notification)
+        assert read_cmd == notification.pack()
+
+        await tb.send_rx_payload(request_payload)
+        await tb.send_tx_status_ok()
+
+        metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+        assert frame_to_int(metadata_frame) == notification.pack()
+        assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
+        assert_keep_all(data_frame, BYTE_LANES)
+        assert bytes(tb.axi_ram.read(addr, BYTE_LANES)) == payload
+
+        await tb.expect_no_response()
+
+
+@cocotb.test()
+async def test_reconf_write_hbm_ignores_transport_padding(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x6000
+    write_size = BYTE_LANES
+    payload_capacity = 2 * BYTE_LANES
+    payload = bytes((0x20 + idx) & 0xFF for idx in range(payload_capacity))
+    original = bytes([0xee] * payload_capacity)
+    tb.axi_ram.write(addr, original)
+
+    request_payload = (
+        RequestHeader(total_size=BYTE_LANES + payload_capacity, workload_id=RECONF_APP).to_bytes()
+        + pack_reconf_command(OP_WRITE_HBM, addr, write_size)
+        + payload
+    )
+    notification = TcpNotification(length=len(request_payload), conn_id=0x5678)
+
+    read_cmd = await tb.send_notification(notification)
+    assert read_cmd == notification.pack()
+
+    await tb.send_rx_payload(request_payload)
+    await tb.send_tx_status_ok()
+
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+    assert frame_to_int(metadata_frame) == notification.pack()
+    assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
+    assert_keep_all(data_frame, BYTE_LANES)
+    assert bytes(tb.axi_ram.read(addr, payload_capacity)) == payload[:write_size] + original[write_size:]
+
+    await tb.expect_no_response()
+    await tb.send_tx_status_ok()
+    await tb.expect_no_response()
+
+
+@cocotb.test()
+async def test_reconf_read_hbm_ignores_extra_packet_data(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x7000
+    expected_payload = bytes((0x60 + idx) & 0xFF for idx in range(BYTE_LANES))
+    tb.axi_ram.write(addr, expected_payload)
+    extra_payload = bytes((0xa0 + idx) & 0xFF for idx in range(BYTE_LANES))
+
+    request_payload = (
+        RequestHeader(total_size=3 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
+        + pack_reconf_command(OP_READ_HBM, addr, BYTE_LANES)
+        + extra_payload
+    )
+    notification = TcpNotification(length=len(request_payload), conn_id=0x6789)
+
+    read_cmd = await tb.send_notification(notification)
+    assert read_cmd == notification.pack()
+
+    await tb.send_rx_payload(request_payload)
+    await tb.send_tx_status_ok()
+
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+    assert frame_to_int(metadata_frame) == notification.pack()
+    assert bytes(data_frame.tdata) == expected_payload
+    assert_keep_all(data_frame, BYTE_LANES)
+
+    await tb.expect_no_response()
+    await tb.send_tx_status_ok()
+    await tb.expect_no_response()
+
+
+@cocotb.test()
 async def test_notification_length_limit(dut):
     tb = TB(dut)
     await tb.reset()
@@ -465,5 +616,5 @@ def test_reassembly(request):
         toplevel="tcp_top_loopback",
         module="test_reassembly",
         sim_build=sim_build,
-        extra_args=["--sv", "-Wno-PINMISSING", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC"],
+        extra_args=["--sv", "-DSIMULATION", "-Wno-PINMISSING", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC"],
     )
