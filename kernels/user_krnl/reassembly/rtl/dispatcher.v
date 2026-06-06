@@ -19,7 +19,7 @@
 //
 //////////////////////////////////////////////////////////////////////////////////
 module dispatcher
-#(ECHO  = 16'b0000, TOP_K = 16'b0001, MM = 16'b0010, LOG = 6'b0011, CRYPTO=16'b0100 , NORM=16'b0101)
+#(ECHO  = 16'b0000, TOP_K = 16'b0001, MM = 16'b0010, LOG = 6'b0011, CRYPTO=16'b0100 , NORM=16'b0101, RECONF_APP = 16'h00ab)
 (
     input wire clk,
     input wire rst,
@@ -38,6 +38,24 @@ module dispatcher
     reg [31:0] packet_size;
     reg [31:0] meta_data;
 
+    localparam [1:0] REQ_FLAG_FIRST = 2'b01;
+    localparam [1:0] REQ_FLAG_LAST  = 2'b10;
+
+    reg        expecting_header;
+    reg [31:0] request_bytes_remaining;
+
+    wire        rx_fire = rx_tvalid == 1'b1 && rx_tready == 1'b1;
+    wire [1:0]  request_flags = rx_tdata[481:480];
+    wire        request_first = request_flags[0];
+    wire        request_last = request_flags[1];
+    wire        config_header_line = rx_fire && expecting_header && request_first;
+    wire [15:0] tcp_packet_bytes = rx_tdata[544:529];
+    wire [15:0] header_workload_selection = rx_tdata[511:496];
+    wire [31:0] header_packet_size = rx_tdata[479:448];
+    wire [31:0] header_request_bytes = (header_workload_selection == RECONF_APP) ?
+        header_packet_size + 32'd64 : header_packet_size;
+    wire [31:0] active_request_bytes = config_header_line ? header_request_bytes : request_bytes_remaining;
+
     assign rx_tready=1;
     //dataline counter, recognize new configuration line
     always @(posedge clk) begin
@@ -45,21 +63,35 @@ module dispatcher
              workload_selection = 16'd0;
              packet_size = 32'd0;
              meta_data = 32'd0;
+             expecting_header = 1'b1;
+             request_bytes_remaining = 32'd0;
              rx_tdata_combined = 0;
              rx_tvalid_combined = 1'b0;
         end else begin
         rx_tvalid_combined = rx_tvalid;
         //This line is configuration line,
-        if (rx_tvalid == 1 && rx_tready == 1 && rx_tdata[447:0] == {448{1'b1}}) begin
-             workload_selection = rx_tdata[511: 496];
-             packet_size =  rx_tdata[479: 448];   //32-bit
+        if (config_header_line) begin
+             workload_selection = header_workload_selection;
+             packet_size =  header_packet_size;   //32-bit
              rx_tdata_combined = {packet_size, workload_selection, rx_tdata[512+32: 0]};
              meta_data = rx_tdata[512+32: 513];
         end
         //This line is normal line
-        else if (rx_tvalid == 1 && rx_tready == 1) begin
+        else if (rx_fire) begin
              rx_tdata_combined = {packet_size, workload_selection, rx_tdata[512+32: 0]};
              meta_data = rx_tdata[512+32: 513];
+        end
+        if (rx_fire && rx_tdata[512]) begin
+             if ((config_header_line && request_last) || active_request_bytes <= {16'd0, tcp_packet_bytes}) begin
+                  expecting_header = 1'b1;
+                  request_bytes_remaining = 32'd0;
+             end else begin
+                  expecting_header = 1'b0;
+                  request_bytes_remaining = active_request_bytes - {16'd0, tcp_packet_bytes};
+             end
+        end else if (config_header_line) begin
+             expecting_header = 1'b0;
+             request_bytes_remaining = active_request_bytes;
         end
         end
     end

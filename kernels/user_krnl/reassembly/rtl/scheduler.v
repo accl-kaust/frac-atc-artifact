@@ -43,7 +43,7 @@
      // Input format: {dstPort[15:0], packet_size[31:0], workload_selection[15:0], meta[31:0], tlast, payload[511:0]}
      // Bit positions: payload[511:0], tlast[512], meta[544:513], workload[560:545], packet_size[592:561], dstPort[608:593]
      wire [15:0] rx_dstPort = rx_tdata[608:593];
-     wire        rx_is_header = rx_tdata[447:0] == {448{1'b1}};
+     wire        rx_is_header = rx_tdata[480];
 
      //Normal queues input - widened by 16 bits for dstPort
      reg  [1 + 512 + 32 + 16 + 16: 0] input_tdata [QUEUE_NUM - 1: 0]; //last of message + dstPort + workload + meta + tlast + payload
