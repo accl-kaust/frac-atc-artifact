@@ -16,7 +16,7 @@ root:
       id: 0
       slot_id: 0
       region:
-        add: CLOCKREGION_X5Y3:CLOCKREGION_X6Y3
+        add: CLOCKREGION_X2Y11:CLOCKREGION_X7Y8
       components:
       - name: or_slot
         id: 0
@@ -28,12 +28,24 @@ root:
       id: 1
       slot_id: 1
       region:
-        add: CLOCKREGION_X5Y2:CLOCKREGION_X6Y2
+        add: CLOCKREGION_X3Y7:CLOCKREGION_X7Y6
       components:
       - name: or_slot
         id: 2
         unit: or_slot
       - name: pattern_slot
         id: 3
+        unit: pattern_slot
+    - name: C2
+      id: 2
+      slot_id: 2
+      region:
+        add: CLOCKREGION_X3Y5:CLOCKREGION_X7Y5
+      components:
+      - name: or_slot
+        id: 4
+        unit: or_slot
+      - name: pattern_slot
+        id: 5
         unit: pattern_slot
 
