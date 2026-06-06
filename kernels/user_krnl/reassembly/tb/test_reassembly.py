@@ -39,6 +39,10 @@ def pack_reconf_command(opcode, addr, size, slot_id=0):
     return bytes(payload)
 
 
+def reconf_response_metadata(conn_id):
+    return TcpNotification(length=BYTE_LANES, conn_id=conn_id).pack()
+
+
 @dataclass
 class TcpNotification:
     length: int
@@ -380,7 +384,7 @@ async def test_reconf_read_hbm_request(dut):
 
     metadata_frame, data_frame = await tb.recv_response()
 
-    assert frame_to_int(metadata_frame) == notification.pack()
+    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, BYTE_LANES)
 
@@ -412,7 +416,7 @@ async def test_reconf_write_hbm_uses_command_size(dut):
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == notification.pack()
+    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
     assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
     assert_keep_all(data_frame, BYTE_LANES)
     assert bytes(tb.axi_ram.read(addr, payload_capacity)) == payload[:write_size] + original[write_size:]
@@ -446,7 +450,7 @@ async def test_reconf_write_hbm_exact_board_packet_has_one_response(dut):
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == notification.pack()
+    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
     assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
     assert_keep_all(data_frame, BYTE_LANES)
     assert bytes(tb.axi_ram.read(addr, BYTE_LANES)) == payload
@@ -483,7 +487,7 @@ async def test_reconf_repeated_exact_write_hbm_has_one_response_each(dut):
 
         metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-        assert frame_to_int(metadata_frame) == notification.pack()
+        assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
         assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
         assert_keep_all(data_frame, BYTE_LANES)
         assert bytes(tb.axi_ram.read(addr, BYTE_LANES)) == payload
@@ -518,7 +522,7 @@ async def test_reconf_write_hbm_ignores_transport_padding(dut):
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == notification.pack()
+    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
     assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
     assert_keep_all(data_frame, BYTE_LANES)
     assert bytes(tb.axi_ram.read(addr, payload_capacity)) == payload[:write_size] + original[write_size:]
@@ -553,7 +557,7 @@ async def test_reconf_read_hbm_ignores_extra_packet_data(dut):
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == notification.pack()
+    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, BYTE_LANES)
 

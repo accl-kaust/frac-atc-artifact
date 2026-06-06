@@ -1,4 +1,5 @@
 TOPLEVEL_LANG = verilog
+.DEFAULT_GOAL := sim
 
 SIM ?= verilator
 WAVES ?= 0
@@ -34,6 +35,16 @@ VERILOG_SOURCES += $(RTL_DIR)/pkt_logic.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_receiver.v
 VERILOG_SOURCES += $(RTL_DIR)/pkt_sender.v
 VERILOG_SOURCES += $(RTL_DIR)/tcp_top_loopback.v
+
+.PHONY: sv-write-hbm
+sv-write-hbm:
+	@mkdir -p sim_build
+	verilator --binary --timing --sv -DSIMULATION \
+		-Wno-PINMISSING -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-DECLFILENAME -Wno-TIMESCALEMOD \
+		$(VERILOG_SOURCES) tb_user_reconf_write_hbm.sv \
+		--top-module tb_user_reconf_write_hbm \
+		--Mdir sim_build/tb_user_reconf_write_hbm_obj
+	./sim_build/tb_user_reconf_write_hbm_obj/Vtb_user_reconf_write_hbm
 
 ifeq ($(SIM), verilator)
     COMPILE_ARGS += --sv

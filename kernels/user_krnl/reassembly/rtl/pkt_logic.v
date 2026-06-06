@@ -351,7 +351,7 @@ module pkt_logic #(
             reconf_drain_packet <= 1'b0;
             reconf_tx_meta <= 32'd0;
         end else if (dispatcher_tvalid && dispatcher_tready && reconf_header_line) begin
-            reconf_tx_meta <= dispatcher_meta;
+            reconf_tx_meta <= {16'd64, dispatcher_meta[15:0]};
             reconf_seen_header <= !dispatcher_payload[512];
             reconf_drain_packet <= 1'b0;
         end else if (dispatcher_tvalid && dispatcher_tready && reconf_payload_line && dispatcher_payload[512]) begin
