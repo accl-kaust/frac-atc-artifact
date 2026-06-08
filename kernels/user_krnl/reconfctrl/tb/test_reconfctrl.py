@@ -2,7 +2,7 @@
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import RisingEdge, with_timeout
 
 from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStreamSink, AxiStreamSource
 
@@ -34,6 +34,17 @@ def assert_keep_all(frame, byte_count):
 async def wait_cycles(dut, count):
     for _ in range(count):
         await RisingEdge(dut.clk)
+
+
+async def capture_read_arlens(dut, count):
+    arlens = []
+    while len(arlens) < count:
+        await RisingEdge(dut.clk)
+        if int(dut.m_axi_arvalid.value):
+            arlens.append(int(dut.m_axi_arlen.value))
+            while int(dut.m_axi_arvalid.value):
+                await RisingEdge(dut.clk)
+    return arlens
 
 
 class TB:
@@ -136,6 +147,27 @@ async def test_reconf_icap_dma_streams_all_words(dut):
     assert bytes(response.tdata)[0] == ERR_OK
     assert bytes(response.tdata)[1:] == bytes(BYTE_LANES - 1)
     assert_keep_all(response, BYTE_LANES)
+
+
+@cocotb.test()
+async def test_reconf_icap_uses_max_burst_then_tail_read(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    addr = 0x9000
+    payload = bytes(idx & 0xFF for idx in range(17 * 32))
+    tb.axi_ram.write(addr, payload)
+
+    arlen_task = cocotb.start_soon(capture_read_arlens(dut, 2))
+    await tb.send_frame(pack_command(OP_RECONF_ICAP, addr, len(payload)))
+    icap_frame = await tb.recv_icap_frame()
+    arlens = await with_timeout(arlen_task, 5, "us")
+    await tb.pulse_pr_done()
+    response = await tb.recv_response()
+
+    assert arlens == [15, 0]
+    assert bytes(icap_frame.tdata) == payload
+    assert bytes(response.tdata)[0] == ERR_OK
 
 
 @cocotb.test()
