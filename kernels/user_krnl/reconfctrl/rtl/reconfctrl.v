@@ -116,7 +116,7 @@ localparam [3:0]
     STATE_SEND_STATUS     = 4'd14;
 
 localparam [ADDR_WIDTH-1:0] ADDR_INCR_32 = {{ADDR_WIDTH-6{1'b0}}, 6'd32};
-localparam integer RECONF_MAX_BURST_BEATS = 16;
+localparam [4:0] RECONF_MAX_BURST_BEATS = 5'd16;
 localparam [63:0] RECONF_MAX_BURST_WORDS = 64'd128;
 
 reg [3:0] state_reg = STATE_IDLE;
@@ -127,13 +127,14 @@ reg [AXIS_DATA_WIDTH-1:0] data_line_reg = {AXIS_DATA_WIDTH{1'b0}};
 reg [6:0] line_bytes_reg = 7'd0;
 reg half_select_reg = 1'b0;
 reg [AXIS_DATA_WIDTH-1:0] read_response_reg = {AXIS_DATA_WIDTH{1'b0}};
+reg [AXI_DATA_WIDTH-1:0] read_data_reg = {AXI_DATA_WIDTH{1'b0}};
 reg [2:0] icap_word_index_reg = 3'd0;
-reg [AXI_DATA_WIDTH-1:0] reconf_burst_data_reg [0:RECONF_MAX_BURST_BEATS-1];
+reg [63:0] reconf_words_to_request_reg = 64'd0;
 reg [4:0] reconf_burst_beats_reg = 5'd0;
 reg [4:0] reconf_burst_rx_count_reg = 5'd0;
-reg [4:0] reconf_burst_stream_beat_reg = 5'd0;
-reg [7:0] reconf_burst_words_reg = 8'd0;
-reg [7:0] reconf_burst_words_sent_reg = 8'd0;
+reg [3:0] reconf_beat_words_reg = 4'd0;
+reg reconf_current_beat_last_reg = 1'b0;
+reg reconf_ar_outstanding_reg = 1'b0;
 reg [7:0] status_reg = ERR_OK;
 reg reconf_active_reg = 1'b0;
 reg [7:0] active_slot_id_reg = 8'd0;
@@ -172,8 +173,8 @@ assign m_axi_arburst = 2'b01;
 function [4:0] reconf_burst_beats_for_words;
     input [63:0] word_count;
 begin
-    if (word_count > 64'd120) begin
-        reconf_burst_beats_for_words = 5'd16;
+    if (word_count > RECONF_MAX_BURST_WORDS - 64'd8) begin
+        reconf_burst_beats_for_words = RECONF_MAX_BURST_BEATS;
     end else if (word_count[2:0] != 3'd0) begin
         reconf_burst_beats_for_words = {1'b0, word_count[6:3]} + 5'd1;
     end else begin
@@ -196,6 +197,17 @@ begin
         reconf_burst_words_for_words = 8'd128;
     end else begin
         reconf_burst_words_for_words = word_count[7:0];
+    end
+end
+endfunction
+
+function [3:0] reconf_beat_words_for_remaining;
+    input [63:0] word_count;
+begin
+    if (word_count > 64'd8) begin
+        reconf_beat_words_for_remaining = 4'd8;
+    end else begin
+        reconf_beat_words_for_remaining = word_count[3:0];
     end
 end
 endfunction
@@ -377,12 +389,14 @@ always @(posedge clk) begin
         line_bytes_reg <= 7'd0;
         half_select_reg <= 1'b0;
         read_response_reg <= {AXIS_DATA_WIDTH{1'b0}};
+        read_data_reg <= {AXI_DATA_WIDTH{1'b0}};
         icap_word_index_reg <= 3'd0;
+        reconf_words_to_request_reg <= 64'd0;
         reconf_burst_beats_reg <= 5'd0;
         reconf_burst_rx_count_reg <= 5'd0;
-        reconf_burst_stream_beat_reg <= 5'd0;
-        reconf_burst_words_reg <= 8'd0;
-        reconf_burst_words_sent_reg <= 8'd0;
+        reconf_beat_words_reg <= 4'd0;
+        reconf_current_beat_last_reg <= 1'b0;
+        reconf_ar_outstanding_reg <= 1'b0;
         status_reg <= ERR_OK;
         last_error <= ERR_OK;
         reconf_active_reg <= 1'b0;
@@ -450,7 +464,9 @@ always @(posedge clk) begin
                     end else begin
                         current_addr_reg <= cmd_addr[ADDR_WIDTH-1:0];
                         icap_words_remaining_reg <= {2'd0, cmd_size[63:2]};
+                        reconf_words_to_request_reg <= {2'd0, cmd_size[63:2]};
                         icap_word_index_reg <= 3'd0;
+                        reconf_ar_outstanding_reg <= 1'b0;
                         active_slot_id_reg <= cmd_slot_id;
                         reconf_cycles_reg <= 64'd0;
                         reconf_active_reg <= 1'b1;
@@ -594,18 +610,20 @@ always @(posedge clk) begin
             end
 
             STATE_RECONF_ADDR: begin
-                m_axi_araddr <= current_addr_reg;
-                m_axi_arlen <= reconf_arlen_for_words(icap_words_remaining_reg);
-                m_axi_arvalid <= 1'b1;
+                if (!m_axi_arvalid) begin
+                    m_axi_araddr <= current_addr_reg;
+                    m_axi_arlen <= reconf_arlen_for_words(reconf_words_to_request_reg);
+                    m_axi_arvalid <= 1'b1;
+                end
 
                 if (m_axi_arvalid && m_axi_arready) begin
                     m_axi_arvalid <= 1'b0;
                     m_axi_rready <= 1'b1;
-                    reconf_burst_beats_reg <= reconf_burst_beats_for_words(icap_words_remaining_reg);
+                    reconf_burst_beats_reg <= reconf_burst_beats_for_words(reconf_words_to_request_reg);
                     reconf_burst_rx_count_reg <= 5'd0;
-                    reconf_burst_stream_beat_reg <= 5'd0;
-                    reconf_burst_words_reg <= reconf_burst_words_for_words(icap_words_remaining_reg);
-                    reconf_burst_words_sent_reg <= 8'd0;
+                    reconf_words_to_request_reg <= reconf_words_to_request_reg - {56'd0, reconf_burst_words_for_words(reconf_words_to_request_reg)};
+                    current_addr_reg <= current_addr_reg + ({{(ADDR_WIDTH-5){1'b0}}, reconf_burst_beats_for_words(reconf_words_to_request_reg)} << 5);
+                    reconf_ar_outstanding_reg <= 1'b1;
                     state_reg <= STATE_RECONF_DATA;
                 end
             end
@@ -619,53 +637,69 @@ always @(posedge clk) begin
                         m_axi_rready <= 1'b0;
                         start_status(ERR_RLAST);
                     end else begin
-                        reconf_burst_data_reg[reconf_burst_rx_count_reg[3:0]] <= m_axi_rdata;
+                        read_data_reg <= m_axi_rdata;
+                        icap_word_index_reg <= 3'd0;
+                        reconf_beat_words_reg <= reconf_beat_words_for_remaining(icap_words_remaining_reg);
+                        reconf_current_beat_last_reg <= m_axi_rlast;
+                        m_axis_icap_tdata <= m_axi_rdata[31:0];
+                        m_axis_icap_tlast <= icap_words_remaining_reg == 64'd1;
+                        m_axis_icap_tvalid <= 1'b1;
+                        m_axi_rready <= 1'b0;
 
                         if (m_axi_rlast) begin
-                            m_axi_rready <= 1'b0;
-                            icap_word_index_reg <= 3'd0;
-                            reconf_burst_stream_beat_reg <= 5'd0;
-                            reconf_burst_words_sent_reg <= 8'd0;
-                            m_axis_icap_tvalid <= 1'b0;
-                            state_reg <= STATE_RECONF_STREAM;
+                            reconf_ar_outstanding_reg <= 1'b0;
+                            if (reconf_words_to_request_reg != 64'd0) begin
+                                m_axi_araddr <= current_addr_reg;
+                                m_axi_arlen <= reconf_arlen_for_words(reconf_words_to_request_reg);
+                                m_axi_arvalid <= 1'b1;
+                            end
                         end else begin
                             reconf_burst_rx_count_reg <= reconf_burst_rx_count_reg + 5'd1;
                         end
+                        state_reg <= STATE_RECONF_STREAM;
                     end
                 end
             end
 
             STATE_RECONF_STREAM: begin
-                if (!m_axis_icap_tvalid) begin
-                    m_axis_icap_tdata <= select_icap_word(reconf_burst_data_reg[0], 3'd0);
-                    m_axis_icap_tlast <= icap_words_remaining_reg == 64'd1;
-                    m_axis_icap_tvalid <= 1'b1;
-                end else if (m_axis_icap_tvalid && m_axis_icap_tready) begin
+                if (m_axi_arvalid && m_axi_arready) begin
+                    m_axi_arvalid <= 1'b0;
+                    reconf_burst_beats_reg <= reconf_burst_beats_for_words(reconf_words_to_request_reg);
+                    reconf_burst_rx_count_reg <= 5'd0;
+                    reconf_words_to_request_reg <= reconf_words_to_request_reg - {56'd0, reconf_burst_words_for_words(reconf_words_to_request_reg)};
+                    current_addr_reg <= current_addr_reg + ({{(ADDR_WIDTH-5){1'b0}}, reconf_burst_beats_for_words(reconf_words_to_request_reg)} << 5);
+                    reconf_ar_outstanding_reg <= 1'b1;
+                end
+
+                if (m_axis_icap_tvalid && m_axis_icap_tready) begin
                     if (icap_words_remaining_reg == 64'd1) begin
                         icap_words_remaining_reg <= 64'd0;
                         m_axis_icap_tvalid <= 1'b0;
                         m_axis_icap_tlast <= 1'b0;
                         state_reg <= STATE_RECONF_WAIT_DONE;
-                    end else if (reconf_burst_words_sent_reg + 8'd1 == reconf_burst_words_reg) begin
+                    end else if ({1'b0, icap_word_index_reg} + 4'd1 == reconf_beat_words_reg) begin
                         icap_words_remaining_reg <= icap_words_remaining_reg - 64'd1;
-                        current_addr_reg <= current_addr_reg + ({{(ADDR_WIDTH-5){1'b0}}, reconf_burst_beats_reg} << 5);
+                        icap_word_index_reg <= 3'd0;
                         m_axis_icap_tvalid <= 1'b0;
                         m_axis_icap_tlast <= 1'b0;
-                        state_reg <= STATE_RECONF_ADDR;
+
+                        if (!reconf_current_beat_last_reg) begin
+                            m_axi_rready <= 1'b1;
+                            state_reg <= STATE_RECONF_DATA;
+                        end else if (m_axi_arvalid && m_axi_arready) begin
+                            m_axi_rready <= 1'b1;
+                            state_reg <= STATE_RECONF_DATA;
+                        end else if (reconf_ar_outstanding_reg) begin
+                            m_axi_rready <= 1'b1;
+                            state_reg <= STATE_RECONF_DATA;
+                        end else begin
+                            state_reg <= STATE_RECONF_ADDR;
+                        end
                     end else begin
                         icap_words_remaining_reg <= icap_words_remaining_reg - 64'd1;
-                        reconf_burst_words_sent_reg <= reconf_burst_words_sent_reg + 8'd1;
-
-                        if (icap_word_index_reg == 3'd7) begin
-                            icap_word_index_reg <= 3'd0;
-                            reconf_burst_stream_beat_reg <= reconf_burst_stream_beat_reg + 5'd1;
-                            m_axis_icap_tdata <= select_icap_word(reconf_burst_data_reg[reconf_burst_stream_beat_reg[3:0] + 4'd1], 3'd0);
-                            m_axis_icap_tlast <= icap_words_remaining_reg == 64'd2;
-                        end else begin
-                            icap_word_index_reg <= icap_word_index_reg + 3'd1;
-                            m_axis_icap_tdata <= select_icap_word(reconf_burst_data_reg[reconf_burst_stream_beat_reg[3:0]], icap_word_index_reg + 3'd1);
-                            m_axis_icap_tlast <= icap_words_remaining_reg == 64'd2;
-                        end
+                        icap_word_index_reg <= icap_word_index_reg + 3'd1;
+                        m_axis_icap_tdata <= select_icap_word(read_data_reg, icap_word_index_reg + 3'd1);
+                        m_axis_icap_tlast <= icap_words_remaining_reg == 64'd2;
                     end
                 end
             end
