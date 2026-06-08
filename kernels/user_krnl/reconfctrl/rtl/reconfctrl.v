@@ -118,6 +118,8 @@ localparam [3:0]
 localparam [ADDR_WIDTH-1:0] ADDR_INCR_32 = {{ADDR_WIDTH-6{1'b0}}, 6'd32};
 localparam [4:0] RECONF_MAX_BURST_BEATS = 5'd16;
 localparam [63:0] RECONF_MAX_BURST_WORDS = 64'd128;
+localparam integer RECONF_FIFO_DEPTH = 16;
+localparam [4:0] RECONF_FIFO_DEPTH_COUNT = 5'd16;
 
 reg [3:0] state_reg = STATE_IDLE;
 reg [ADDR_WIDTH-1:0] current_addr_reg = {ADDR_WIDTH{1'b0}};
@@ -127,13 +129,16 @@ reg [AXIS_DATA_WIDTH-1:0] data_line_reg = {AXIS_DATA_WIDTH{1'b0}};
 reg [6:0] line_bytes_reg = 7'd0;
 reg half_select_reg = 1'b0;
 reg [AXIS_DATA_WIDTH-1:0] read_response_reg = {AXIS_DATA_WIDTH{1'b0}};
-reg [AXI_DATA_WIDTH-1:0] read_data_reg = {AXI_DATA_WIDTH{1'b0}};
 reg [2:0] icap_word_index_reg = 3'd0;
+reg [AXI_DATA_WIDTH-1:0] reconf_fifo_data_reg [0:RECONF_FIFO_DEPTH-1];
+reg [3:0] reconf_fifo_words_reg [0:RECONF_FIFO_DEPTH-1];
+reg [3:0] reconf_fifo_wr_ptr_reg = 4'd0;
+reg [3:0] reconf_fifo_rd_ptr_reg = 4'd0;
+reg [4:0] reconf_fifo_count_reg = 5'd0;
 reg [63:0] reconf_words_to_request_reg = 64'd0;
+reg [63:0] reconf_words_to_receive_reg = 64'd0;
 reg [4:0] reconf_burst_beats_reg = 5'd0;
 reg [4:0] reconf_burst_rx_count_reg = 5'd0;
-reg [3:0] reconf_beat_words_reg = 4'd0;
-reg reconf_current_beat_last_reg = 1'b0;
 reg reconf_ar_outstanding_reg = 1'b0;
 reg [7:0] status_reg = ERR_OK;
 reg reconf_active_reg = 1'b0;
@@ -154,6 +159,19 @@ wire cmd_size_nonzero = cmd_size != 64'd0;
 wire cmd_read_size_ok = cmd_size <= 64'd64;
 wire cmd_reconf_size_ok = cmd_size[1:0] == 2'd0;
 wire cmd_slot_ok = cmd_slot_id < SLOT_COUNT;
+
+wire reconf_fifo_empty = reconf_fifo_count_reg == 5'd0;
+wire reconf_state_active = state_reg == STATE_RECONF_STREAM;
+wire reconf_ar_fire = reconf_state_active && m_axi_arvalid && m_axi_arready;
+wire reconf_r_fire = reconf_state_active && m_axi_rvalid && m_axi_rready;
+wire reconf_r_error = m_axi_rresp != 2'b00 ||
+    (m_axi_rlast != (reconf_burst_rx_count_reg == reconf_burst_beats_reg - 5'd1));
+wire reconf_fifo_push = reconf_r_fire && !reconf_r_error;
+wire reconf_icap_fire = reconf_state_active && m_axis_icap_tvalid && m_axis_icap_tready;
+wire [3:0] reconf_fifo_current_words = reconf_fifo_words_reg[reconf_fifo_rd_ptr_reg];
+wire reconf_fifo_pop = reconf_icap_fire && ({1'b0, icap_word_index_reg} + 4'd1 == reconf_fifo_current_words);
+wire [5:0] reconf_fifo_count_next = {1'b0, reconf_fifo_count_reg} + {5'd0, reconf_fifo_push} - {5'd0, reconf_fifo_pop};
+wire reconf_response_outstanding_next = (reconf_ar_outstanding_reg || reconf_ar_fire) && !(reconf_r_fire && m_axi_rlast && !reconf_r_error);
 
 assign state = state_reg;
 assign reconf_active = reconf_active_reg;
@@ -389,13 +407,14 @@ always @(posedge clk) begin
         line_bytes_reg <= 7'd0;
         half_select_reg <= 1'b0;
         read_response_reg <= {AXIS_DATA_WIDTH{1'b0}};
-        read_data_reg <= {AXI_DATA_WIDTH{1'b0}};
         icap_word_index_reg <= 3'd0;
+        reconf_fifo_wr_ptr_reg <= 4'd0;
+        reconf_fifo_rd_ptr_reg <= 4'd0;
+        reconf_fifo_count_reg <= 5'd0;
         reconf_words_to_request_reg <= 64'd0;
+        reconf_words_to_receive_reg <= 64'd0;
         reconf_burst_beats_reg <= 5'd0;
         reconf_burst_rx_count_reg <= 5'd0;
-        reconf_beat_words_reg <= 4'd0;
-        reconf_current_beat_last_reg <= 1'b0;
         reconf_ar_outstanding_reg <= 1'b0;
         status_reg <= ERR_OK;
         last_error <= ERR_OK;
@@ -465,7 +484,11 @@ always @(posedge clk) begin
                         current_addr_reg <= cmd_addr[ADDR_WIDTH-1:0];
                         icap_words_remaining_reg <= {2'd0, cmd_size[63:2]};
                         reconf_words_to_request_reg <= {2'd0, cmd_size[63:2]};
+                        reconf_words_to_receive_reg <= {2'd0, cmd_size[63:2]};
                         icap_word_index_reg <= 3'd0;
+                        reconf_fifo_wr_ptr_reg <= 4'd0;
+                        reconf_fifo_rd_ptr_reg <= 4'd0;
+                        reconf_fifo_count_reg <= 5'd0;
                         reconf_ar_outstanding_reg <= 1'b0;
                         active_slot_id_reg <= cmd_slot_id;
                         reconf_cycles_reg <= 64'd0;
@@ -624,41 +647,12 @@ always @(posedge clk) begin
                     reconf_words_to_request_reg <= reconf_words_to_request_reg - {56'd0, reconf_burst_words_for_words(reconf_words_to_request_reg)};
                     current_addr_reg <= current_addr_reg + ({{(ADDR_WIDTH-5){1'b0}}, reconf_burst_beats_for_words(reconf_words_to_request_reg)} << 5);
                     reconf_ar_outstanding_reg <= 1'b1;
-                    state_reg <= STATE_RECONF_DATA;
+                    state_reg <= STATE_RECONF_STREAM;
                 end
             end
 
             STATE_RECONF_DATA: begin
-                if (m_axi_rvalid && m_axi_rready) begin
-                    if (m_axi_rresp != 2'b00) begin
-                        m_axi_rready <= 1'b0;
-                        start_status(ERR_AXI_RRESP);
-                    end else if (m_axi_rlast != (reconf_burst_rx_count_reg == reconf_burst_beats_reg - 5'd1)) begin
-                        m_axi_rready <= 1'b0;
-                        start_status(ERR_RLAST);
-                    end else begin
-                        read_data_reg <= m_axi_rdata;
-                        icap_word_index_reg <= 3'd0;
-                        reconf_beat_words_reg <= reconf_beat_words_for_remaining(icap_words_remaining_reg);
-                        reconf_current_beat_last_reg <= m_axi_rlast;
-                        m_axis_icap_tdata <= m_axi_rdata[31:0];
-                        m_axis_icap_tlast <= icap_words_remaining_reg == 64'd1;
-                        m_axis_icap_tvalid <= 1'b1;
-                        m_axi_rready <= 1'b0;
-
-                        if (m_axi_rlast) begin
-                            reconf_ar_outstanding_reg <= 1'b0;
-                            if (reconf_words_to_request_reg != 64'd0) begin
-                                m_axi_araddr <= current_addr_reg;
-                                m_axi_arlen <= reconf_arlen_for_words(reconf_words_to_request_reg);
-                                m_axi_arvalid <= 1'b1;
-                            end
-                        end else begin
-                            reconf_burst_rx_count_reg <= reconf_burst_rx_count_reg + 5'd1;
-                        end
-                        state_reg <= STATE_RECONF_STREAM;
-                    end
-                end
+                state_reg <= STATE_RECONF_STREAM;
             end
 
             STATE_RECONF_STREAM: begin
@@ -671,36 +665,72 @@ always @(posedge clk) begin
                     reconf_ar_outstanding_reg <= 1'b1;
                 end
 
-                if (m_axis_icap_tvalid && m_axis_icap_tready) begin
+                if (m_axi_rvalid && m_axi_rready) begin
+                    if (m_axi_rresp != 2'b00) begin
+                        m_axi_rready <= 1'b0;
+                        start_status(ERR_AXI_RRESP);
+                    end else if (m_axi_rlast != (reconf_burst_rx_count_reg == reconf_burst_beats_reg - 5'd1)) begin
+                        m_axi_rready <= 1'b0;
+                        start_status(ERR_RLAST);
+                    end else begin
+                        reconf_fifo_data_reg[reconf_fifo_wr_ptr_reg] <= m_axi_rdata;
+                        reconf_fifo_words_reg[reconf_fifo_wr_ptr_reg] <= reconf_beat_words_for_remaining(reconf_words_to_receive_reg);
+                        reconf_fifo_wr_ptr_reg <= reconf_fifo_wr_ptr_reg + 4'd1;
+                        reconf_words_to_receive_reg <= reconf_words_to_receive_reg - {60'd0, reconf_beat_words_for_remaining(reconf_words_to_receive_reg)};
+
+                        if (m_axi_rlast) begin
+                            reconf_ar_outstanding_reg <= 1'b0;
+                            if (reconf_words_to_request_reg != 64'd0) begin
+                                m_axi_araddr <= current_addr_reg;
+                                m_axi_arlen <= reconf_arlen_for_words(reconf_words_to_request_reg);
+                                m_axi_arvalid <= 1'b1;
+                            end
+                        end else begin
+                            reconf_burst_rx_count_reg <= reconf_burst_rx_count_reg + 5'd1;
+                        end
+                    end
+                end
+
+                if (reconf_fifo_push && !reconf_fifo_pop) begin
+                    reconf_fifo_count_reg <= reconf_fifo_count_reg + 5'd1;
+                end else if (!reconf_fifo_push && reconf_fifo_pop) begin
+                    reconf_fifo_count_reg <= reconf_fifo_count_reg - 5'd1;
+                end
+
+                if (reconf_fifo_pop) begin
+                    reconf_fifo_rd_ptr_reg <= reconf_fifo_rd_ptr_reg + 4'd1;
+                end
+
+                if (!m_axis_icap_tvalid && !reconf_fifo_empty) begin
+                    icap_word_index_reg <= 3'd0;
+                    m_axis_icap_tdata <= select_icap_word(reconf_fifo_data_reg[reconf_fifo_rd_ptr_reg], 3'd0);
+                    m_axis_icap_tlast <= icap_words_remaining_reg == 64'd1;
+                    m_axis_icap_tvalid <= 1'b1;
+                end else if (m_axis_icap_tvalid && m_axis_icap_tready) begin
                     if (icap_words_remaining_reg == 64'd1) begin
                         icap_words_remaining_reg <= 64'd0;
                         m_axis_icap_tvalid <= 1'b0;
                         m_axis_icap_tlast <= 1'b0;
                         state_reg <= STATE_RECONF_WAIT_DONE;
-                    end else if ({1'b0, icap_word_index_reg} + 4'd1 == reconf_beat_words_reg) begin
+                    end else if ({1'b0, icap_word_index_reg} + 4'd1 == reconf_fifo_current_words) begin
                         icap_words_remaining_reg <= icap_words_remaining_reg - 64'd1;
                         icap_word_index_reg <= 3'd0;
                         m_axis_icap_tvalid <= 1'b0;
                         m_axis_icap_tlast <= 1'b0;
-
-                        if (!reconf_current_beat_last_reg) begin
-                            m_axi_rready <= 1'b1;
-                            state_reg <= STATE_RECONF_DATA;
-                        end else if (m_axi_arvalid && m_axi_arready) begin
-                            m_axi_rready <= 1'b1;
-                            state_reg <= STATE_RECONF_DATA;
-                        end else if (reconf_ar_outstanding_reg) begin
-                            m_axi_rready <= 1'b1;
-                            state_reg <= STATE_RECONF_DATA;
-                        end else begin
-                            state_reg <= STATE_RECONF_ADDR;
-                        end
                     end else begin
                         icap_words_remaining_reg <= icap_words_remaining_reg - 64'd1;
                         icap_word_index_reg <= icap_word_index_reg + 3'd1;
-                        m_axis_icap_tdata <= select_icap_word(read_data_reg, icap_word_index_reg + 3'd1);
+                        m_axis_icap_tdata <= select_icap_word(reconf_fifo_data_reg[reconf_fifo_rd_ptr_reg], icap_word_index_reg + 3'd1);
                         m_axis_icap_tlast <= icap_words_remaining_reg == 64'd2;
                     end
+                end
+
+                if (m_axi_rvalid && m_axi_rready && reconf_r_error) begin
+                    m_axi_rready <= 1'b0;
+                end else if (reconf_response_outstanding_next) begin
+                    m_axi_rready <= reconf_fifo_count_next[4:0] < RECONF_FIFO_DEPTH_COUNT;
+                end else begin
+                    m_axi_rready <= 1'b0;
                 end
             end
 

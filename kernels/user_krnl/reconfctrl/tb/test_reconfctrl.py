@@ -48,6 +48,21 @@ async def capture_read_ar_events(dut, count):
     return events
 
 
+async def capture_first_burst_rready(dut, arlen):
+    while True:
+        await RisingEdge(dut.clk)
+        if int(dut.m_axi_arvalid.value) and int(dut.m_axi_arready.value) and int(dut.m_axi_arlen.value) == arlen:
+            break
+
+    samples = []
+    while True:
+        await RisingEdge(dut.clk)
+        if int(dut.m_axi_rvalid.value):
+            samples.append(int(dut.m_axi_rready.value))
+            if int(dut.m_axi_rready.value) and int(dut.m_axi_rlast.value):
+                return samples
+
+
 class TB:
     def __init__(self, dut):
         self.dut = dut
@@ -160,14 +175,18 @@ async def test_reconf_icap_uses_max_burst_then_tail_read(dut):
     tb.axi_ram.write(addr, payload)
 
     ar_task = cocotb.start_soon(capture_read_ar_events(dut, 2))
+    rready_task = cocotb.start_soon(capture_first_burst_rready(dut, 15))
     await tb.send_frame(pack_command(OP_RECONF_ICAP, addr, len(payload)))
     icap_frame = await tb.recv_icap_frame()
     ar_events = await with_timeout(ar_task, 5, "us")
+    rready_samples = await with_timeout(rready_task, 5, "us")
     await tb.pulse_pr_done()
     response = await tb.recv_response()
 
     assert [arlen for arlen, _ in ar_events] == [15, 0]
     assert ar_events[1][1] < icap_frame.sim_time_end
+    assert len(rready_samples) == 16
+    assert all(rready_samples)
     assert bytes(icap_frame.tdata) == payload
     assert bytes(response.tdata)[0] == ERR_OK
 
