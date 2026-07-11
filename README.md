@@ -5,7 +5,7 @@
 │   ├── cmac_krnl # CMAC IP intialization
 │   ├── common
 │   ├── network_krnl # Binding Network stack
-│   └── user_krnl # User logic ; currently just loopsback
+│   └── user_krnl # Request reassembly, accelerator slots, and PR control
 ├── lib
 │   ├── axis # Some axis components
 │   └── fpga-network-stack # TCP Stack
@@ -18,6 +18,13 @@
 ├── vivado.mk # Build OffRAC
 └── README.md
 ```
+
+## Documentation
+
+The network-driven partial-reconfiguration controller is documented in
+[`docs/`](docs/README.md). The documentation includes the controller
+architecture, network command ABI, ICAP bitstream format, build and deployment
+flow, verification coverage, and current implementation limitations.
 
 ## Build Instructions
 
