@@ -4,6 +4,7 @@ project:
   part: xcu280-fsvh2892-2L-e
   arch: ultraplus
   depth: 1
+  contain_static_routing: false
 
 root:
   name: frac_top
@@ -12,7 +13,7 @@ root:
   - name: frac_static
     id: 0
     cells:
-    - name: C0
+    - name: C00
       id: 0
       slot_id: 0
       region:
@@ -33,7 +34,7 @@ root:
       - name: norm
         id: 4
         unit: norm
-    - name: C1
+    - name: C01
       id: 1
       slot_id: 1
       region:
@@ -54,7 +55,7 @@ root:
       - name: norm
         id: 9
         unit: norm
-    - name: C2
+    - name: C02
       id: 2
       slot_id: 2
       region:
