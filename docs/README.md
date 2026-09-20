@@ -1,7 +1,7 @@
-# OFFRAC Standalone Documentation
+# fRAC Standalone Documentation
 
 This directory documents the network-driven partial-reconfiguration path in the
-standalone OFFRAC implementation.
+standalone fRAC implementation.
 
 ## Documents
 
@@ -27,7 +27,7 @@ The principal implementation files are:
 | Reconfigurable-cell shell | `kernels/user_krnl/reconfctrl/rtl/cell_bbx.sv` |
 | Network and slot integration | `kernels/user_krnl/reassembly/rtl/pkt_logic.v` |
 | Request dispatcher | `kernels/user_krnl/reassembly/rtl/dispatcher.v` |
-| HBM integration | `offrac/rtl/offrac_hbm.v` |
+| HBM integration | `frac/rtl/frac_hbm.v` |
 | Board-side PR client | `sw/pr/main.go` |
 | Controller tests | `kernels/user_krnl/reconfctrl/tb/` |
 

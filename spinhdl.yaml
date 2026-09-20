@@ -1,15 +1,15 @@
 project:
-  name: offrac
+  name: frac
   version: 0.1.0
   part: xcu280-fsvh2892-2L-e
   arch: ultraplus
   depth: 1
 
 root:
-  name: offrac_top
+  name: frac_top
   id: 0
   components:
-  - name: offrac_static
+  - name: frac_static
     id: 0
     cells:
     - name: C0

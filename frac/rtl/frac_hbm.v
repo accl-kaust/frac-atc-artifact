@@ -3,7 +3,7 @@
 `default_nettype none
 
 
-module offrac_hbm (
+module frac_hbm (
     input wire          hbm_ref_clk,
     input wire          hbm_clk,
     input wire          hbm_rstn,
@@ -621,6 +621,6 @@ hbm_0 hbm_0_inst(
     .DRAM_0_STAT_TEMP()
 );
 
-endmodule // offrac_hbm
+endmodule // frac_hbm
 
 `resetall

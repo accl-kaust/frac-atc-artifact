@@ -2,7 +2,7 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-module offrac (
+module frac (
     input wire        free_run_clk,
     input wire        hbm_ref_clk,
     output wire       hbm_cattrip,
@@ -679,7 +679,7 @@ axis_tcp_stat_width_conv tcp_open_status_width_conv_inst (
   .m_axis_tlast(m_axis_tcp_open_status_wconv_tlast)
 );
 
-offrac_hbm offrac_hbm_inst (
+frac_hbm frac_hbm_inst (
     .hbm_ref_clk(hbm_ref_clk),
     .hbm_clk(clk),
     .hbm_rstn(rstn),

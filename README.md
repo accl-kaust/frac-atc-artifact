@@ -9,13 +9,13 @@
 ├── lib
 │   ├── axis # Some axis components
 │   └── fpga-network-stack # TCP Stack
-├── offrac
+├── frac
 │   ├── ip
 │   ├── rtl # Stitches the whole stack together
 │   └── xdc
 ├── hls.mk # Builds TCP stack
 ├── Makefile
-├── vivado.mk # Build OffRAC
+├── vivado.mk # Build fRAC
 └── README.md
 ```
 
@@ -36,14 +36,14 @@ $ make all
 
 ### Seperating Builds
 
-#### OffRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1) and uses it as a library as well as few kernels. To build the library
+#### fRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1) and uses it as a library as well as few kernels. To build the library
 ``` sh
 $ make ip
 ```
 
-#### Finally to build OffRAC
+#### Finally to build fRAC
 ``` sh
-$ make offrac
+$ make frac
 ```
 
 ## Prerequisites

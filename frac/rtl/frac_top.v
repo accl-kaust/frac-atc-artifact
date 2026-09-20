@@ -2,7 +2,7 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-module offrac_top (
+module frac_top (
     input wire clk_100mhz_0_p,
     input wire clk_100mhz_0_n,
 
@@ -220,7 +220,7 @@ reset_gen(
 //    .probe0(rst)
 // );
 
-offrac offrac_inst
+frac frac_inst
     (
     .free_run_clk(clk_50mhz_int),
     .hbm_ref_clk(clk_100mhz_0_ibufg),

@@ -1,8 +1,8 @@
-.PHONY: offrac synth vivado tmpclean clean distclean
+.PHONY: frac synth vivado tmpclean clean distclean
 
 .PRECIOUS: %.xpr %.bit %.bin %.mcs %.prm
 
-FPGA_TOP ?= offrac_top
+FPGA_TOP ?= frac_top
 PROJECT ?= $(FPGA_TOP)
 
 RTL_FILES_REL = $(foreach p,$(RTL_FILES),$(if $(filter /% ./%,$p),$p,$p))
@@ -17,9 +17,9 @@ endif
 
 # Targets
 
-all: ip offrac
+all: ip frac
 
-offrac: $(PROJECT).bit
+frac: $(PROJECT).bit
 
 vivado: $(PROJECT).xpr
 	vivado $(PROJECT).xpr

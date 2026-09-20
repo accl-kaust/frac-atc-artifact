@@ -9,14 +9,14 @@ little-endian.
 Every request consists of:
 
 ```text
-64-byte OFFRAC request header
+64-byte fRAC request header
 64-byte reconfiguration command
 optional payload, padded to complete 64-byte network lines
 ```
 
 The response is one 64-byte line.
 
-## OFFRAC Request Header
+## fRAC Request Header
 
 The Go client constructs the outer header as follows:
 

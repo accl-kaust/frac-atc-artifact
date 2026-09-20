@@ -1,9 +1,9 @@
-name: offrac
+name: frac
 version: 0.1.0
 part: xcu280-fsvh2892-2L-e
 arch: ultraplus
 moduletype: static
-top: offrac_top
+top: frac_top
 build: bitgen
 build_dir: build
 dcp_path: null
@@ -14,9 +14,9 @@ ip_repo_paths:
 rtl:
   dir: .
   files:
-  - offrac/rtl/offrac_top.v
-  - offrac/rtl/offrac.v
-  - offrac/rtl/offrac_hbm.v
+  - frac/rtl/frac_top.v
+  - frac/rtl/frac.v
+  - frac/rtl/frac_hbm.v
   - lib/axis/rtl/axis_fifo.v
   - lib/axis/rtl/sync_reset.v
   - lib/axis/rtl/reset_gen.v
@@ -71,9 +71,9 @@ rtl:
 xdc:
   dir: .
   files:
-  - offrac/xdc/fpga_u280.xdc
+  - frac/xdc/fpga_u280.xdc
   - lib/axis/xdc/sync_reset.tcl
-  - offrac/xdc/floorplan.xdc
+  - frac/xdc/floorplan.xdc
 
 xci:
   dir: .
@@ -85,10 +85,10 @@ ip:
   - kernels/network_krnl/ip/network_stack.tcl
   - kernels/network_krnl/ip/network_infrastructure.tcl
   - kernels/network_krnl/ip/network_ultrascale.tcl
-  - offrac/ip/proc_sys_reset.tcl
-  - offrac/ip/axis_data_width_conv.tcl
+  - frac/ip/proc_sys_reset.tcl
+  - frac/ip/axis_data_width_conv.tcl
   - kernels/cmac_krnl/ip/cmac.tcl
-  - offrac/ip/hbm_0.tcl
-  - offrac/ip/ila_icap.tcl
-  - offrac/ip/axi_prot_conv.tcl
-  - offrac/ip/axi_data_width_conv.tcl
+  - frac/ip/hbm_0.tcl
+  - frac/ip/ila_icap.tcl
+  - frac/ip/axi_prot_conv.tcl
+  - frac/ip/axi_data_width_conv.tcl

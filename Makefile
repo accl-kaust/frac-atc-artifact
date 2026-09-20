@@ -1,5 +1,5 @@
 #FPGA_PART = xcu280-fsvh2892-2L-e
-FPGA_TOP = offrac_top
+FPGA_TOP = frac_top
 
 FDEV_NAME ?= u280
 
@@ -39,10 +39,10 @@ CMAKE_ARGS += \
     -DFNS_TCP_STACK_MAX_SESSIONS=$(FNS_TCP_STACK_MAX_SESSIONS)
 
 #RTL Files
-#offrac
-RTL_FILES = offrac/rtl/offrac_top.v
-RTL_FILES += offrac/rtl/offrac.v
-RTL_FILES += offrac/rtl/offrac_hbm.v
+#frac
+RTL_FILES = frac/rtl/frac_top.v
+RTL_FILES += frac/rtl/frac.v
+RTL_FILES += frac/rtl/frac_hbm.v
 
 #lib
 RTL_FILES += lib/axis/rtl/axis_fifo.v
@@ -106,20 +106,20 @@ RTL_FILES += kernels/user_krnl/reconfctrl/rtl/reconfctrl.v
 RTL_FILES += kernels/user_krnl/reconfctrl/rtl/icap_ctrl.v
 
 #XDC
-XDC_FILES = offrac/xdc/fpga_u280.xdc
+XDC_FILES = frac/xdc/fpga_u280.xdc
 XDC_FILES += lib/axis/xdc/sync_reset.tcl
-XDC_FILES += offrac/xdc/floorplan.xdc
+XDC_FILES += frac/xdc/floorplan.xdc
 
 IP_TCL_FILES = kernels/network_krnl/ip/network_stack.tcl
 IP_TCL_FILES += kernels/network_krnl/ip/network_infrastructure.tcl
 IP_TCL_FILES += kernels/network_krnl/ip/network_ultrascale.tcl
-IP_TCL_FILES += offrac/ip/proc_sys_reset.tcl
-IP_TCL_FILES += offrac/ip/axis_data_width_conv.tcl
+IP_TCL_FILES += frac/ip/proc_sys_reset.tcl
+IP_TCL_FILES += frac/ip/axis_data_width_conv.tcl
 IP_TCL_FILES += kernels/cmac_krnl/ip/cmac.tcl
-IP_TCL_FILES += offrac/ip/hbm_0.tcl
-IP_TCL_FILES += offrac/ip/ila_icap.tcl
-IP_TCL_FILES += offrac/ip/axi_prot_conv.tcl
-IP_TCL_FILES += offrac/ip/axi_data_width_conv.tcl
+IP_TCL_FILES += frac/ip/hbm_0.tcl
+IP_TCL_FILES += frac/ip/ila_icap.tcl
+IP_TCL_FILES += frac/ip/axi_prot_conv.tcl
+IP_TCL_FILES += frac/ip/axi_data_width_conv.tcl
 
 include hls.mk
 include vivado.mk

@@ -10,7 +10,7 @@ accelerator slot to be replaced without rebuilding or stopping the complete
 network design.
 
 The contribution is not PR by itself. Instead of relying on a host CPU to stage
-and initiate reconfiguration, OFFRAC carries the control operation over the
+and initiate reconfiguration, fRAC carries the control operation over the
 network. A remote client uploads a partial bitstream into FPGA-attached HBM and
 then sends a command that causes a hardware controller to isolate the selected
 slot, fetch the bitstream, stream it through ICAP, and report completion or

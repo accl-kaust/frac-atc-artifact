@@ -11,7 +11,7 @@ The repository currently contains two related but separate flows:
 
 They are not connected into one reproducible source-to-partial-bitstream target.
 In particular, the normal Make flow does not load reconfigurable-module
-checkpoints or include `offrac/xdc/pr_offrac.xdc`.
+checkpoints or include `frac/xdc/pr_frac.xdc`.
 
 The standalone README declares Xilinx 2021.2 as the tested tool version, while
 preserved implementation reports and bitstream artifacts in the wider workspace
@@ -25,7 +25,7 @@ Run these commands from the standalone repository root.
 ```sh
 make ip
 make synth
-make offrac
+make frac
 ```
 
 The nominal combined command is:
@@ -37,24 +37,24 @@ make all
 Expected conventional-build outputs include:
 
 ```text
-offrac_top.xpr
-offrac_top.runs/synth_1/offrac_top.dcp
-offrac_top.runs/impl_1/offrac_top_routed.dcp
-offrac_top.runs/impl_1/offrac_top.bit
-offrac_top.runs/impl_1/offrac_top.bin
-offrac_top.runs/impl_1/offrac_top.ltx
-offrac_top.xsa
+frac_top.xpr
+frac_top.runs/synth_1/frac_top.dcp
+frac_top.runs/impl_1/frac_top_routed.dcp
+frac_top.runs/impl_1/frac_top.bit
+frac_top.runs/impl_1/frac_top.bin
+frac_top.runs/impl_1/frac_top.ltx
+frac_top.xsa
 ```
 
 This is not currently a documented functional DFX build. The source list uses
 empty `cell_bbx` partition shells, and the Make constraint list contains
-`floorplan.xdc` rather than `pr_offrac.xdc`.
+`floorplan.xdc` rather than `pr_frac.xdc`.
 
 ### Known Make-Flow Issues
 
 - `hls.mk` prefixes `CMAKE_ARGS` with an extra hyphen, causing the first option
   to expand as `--DFDEV_NAME=...` in a clean build.
-- `make offrac` has no explicit dependency on `make ip`; parallel `make all`
+- `make frac` has no explicit dependency on `make ip`; parallel `make all`
   may race IP generation and Vivado project creation.
 - The checked-in defaults set `TCP_STACK_EN=0`, despite the controller's TCP
   deployment path.
@@ -72,7 +72,7 @@ The checked-in DFX-related inputs are:
 | `static.yaml` | Static shell source and IP manifest |
 | `spin.yaml` | Reconfigurable-module units (`pattern_slot` and `or_slot`) |
 | `spinhdl.yaml` | Three cells, slot IDs, regions, and permitted modules |
-| `offrac/xdc/pr_offrac.xdc` | Pblocks and `HD.RECONFIGURABLE` properties |
+| `frac/xdc/pr_frac.xdc` | Pblocks and `HD.RECONFIGURABLE` properties |
 | `kernels/user_krnl/reconfctrl/rtl/cell_bbx.sv` | Static partition boundary shell |
 | `kernels/user_krnl/apps/*/unit.yaml` | Per-module synthesis manifests |
 
@@ -81,7 +81,7 @@ orchestrator, schema version, command line, and output contract are therefore a
 build gap.
 
 The C02 region in `spinhdl.yaml` does not match the C02 region in
-`offrac/xdc/pr_offrac.xdc`. An authoritative floorplan must be chosen before
+`frac/xdc/pr_frac.xdc`. An authoritative floorplan must be chosen before
 partial images are produced.
 
 ## Required DFX Artifact Stages
@@ -164,7 +164,7 @@ The initial full image must contain the static network design and one compatible
 module in each partition. The exact board-programming command and authoritative
 initial slot composition are not currently checked in and remain `TBD`.
 
-Do not assume the conventional `offrac_top.bit` and a preserved partial binary
+Do not assume the conventional `frac_top.bit` and a preserved partial binary
 are compatible. Full and partial images must originate from the same routed
 static implementation.
 
