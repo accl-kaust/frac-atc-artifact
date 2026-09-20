@@ -97,6 +97,11 @@ module norm #(
     endfunction
 
     reg [1:0]             state;
+    // NOTE: this infers as DISTRIBUTED RAM, ~2300 LUTs of norm's ~5100. It does
+    // not reach block RAM because `hold` is driven from two sources (the RX
+    // path and this array), so it is not a clean RAM output register; a
+    // ram_style="block" attribute alone does not change that. Giving the array
+    // its own output register and muxing after it would move it to ~4 RAMB36.
     reg [AXIS_DATA_W-1:0] linebuf [0:MAX_LINES-1];
     reg [AXIS_DATA_W-1:0] hold;            // line being scanned / replayed
     reg [LINE_AW:0]       nlines;
@@ -142,7 +147,7 @@ module norm #(
     // ------------------------------------------------- subtract (shared core)
 
     wire        sub_a_ready, sub_b_ready;
-    wire        sub_res_valid, sub_res_last;
+    wire        sub_res_valid;
     wire [31:0] sub_res_data;
     wire        div_a_ready, div_b_ready;
     wire        sub_res_ready = div_a_ready && div_b_ready;
@@ -164,14 +169,14 @@ module norm #(
       .m_axis_result_tvalid (sub_res_valid),
       .m_axis_result_tready (sub_res_ready),
       .m_axis_result_tdata  (sub_res_data),
-      .m_axis_result_tlast  (sub_res_last)
+      .m_axis_result_tlast  ()
     );
 
     wire sub_to_div = sub_res_valid && (state == ST_NORM);
 
     // ------------------------------------ divide by the per-request constant
 
-    wire        div_res_valid, div_res_last;
+    wire        div_res_valid;
     wire [31:0] div_res_data;
 
     floating_point_3 div_inst (
@@ -179,14 +184,12 @@ module norm #(
       .s_axis_a_tvalid      (sub_to_div),
       .s_axis_a_tready      (div_a_ready),
       .s_axis_a_tdata       (sub_res_data),
-      .s_axis_a_tlast       (1'b1),
       .s_axis_b_tvalid      (sub_to_div),
       .s_axis_b_tready      (div_b_ready),
       .s_axis_b_tdata       (range),
       .m_axis_result_tvalid (div_res_valid),
       .m_axis_result_tready (1'b1),           // the packer is always ready
-      .m_axis_result_tdata  (div_res_data),
-      .m_axis_result_tlast  (div_res_last)
+      .m_axis_result_tdata  (div_res_data)
     );
 
     // ------------------------------------------------------------------ fsm

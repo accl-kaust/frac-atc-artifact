@@ -12,6 +12,17 @@ from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStrea
 
 
 BYTE_LANES = 64
+
+def slot_response(pattern_byte):
+    """Expected payload from a pattern slot.
+
+    The slot datapath is the full BYTE_LANES-wide line, so a slot that emits a
+    repeated byte fills every lane. It used to be one byte wide, with pkt_logic
+    zero-padding the remaining 504 bits, which is why this was once
+    bytes([pattern_byte]) + bytes(BYTE_LANES - 1).
+    """
+    return bytes([pattern_byte]) * BYTE_LANES
+
 MAX_PACKET_BYTES = 512
 RECONF_APP = 0x00AB
 OP_WRITE_HBM = 1
@@ -278,7 +289,7 @@ async def test_header_flags_replace_ff_prefix_for_single_packet(dut):
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
     assert frame_to_int(metadata_frame) == notification.pack()
-    assert bytes(data_frame.tdata) == bytes([0x01]) + bytes(BYTE_LANES - 1)
+    assert bytes(data_frame.tdata) == slot_response(0x01)
     assert_keep_all(data_frame, BYTE_LANES)
 
 
@@ -305,7 +316,7 @@ async def test_multi_packet_payload_ff_and_flag_bits_are_not_header(dut):
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
     assert frame_to_int(metadata_frame) == notifications[-1].pack()
-    assert bytes(data_frame.tdata) == bytes([0x01]) + bytes(BYTE_LANES - 1)
+    assert bytes(data_frame.tdata) == slot_response(0x01)
     assert_keep_all(data_frame, BYTE_LANES)
     await tb.expect_no_response()
 
@@ -363,22 +374,22 @@ async def run_back_to_back_three_line_requests(dut, workload_id, expected_payloa
 
 @cocotb.test()
 async def test_single_packet_pattern_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))
+    await run_single_packet_request(dut, workload_id=0x0000, expected_payload=slot_response(0x01))
 
 
 @cocotb.test()
 async def test_single_packet_or_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0001, expected_payload=bytes([0xff]) + bytes(BYTE_LANES - 1))
+    await run_single_packet_request(dut, workload_id=0x0001, expected_payload=slot_response(0xff))
 
 
 @cocotb.test()
 async def test_single_packet_c02_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0002, expected_payload=bytes([0x02]) + bytes(BYTE_LANES - 1))
+    await run_single_packet_request(dut, workload_id=0x0002, expected_payload=slot_response(0x02))
 
 
 @cocotb.test()
 async def test_multi_packet_pattern_app(dut):
-    await run_multi_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))
+    await run_multi_packet_request(dut, workload_id=0x0000, expected_payload=slot_response(0x01))
 
 
 @cocotb.test()
@@ -386,7 +397,7 @@ async def test_single_tcp_packet_multi_beat_pattern_app(dut):
     await run_single_tcp_packet_multi_beat_app_request(
         dut,
         workload_id=0x0000,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+        expected_payload=slot_response(0x01),
     )
 
 
@@ -397,7 +408,7 @@ async def test_repeated_three_line_pattern_app(dut):
         workload_id=0x0000,
         line_count=3,
         request_count=8,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+        expected_payload=slot_response(0x01),
     )
 
 
@@ -406,7 +417,7 @@ async def test_back_to_back_three_line_pattern_app(dut):
     await run_back_to_back_three_line_requests(
         dut,
         workload_id=0x0000,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+        expected_payload=slot_response(0x01),
     )
 
 
@@ -417,7 +428,7 @@ async def test_repeated_six_line_pattern_app(dut):
         workload_id=0x0000,
         line_count=6,
         request_count=8,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+        expected_payload=slot_response(0x01),
     )
 
 

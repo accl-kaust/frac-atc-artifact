@@ -79,7 +79,7 @@ module log #(
 
   // ----------------------------------------------- 1 - x   (Add_Subtract)
 
-  wire sub_res_valid, sub_res_last;
+  wire sub_res_valid;
   wire [31:0] sub_res_data;
   wire div_a_ready, div_b_ready;
   wire sub_res_ready = div_a_ready && div_b_ready;
@@ -96,7 +96,7 @@ module log #(
       .m_axis_result_tvalid(sub_res_valid),
       .m_axis_result_tready(sub_res_ready),
       .m_axis_result_tdata (sub_res_data),
-      .m_axis_result_tlast (sub_res_last)
+      .m_axis_result_tlast ()
   );
 
   // ------------------------------------- operand alignment (kept on purpose)
@@ -141,7 +141,7 @@ module log #(
 
   // ------------------------------------------- x / (1 - x)      (Divide)
 
-  wire div_res_valid, div_res_ready, div_res_last;
+  wire div_res_valid, div_res_ready;
   wire [31:0] div_res_data;
 
   floating_point_1 divide_inst (
@@ -152,16 +152,14 @@ module log #(
       .s_axis_b_tvalid     (sub_res_real),
       .s_axis_b_tready     (div_b_ready),
       .s_axis_b_tdata      (sub_res_data),
-      .s_axis_b_tlast      (sub_res_last),
       .m_axis_result_tvalid(div_res_valid),
       .m_axis_result_tready(div_res_ready),
-      .m_axis_result_tdata (div_res_data),
-      .m_axis_result_tlast (div_res_last)
+      .m_axis_result_tdata (div_res_data)
   );
 
   // ------------------------------------------------ ln(.)    (Logarithm)
 
-  wire log_res_valid, log_res_last;
+  wire log_res_valid;
   wire [31:0] log_res_data;
 
   floating_point_2 log_inst (
@@ -169,11 +167,9 @@ module log #(
       .s_axis_a_tvalid     (div_res_valid),
       .s_axis_a_tready     (div_res_ready),
       .s_axis_a_tdata      (div_res_data),
-      .s_axis_a_tlast      (div_res_last),
       .m_axis_result_tvalid(log_res_valid),
       .m_axis_result_tready(1'b1),           // the packer is always ready
-      .m_axis_result_tdata (log_res_data),
-      .m_axis_result_tlast (log_res_last)
+      .m_axis_result_tdata (log_res_data)
   );
 
   // ----------------------------------------------------------- pack / tx
@@ -235,7 +231,7 @@ module log #(
         pack_idx <= pack_idx + 1'b1;
         if (pack_idx == {IDX_W{1'b1}}) begin
           resp_valid <= 1'b1;
-          resp_last  <= log_res_last;
+          resp_last  <= line_last;   // the chain carries no tlast; we know it here
           awaiting   <= 1'b0;
         end
       end

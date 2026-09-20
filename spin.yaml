@@ -45,3 +45,77 @@ units:
     slices: 1
     ramb36: 0
     dsp: 0
+- name: top_k
+  path: kernels/user_krnl/apps/top_k
+  moduletype: recon
+  top: top_k
+  build: synth
+  build_dir: build
+  rtl:
+    dir: src/rtl
+    files:
+    - top_k.v
+  xdc:
+    dir: src/xdc
+    files: null
+  xci:
+    dir: src/xci
+    files: null
+  ip:
+    dir: src/ip
+    files: null
+  # out-of-context synthesis, Vivado 2022.2: 1317 LUT, 1056 FF, 0 BRAM, 0 DSP
+  utilization:
+    slices: 165
+    ramb36: 0
+    dsp: 0
+- name: log
+  path: kernels/user_krnl/apps/log
+  moduletype: recon
+  top: log
+  build: synth
+  build_dir: build
+  rtl:
+    dir: src/rtl
+    files:
+    - log.v
+  xdc:
+    dir: src/xdc
+    files: null
+  xci:
+    dir: src/xci
+    files: null
+  ip:
+    dir: src/ip
+    files: 
+    - gen_ip.tcl
+  # out-of-context synthesis, Vivado 2022.2: 2179 LUT, 4185 FF, 0 BRAM, 6 DSP
+  utilization:
+    slices: 273
+    ramb36: 0
+    dsp: 6
+- name: norm
+  path: kernels/user_krnl/apps/norm
+  moduletype: recon
+  top: norm
+  build: synth
+  build_dir: build
+  rtl:
+    dir: src/rtl
+    files:
+    - norm.v
+  xdc:
+    dir: src/xdc
+    files: null
+  xci:
+    dir: src/xci
+    files: null
+  ip:
+    dir: src/ip
+    files: 
+    - gen_ip.tcl
+  # out-of-context synthesis, Vivado 2022.2: 5140 LUT, 3335 FF, 0 BRAM, 2 DSP
+  utilization:
+    slices: 643
+    ramb36: 0
+    dsp: 2

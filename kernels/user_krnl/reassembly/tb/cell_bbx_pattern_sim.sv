@@ -3,8 +3,8 @@
 `default_nettype none
 
 module cell_bbx #(
-    parameter int AXIS_DATA_W = 8,
-    parameter int KEEP_W      = 1,
+    parameter int AXIS_DATA_W = 512,
+    parameter int KEEP_W      = AXIS_DATA_W/8,
     parameter int TDEST_W     = 3,
     parameter int TID_W       = 4,
     parameter int USER_W      = 1

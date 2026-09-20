@@ -41,18 +41,18 @@ module floating_point_0 (
         .out_data(m_axis_result_tdata));
 endmodule
 
+// no tlast ports: gen_ip.tcl sets neither Has_A_TLAST nor Has_B_TLAST here
 module floating_point_3 (
     input wire aclk,
     input wire s_axis_a_tvalid, output wire s_axis_a_tready, input wire [31:0] s_axis_a_tdata,
-    input wire s_axis_a_tlast,
     input wire s_axis_b_tvalid, output wire s_axis_b_tready, input wire [31:0] s_axis_b_tdata,
     output wire m_axis_result_tvalid, input wire m_axis_result_tready,
-    output wire [31:0] m_axis_result_tdata, output wire m_axis_result_tlast);
+    output wire [31:0] m_axis_result_tdata);
     assign s_axis_a_tready = 1'b1;
     assign s_axis_b_tready = 1'b1;
     fp_pipe #(.LATENCY(29)) u (.clk(aclk),
-        .in_valid(s_axis_a_tvalid && s_axis_b_tvalid), .in_last(s_axis_a_tlast),
+        .in_valid(s_axis_a_tvalid && s_axis_b_tvalid), .in_last(1'b0),
         .in_data({s_axis_a_tdata[15:0], s_axis_b_tdata[15:0]}),   // proves the pairing
-        .out_valid(m_axis_result_tvalid), .out_last(m_axis_result_tlast),
+        .out_valid(m_axis_result_tvalid), .out_last(),
         .out_data(m_axis_result_tdata));
 endmodule
