@@ -379,31 +379,31 @@ module pkt_logic #(
     wire         pattern_meta_ready;
     reg          pattern_rx_in_frame = 1'b0;
     wire         pattern_app_ready;
-    wire [7:0]   pattern_decoupled_tdata;
+    wire [511:0]   pattern_decoupled_tdata;
     wire         pattern_decoupled_tvalid;
     wire         pattern_decoupled_tready;
     wire         pattern_decoupled_tlast;
-    wire [7:0]   pattern_pr_rx_tdata;
+    wire [511:0]   pattern_pr_rx_tdata;
     wire         pattern_pr_rx_tvalid;
     wire         pattern_pr_rx_tready;
     wire         pattern_pr_rx_tlast;
-    wire [7:0]   pattern_pr_tx_tdata;
+    wire [511:0]   pattern_pr_tx_tdata;
     wire         pattern_pr_tx_tvalid;
     wire         pattern_pr_tx_tready;
     wire         pattern_pr_tx_tlast;
-    wire [7:0]   pattern_slot_tx_data_raw;
+    wire [511:0]   pattern_slot_tx_data_raw;
     wire         pattern_slot_tx_valid_raw;
     wire         pattern_slot_tx_ready_raw;
     wire         pattern_slot_tx_last_raw;
-    wire [7:0]   pattern_tx_decoupled_tdata;
+    wire [511:0]   pattern_tx_decoupled_tdata;
     wire         pattern_tx_decoupled_tvalid;
     wire         pattern_tx_decoupled_tready;
     wire         pattern_tx_decoupled_tlast;
-    wire [7:0]   pattern_slot_tx_data;
+    wire [511:0]   pattern_slot_tx_data;
     wire         pattern_slot_tx_last;
 
     assign pattern_rx_ready = pattern_decoupled_tready && (pattern_rx_in_frame || pattern_meta_s_ready);
-    assign pattern_tx_payload = {pattern_slot_tx_last, 504'd0, pattern_slot_tx_data};
+    assign pattern_tx_payload = {pattern_slot_tx_last, pattern_slot_tx_data};
     assign pattern_tx_ready = pattern_slot_tx_last ? (pattern_meta_valid && pattern_switch_ready) : 1'b1;
     assign pattern_meta_ready = pattern_tx_valid && pattern_slot_tx_last && pattern_switch_ready;
 
@@ -430,16 +430,16 @@ module pkt_logic #(
     );
 
     axis_dfx_decoupler #(
-        .DATA_W(8),
-        .KEEP_W(1),
+        .DATA_W(512),
+        .KEEP_W(64),
         .DEST_W(1),
         .ID_W(1),
         .USER_W(1)
     ) pattern_slot_decoupler_inst (
         .decouple(slot_decouple[0]),
-        .s_axis_tdata(app_rx_payload[7:0]),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(pattern_rx_valid && (pattern_rx_in_frame || pattern_meta_s_ready)),
         .s_axis_tready(pattern_decoupled_tready),
         .s_axis_tlast(app_rx_req_last),
@@ -458,9 +458,9 @@ module pkt_logic #(
     );
 
     axis_pipeline_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .ID_WIDTH(1),
@@ -474,7 +474,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(pattern_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(pattern_decoupled_tvalid),
         .s_axis_tready(pattern_app_ready),
         .s_axis_tlast(pattern_decoupled_tlast),
@@ -492,8 +492,8 @@ module pkt_logic #(
     );
 
     cell_bbx #(
-        .AXIS_DATA_W(8),
-        .KEEP_W(1),
+        .AXIS_DATA_W(512),
+        .KEEP_W(64),
         .TDEST_W(1),
         .TID_W(1),
         .USER_W(1)
@@ -501,8 +501,8 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(pattern_pr_rx_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(pattern_pr_rx_tvalid),
         .s_axis_tready(pattern_pr_rx_tready),
         .s_axis_tlast(pattern_pr_rx_tlast),
@@ -521,9 +521,9 @@ module pkt_logic #(
     );
 
     axis_pipeline_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .ID_WIDTH(1),
@@ -537,7 +537,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(pattern_pr_tx_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(pattern_pr_tx_tvalid),
         .s_axis_tready(pattern_pr_tx_tready),
         .s_axis_tlast(pattern_pr_tx_tlast),
@@ -555,16 +555,16 @@ module pkt_logic #(
     );
 
     axis_dfx_decoupler #(
-        .DATA_W(8),
-        .KEEP_W(1),
+        .DATA_W(512),
+        .KEEP_W(64),
         .DEST_W(1),
         .ID_W(1),
         .USER_W(1)
     ) pattern_slot_tx_decoupler_inst (
         .decouple(slot_decouple[0]),
         .s_axis_tdata(pattern_slot_tx_data_raw),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(pattern_slot_tx_valid_raw),
         .s_axis_tready(pattern_slot_tx_ready_raw),
         .s_axis_tlast(pattern_slot_tx_last_raw),
@@ -583,9 +583,9 @@ module pkt_logic #(
     );
 
     axis_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .DEST_ENABLE(0),
@@ -595,7 +595,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(pattern_tx_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(pattern_tx_decoupled_tvalid),
         .s_axis_tready(pattern_tx_decoupled_tready),
         .s_axis_tlast(pattern_tx_decoupled_tlast),
@@ -622,31 +622,31 @@ module pkt_logic #(
     wire         or_meta_ready;
     reg          or_rx_in_frame = 1'b0;
     wire         or_app_ready;
-    wire [7:0]   or_decoupled_tdata;
+    wire [511:0]   or_decoupled_tdata;
     wire         or_decoupled_tvalid;
     wire         or_decoupled_tready;
     wire         or_decoupled_tlast;
-    wire [7:0]   or_pr_rx_tdata;
+    wire [511:0]   or_pr_rx_tdata;
     wire         or_pr_rx_tvalid;
     wire         or_pr_rx_tready;
     wire         or_pr_rx_tlast;
-    wire [7:0]   or_pr_tx_tdata;
+    wire [511:0]   or_pr_tx_tdata;
     wire         or_pr_tx_tvalid;
     wire         or_pr_tx_tready;
     wire         or_pr_tx_tlast;
-    wire [7:0]   or_slot_tx_data_raw;
+    wire [511:0]   or_slot_tx_data_raw;
     wire         or_slot_tx_valid_raw;
     wire         or_slot_tx_ready_raw;
     wire         or_slot_tx_last_raw;
-    wire [7:0]   or_tx_decoupled_tdata;
+    wire [511:0]   or_tx_decoupled_tdata;
     wire         or_tx_decoupled_tvalid;
     wire         or_tx_decoupled_tready;
     wire         or_tx_decoupled_tlast;
-    wire [7:0]   or_slot_tx_data;
+    wire [511:0]   or_slot_tx_data;
     wire         or_slot_tx_last;
 
     assign or_rx_ready = or_decoupled_tready && (or_rx_in_frame || or_meta_s_ready);
-    assign or_tx_payload = {or_slot_tx_last, 504'd0, or_slot_tx_data};
+    assign or_tx_payload = {or_slot_tx_last, or_slot_tx_data};
     assign or_tx_ready = or_slot_tx_last ? (or_meta_valid && or_switch_ready) : 1'b1;
     assign or_meta_ready = or_tx_valid && or_slot_tx_last && or_switch_ready;
 
@@ -673,16 +673,16 @@ module pkt_logic #(
     );
 
     axis_dfx_decoupler #(
-        .DATA_W(8),
-        .KEEP_W(1),
+        .DATA_W(512),
+        .KEEP_W(64),
         .DEST_W(1),
         .ID_W(1),
         .USER_W(1)
     ) or_slot_decoupler_inst (
         .decouple(slot_decouple[1]),
-        .s_axis_tdata(app_rx_payload[7:0]),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(or_rx_valid && (or_rx_in_frame || or_meta_s_ready)),
         .s_axis_tready(or_decoupled_tready),
         .s_axis_tlast(app_rx_req_last),
@@ -701,9 +701,9 @@ module pkt_logic #(
     );
 
     axis_pipeline_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .ID_WIDTH(1),
@@ -717,7 +717,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(or_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(or_decoupled_tvalid),
         .s_axis_tready(or_app_ready),
         .s_axis_tlast(or_decoupled_tlast),
@@ -735,8 +735,8 @@ module pkt_logic #(
     );
 
     cell_bbx #(
-        .AXIS_DATA_W(8),
-        .KEEP_W(1),
+        .AXIS_DATA_W(512),
+        .KEEP_W(64),
         .TDEST_W(1),
         .TID_W(1),
         .USER_W(1)
@@ -744,8 +744,8 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(or_pr_rx_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(or_pr_rx_tvalid),
         .s_axis_tready(or_pr_rx_tready),
         .s_axis_tlast(or_pr_rx_tlast),
@@ -764,9 +764,9 @@ module pkt_logic #(
     );
 
     axis_pipeline_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .ID_WIDTH(1),
@@ -780,7 +780,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(or_pr_tx_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(or_pr_tx_tvalid),
         .s_axis_tready(or_pr_tx_tready),
         .s_axis_tlast(or_pr_tx_tlast),
@@ -798,16 +798,16 @@ module pkt_logic #(
     );
 
     axis_dfx_decoupler #(
-        .DATA_W(8),
-        .KEEP_W(1),
+        .DATA_W(512),
+        .KEEP_W(64),
         .DEST_W(1),
         .ID_W(1),
         .USER_W(1)
     ) or_slot_tx_decoupler_inst (
         .decouple(slot_decouple[1]),
         .s_axis_tdata(or_slot_tx_data_raw),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(or_slot_tx_valid_raw),
         .s_axis_tready(or_slot_tx_ready_raw),
         .s_axis_tlast(or_slot_tx_last_raw),
@@ -826,9 +826,9 @@ module pkt_logic #(
     );
 
     axis_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .DEST_ENABLE(0),
@@ -838,7 +838,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(or_tx_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(or_tx_decoupled_tvalid),
         .s_axis_tready(or_tx_decoupled_tready),
         .s_axis_tlast(or_tx_decoupled_tlast),
@@ -865,31 +865,31 @@ module pkt_logic #(
     wire         c02_meta_ready;
     reg          c02_rx_in_frame = 1'b0;
     wire         c02_app_ready;
-    wire [7:0]   c02_decoupled_tdata;
+    wire [511:0]   c02_decoupled_tdata;
     wire         c02_decoupled_tvalid;
     wire         c02_decoupled_tready;
     wire         c02_decoupled_tlast;
-    wire [7:0]   c02_pr_rx_tdata;
+    wire [511:0]   c02_pr_rx_tdata;
     wire         c02_pr_rx_tvalid;
     wire         c02_pr_rx_tready;
     wire         c02_pr_rx_tlast;
-    wire [7:0]   c02_pr_tx_tdata;
+    wire [511:0]   c02_pr_tx_tdata;
     wire         c02_pr_tx_tvalid;
     wire         c02_pr_tx_tready;
     wire         c02_pr_tx_tlast;
-    wire [7:0]   c02_slot_tx_data_raw;
+    wire [511:0]   c02_slot_tx_data_raw;
     wire         c02_slot_tx_valid_raw;
     wire         c02_slot_tx_ready_raw;
     wire         c02_slot_tx_last_raw;
-    wire [7:0]   c02_tx_decoupled_tdata;
+    wire [511:0]   c02_tx_decoupled_tdata;
     wire         c02_tx_decoupled_tvalid;
     wire         c02_tx_decoupled_tready;
     wire         c02_tx_decoupled_tlast;
-    wire [7:0]   c02_slot_tx_data;
+    wire [511:0]   c02_slot_tx_data;
     wire         c02_slot_tx_last;
 
     assign c02_rx_ready = c02_decoupled_tready && (c02_rx_in_frame || c02_meta_s_ready);
-    assign c02_tx_payload = {c02_slot_tx_last, 504'd0, c02_slot_tx_data};
+    assign c02_tx_payload = {c02_slot_tx_last, c02_slot_tx_data};
     assign c02_tx_ready = c02_slot_tx_last ? (c02_meta_valid && c02_switch_ready) : 1'b1;
     assign c02_meta_ready = c02_tx_valid && c02_slot_tx_last && c02_switch_ready;
 
@@ -916,16 +916,16 @@ module pkt_logic #(
     );
 
     axis_dfx_decoupler #(
-        .DATA_W(8),
-        .KEEP_W(1),
+        .DATA_W(512),
+        .KEEP_W(64),
         .DEST_W(1),
         .ID_W(1),
         .USER_W(1)
     ) c02_slot_decoupler_inst (
         .decouple(slot_decouple[2]),
-        .s_axis_tdata(app_rx_payload[7:0]),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(c02_rx_valid && (c02_rx_in_frame || c02_meta_s_ready)),
         .s_axis_tready(c02_decoupled_tready),
         .s_axis_tlast(app_rx_req_last),
@@ -944,9 +944,9 @@ module pkt_logic #(
     );
 
     axis_pipeline_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .ID_WIDTH(1),
@@ -960,7 +960,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(c02_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(c02_decoupled_tvalid),
         .s_axis_tready(c02_app_ready),
         .s_axis_tlast(c02_decoupled_tlast),
@@ -978,8 +978,8 @@ module pkt_logic #(
     );
 
     cell_bbx #(
-        .AXIS_DATA_W(8),
-        .KEEP_W(1),
+        .AXIS_DATA_W(512),
+        .KEEP_W(64),
         .TDEST_W(1),
         .TID_W(1),
         .USER_W(1)
@@ -987,8 +987,8 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(c02_pr_rx_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(c02_pr_rx_tvalid),
         .s_axis_tready(c02_pr_rx_tready),
         .s_axis_tlast(c02_pr_rx_tlast),
@@ -1007,9 +1007,9 @@ module pkt_logic #(
     );
 
     axis_pipeline_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .ID_WIDTH(1),
@@ -1023,7 +1023,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(c02_pr_tx_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(c02_pr_tx_tvalid),
         .s_axis_tready(c02_pr_tx_tready),
         .s_axis_tlast(c02_pr_tx_tlast),
@@ -1041,16 +1041,16 @@ module pkt_logic #(
     );
 
     axis_dfx_decoupler #(
-        .DATA_W(8),
-        .KEEP_W(1),
+        .DATA_W(512),
+        .KEEP_W(64),
         .DEST_W(1),
         .ID_W(1),
         .USER_W(1)
     ) c02_slot_tx_decoupler_inst (
         .decouple(slot_decouple[2]),
         .s_axis_tdata(c02_slot_tx_data_raw),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
+        .s_axis_tstrb({64{1'b1}}),
         .s_axis_tvalid(c02_slot_tx_valid_raw),
         .s_axis_tready(c02_slot_tx_ready_raw),
         .s_axis_tlast(c02_slot_tx_last_raw),
@@ -1069,9 +1069,9 @@ module pkt_logic #(
     );
 
     axis_register #(
-        .DATA_WIDTH(8),
+        .DATA_WIDTH(512),
         .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
+        .KEEP_WIDTH(64),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
         .DEST_ENABLE(0),
@@ -1081,7 +1081,7 @@ module pkt_logic #(
         .clk(clk),
         .rst(rst),
         .s_axis_tdata(c02_tx_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
+        .s_axis_tkeep({64{1'b1}}),
         .s_axis_tvalid(c02_tx_decoupled_tvalid),
         .s_axis_tready(c02_tx_decoupled_tready),
         .s_axis_tlast(c02_tx_decoupled_tlast),

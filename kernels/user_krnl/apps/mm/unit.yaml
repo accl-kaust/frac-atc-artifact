@@ -1,0 +1,29 @@
+name: mm
+moduletype: recon
+top: mm
+build: synth
+build_dir: build
+version: 0.1.0
+part: xcu280-fsvh2892-2L-e
+arch: ultraplus
+
+rtl:
+  dir: "src/rtl"
+  files:
+    - mm.v
+    - CNN_workload.v
+    - packet_parser_CNN.v
+    - nukv_fifogen.v
+
+xdc:
+  dir: "src/xdc"
+  files:
+
+xci:
+  dir: "src/xci"
+  files:
+    - myproject_1.xci
+
+ip:
+  dir: "src/ip"
+  files:

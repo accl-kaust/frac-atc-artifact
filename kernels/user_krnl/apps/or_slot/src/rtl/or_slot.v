@@ -4,7 +4,7 @@
 
 (* DONT_TOUCH = "yes" *)
 module or_slot #(
-    parameter integer AXIS_DATA_W = 8,
+    parameter integer AXIS_DATA_W = 512,
     parameter integer KEEP_W      = AXIS_DATA_W/8,
     parameter integer TDEST_W     = 3,
     parameter integer TID_W       = 4,
