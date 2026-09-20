@@ -44,7 +44,13 @@ module dispatcher
     reg        expecting_header;
     reg [31:0] request_bytes_remaining;
 
-    wire        rx_fire = rx_tvalid == 1'b1 && rx_tready == 1'b1;
+    wire        fifo_s_tready;
+    // The {rx_tdata_combined, rx_tvalid_combined} pair is a one-deep
+    // register stage. Accept a new beat only when it is empty or is being
+    // drained this cycle, so a full output FIFO backpressures upstream
+    // instead of having its writes silently dropped.
+    wire        rx_accept = !rx_tvalid_combined || fifo_s_tready;
+    wire        rx_fire = rx_tvalid == 1'b1 && rx_accept == 1'b1;
     wire [1:0]  request_flags = rx_tdata[481:480];
     wire        request_first = request_flags[0];
     wire        request_last = request_flags[1];
@@ -56,7 +62,7 @@ module dispatcher
         header_packet_size + 32'd64 : header_packet_size;
     wire [31:0] active_request_bytes = config_header_line ? header_request_bytes : request_bytes_remaining;
 
-    assign rx_tready=1;
+    assign rx_tready = rx_accept;
     //dataline counter, recognize new configuration line
     always @(posedge clk) begin
         if (rst) begin
@@ -68,7 +74,6 @@ module dispatcher
              rx_tdata_combined = 0;
              rx_tvalid_combined = 1'b0;
         end else begin
-        rx_tvalid_combined = rx_tvalid;
         //This line is configuration line,
         if (config_header_line) begin
              workload_selection = header_workload_selection;
@@ -93,6 +98,10 @@ module dispatcher
              expecting_header = 1'b0;
              request_bytes_remaining = active_request_bytes;
         end
+        // Last: this drives rx_accept, so every read above sees pre-edge state.
+        if (rx_accept) begin
+             rx_tvalid_combined = rx_tvalid;
+        end
         end
     end
 
@@ -100,8 +109,8 @@ wire [599:0] tx_tdata_reg;
 axis_data_fifo_2 fifo_inst(
   .rst(rst),
   .clk(clk),        // input wire s_axis_aclk
-  .s_axis_tvalid(rx_tvalid_combined && rx_tready),    // input wire s_axis_tvalid
-  .s_axis_tready(),    // output wire s_axis_tready
+  .s_axis_tvalid(rx_tvalid_combined),    // input wire s_axis_tvalid
+  .s_axis_tready(fifo_s_tready),    // output wire s_axis_tready
   .s_axis_tdata({7'b0, rx_tdata_combined}),      // input wire [639 : 0] s_axis_tdata
   .m_axis_tvalid(tx_tvalid),    // output wire m_axis_tvalid
   .m_axis_tready(tx_tready),    // input wire m_axis_tready
