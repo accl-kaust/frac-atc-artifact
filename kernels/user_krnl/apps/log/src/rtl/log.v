@@ -103,19 +103,39 @@ module log #(
 
   reg [VALUE_W-1:0] align_mem[0:ALIGN_DEPTH-1];
   reg [ALIGN_AW:0] align_wr, align_rd;
-  wire               align_pop = sub_res_valid && sub_res_ready;
   wire [VALUE_W-1:0] x_aligned = align_mem[align_rd[ALIGN_AW-1:0]];
+
+  // Values issued to the subtractor whose results have not come back yet.
+  // This is state the packer's `outstanding` counter does not cover: the align
+  // FIFO sits at the SUBTRACTOR stage, not the far end of the chain. Resetting
+  // align_wr/align_rd is not enough on its own, because a reset taken with
+  // values in flight leaves stale results in the subtractor. Each of those
+  // asserts sub_res_valid afterwards and would pop the FIFO while align_wr
+  // stands still (nothing is being issued during the flush window), leaving
+  // align_rd permanently ahead of align_wr -- so every later operand pair is
+  // skewed, not just the discarded request's.
+  reg [ALIGN_AW:0] sub_pending;
+  wire sub_res_take = sub_res_valid && sub_res_ready;
+  wire sub_res_real = sub_res_valid && (sub_pending != 0);
+  wire align_pop = sub_res_take && (sub_pending != 0);
 
   always @(posedge clk) begin
     if (rst) begin
-      align_wr <= 0;
-      align_rd <= 0;
+      align_wr    <= 0;
+      align_rd    <= 0;
+      sub_pending <= 0;
     end else begin
       if (issue_fire) begin
         align_mem[align_wr[ALIGN_AW-1:0]] <= x;
         align_wr <= align_wr + 1'b1;
       end
       if (align_pop) align_rd <= align_rd + 1'b1;
+
+      case ({issue_fire, sub_res_take})
+        2'b10:   sub_pending <= sub_pending + 1'b1;
+        2'b01:   if (sub_pending != 0) sub_pending <= sub_pending - 1'b1;
+        default: ;
+      endcase
     end
   end
 
@@ -126,10 +146,10 @@ module log #(
 
   floating_point_1 divide_inst (
       .aclk                (clk),
-      .s_axis_a_tvalid     (sub_res_valid && sub_res_ready),
+      .s_axis_a_tvalid     (align_pop),
       .s_axis_a_tready     (div_a_ready),
       .s_axis_a_tdata      (x_aligned),
-      .s_axis_b_tvalid     (sub_res_valid),
+      .s_axis_b_tvalid     (sub_res_real),
       .s_axis_b_tready     (div_b_ready),
       .s_axis_b_tdata      (sub_res_data),
       .s_axis_b_tlast      (sub_res_last),

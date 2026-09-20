@@ -544,6 +544,41 @@ async def reset_mid_request_flushes_fp_chain(dut):
     tb.check(frames[0], sent)
 
 
+@cocotb.test()
+async def reset_mid_request_realigns_operands(dut):
+    """
+    The flush test above only counts response beats. This one checks the DATA
+    of the request that follows a mid-flight reset.
+
+    align_mem's pointers are reset, but align_pop is driven by the subtractor's
+    result valid. A reset taken with values in flight leaves stale results in
+    the subtractor; each one pops the align FIFO after the reset, advancing
+    align_rd while align_wr sits at 0 because nothing is being issued. The
+    pointers then stay skewed for the life of the module and every later
+    x_aligned is the wrong operand -- which the divide stub exposes, since it
+    concatenates both of them.
+    """
+    tb = TB(dut)
+    await tb.reset()
+
+    # fill align_mem so a skew reads stale data rather than X
+    await tb.run_request(random_values(dut_align_depth(dut)), header=True)
+
+    await tb.send_request(random_values(WORDS_PER_LINE), header=True)
+    await tb.source.wait()
+    await wait_cycles(dut, WORDS_PER_LINE + 4)      # whole line in flight
+
+    await tb.reset()
+    tb.source.clear()
+    tb.sink.clear()
+
+    # run_request checks the response against the reference model
+    await tb.run_request(random_values(WORDS_PER_LINE), header=True)
+    await tb.run_request(random_values(2 * WORDS_PER_LINE), header=True)
+
+    await wait_cycles(dut, 4 * LINE_CYCLES)
+
+
 async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
     """Randomised requests and sideband, checked against the stub-chain model."""
     tb = TB(dut)
