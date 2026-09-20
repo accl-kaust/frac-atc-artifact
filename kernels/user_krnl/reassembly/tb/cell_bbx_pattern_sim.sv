@@ -35,6 +35,10 @@ module cell_bbx #(
 
     reg [7:0] response_byte = 8'h01;
 
+    // Simulation-only stall, poked by the testbench to model a busy
+    // accelerator. Defaults low, so tests that do not touch it are unaffected.
+    reg stall /* verilator public_flat_rw */ = 1'b0;
+
     initial begin
         string inst_name;
 
@@ -46,8 +50,8 @@ module cell_bbx #(
         end
     end
 
-    assign s_axis_tready = m_axis_tready;
-    assign m_axis_tvalid = s_axis_tvalid;
+    assign s_axis_tready = m_axis_tready && !stall;
+    assign m_axis_tvalid = s_axis_tvalid && !stall;
     assign m_axis_tdata = {KEEP_W{response_byte}};
     assign m_axis_tkeep = s_axis_tkeep;
     assign m_axis_tstrb = s_axis_tstrb;

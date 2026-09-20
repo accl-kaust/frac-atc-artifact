@@ -21,6 +21,7 @@ VERILOG_SOURCES += ../../../../lib/taxi/prim/rtl/taxi_arbiter.sv
 VERILOG_SOURCES += $(TAXI_RTL_DIR)/taxi_axis_register.sv
 VERILOG_SOURCES += $(TAXI_RTL_DIR)/taxi_axis_switch.sv
 VERILOG_SOURCES += $(RTL_DIR)/axis_fifo_taxi.sv
+VERILOG_SOURCES += $(RTL_DIR)/axis_frame_fifo_taxi.sv
 VERILOG_SOURCES += $(RTL_DIR)/axis_data_fifo_replacements.sv
 VERILOG_SOURCES += $(RTL_DIR)/axis_register.v
 VERILOG_SOURCES += $(RTL_DIR)/axis_pipeline_register.v

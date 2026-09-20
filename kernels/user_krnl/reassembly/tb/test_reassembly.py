@@ -726,3 +726,51 @@ def test_reassembly(request):
         sim_build=sim_build,
         extra_args=["--sv", "-DSIMULATION", "-Wno-PINMISSING", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC"],
     )
+
+
+@cocotb.test()
+async def test_busy_slot_does_not_block_idle_slot(dut):
+    """Head-of-line blocking across slots.
+
+    The scheduler output is one shared bus whose TREADY is muxed from whichever
+    slot the head beat is addressed to (pkt_logic). Without a per-slot request
+    FIFO a busy accelerator's TREADY reaches all the way back, so once its
+    boundary pipeline fills, a request for an idle slot queued behind one for
+    the busy slot can never be delivered.
+    """
+    tb = TB(dut)
+    await tb.reset()
+
+    pattern_slot = dut.pkt_logic_inst.c00_bbx_inst
+    pattern_slot.stall.value = 1
+
+    # Enough requests to fill the stalled slot's boundary pipeline, so its
+    # TREADY really does go low. Kept under the 32-deep meta FIFO, which would
+    # otherwise become the limit instead of the datapath.
+    busy_requests = 24
+    for idx in range(busy_requests):
+        busy = SinglePacketRequest(conn_id=0x1100 + idx, workload_id=0x0000)
+        read_cmd = await tb.send_notification(busy.notification)
+        assert read_cmd == busy.metadata
+        await tb.send_rx_payload(busy.payload)
+
+    # A request for the idle or slot must still get through.
+    idle = SinglePacketRequest(conn_id=0x2222, workload_id=0x0001)
+    read_cmd = await tb.send_notification(idle.notification)
+    assert read_cmd == idle.metadata
+    await tb.send_rx_payload(idle.payload)
+    await tb.send_tx_status_ok()
+
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+    assert frame_to_int(metadata_frame) == idle.metadata, "idle slot blocked by busy slot"
+    assert bytes(data_frame.tdata) == slot_response(0xff)
+
+    # Releasing the stall drains everything queued for the busy slot, in order.
+    pattern_slot.stall.value = 0
+    for idx in range(busy_requests):
+        await tb.send_tx_status_ok()
+        metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+        assert frame_to_int(metadata_frame) == TcpNotification(
+            length=BYTE_LANES, conn_id=0x1100 + idx
+        ).pack()
+        assert bytes(data_frame.tdata) == slot_response(0x01)

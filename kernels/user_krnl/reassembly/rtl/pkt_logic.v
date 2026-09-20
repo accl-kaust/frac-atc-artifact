@@ -51,6 +51,9 @@ module pkt_logic #(
 );
 
     localparam integer PR_AXIS_PIPELINE_LENGTH = 10;
+    // Per-slot request FIFO depth, in 512-bit beats. Must be at least the
+    // largest request a slot accepts (norm's MAX_LINES = 256 beats).
+    localparam integer SLOT_RX_FIFO_DEPTH = 512;
 
     wire [512 + 32 + 32 + 16:0] dispatcher_tdata;
     wire                         dispatcher_tvalid;
@@ -402,7 +405,12 @@ module pkt_logic #(
     wire [511:0]   pattern_slot_tx_data;
     wire         pattern_slot_tx_last;
 
-    assign pattern_rx_ready = pattern_decoupled_tready && (pattern_rx_in_frame || pattern_meta_s_ready);
+    wire [511:0] pattern_ff_tdata;
+    wire         pattern_ff_tvalid;
+    wire         pattern_ff_tlast;
+    wire         pattern_ff_s_tready;
+
+    assign pattern_rx_ready = pattern_ff_s_tready && (pattern_rx_in_frame || pattern_meta_s_ready);
     assign pattern_tx_payload = {pattern_slot_tx_last, pattern_slot_tx_data};
     assign pattern_tx_ready = pattern_slot_tx_last ? (pattern_meta_valid && pattern_switch_ready) : 1'b1;
     assign pattern_meta_ready = pattern_tx_valid && pattern_slot_tx_last && pattern_switch_ready;
@@ -429,6 +437,24 @@ module pkt_logic #(
         .m_axis_tready(pattern_meta_ready)
     );
 
+    axis_frame_fifo_taxi #(
+        .DATA_WIDTH(512),
+        .DEPTH(SLOT_RX_FIFO_DEPTH)
+    ) pattern_slot_rx_fifo_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tvalid(pattern_rx_valid && (pattern_rx_in_frame || pattern_meta_s_ready)),
+        .s_axis_tready(pattern_ff_s_tready),
+        .s_axis_tlast(app_rx_req_last),
+        .m_axis_tdata(pattern_ff_tdata),
+        .m_axis_tvalid(pattern_ff_tvalid),
+        .m_axis_tready(pattern_decoupled_tready),
+        .m_axis_tlast(pattern_ff_tlast),
+        .status_overflow(),
+        .status_good_frame()
+    );
+
     axis_dfx_decoupler #(
         .DATA_W(512),
         .KEEP_W(64),
@@ -437,12 +463,12 @@ module pkt_logic #(
         .USER_W(1)
     ) pattern_slot_decoupler_inst (
         .decouple(slot_decouple[0]),
-        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tdata(pattern_ff_tdata),
         .s_axis_tkeep({64{1'b1}}),
         .s_axis_tstrb({64{1'b1}}),
-        .s_axis_tvalid(pattern_rx_valid && (pattern_rx_in_frame || pattern_meta_s_ready)),
+        .s_axis_tvalid(pattern_ff_tvalid),
         .s_axis_tready(pattern_decoupled_tready),
-        .s_axis_tlast(app_rx_req_last),
+        .s_axis_tlast(pattern_ff_tlast),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
@@ -645,7 +671,12 @@ module pkt_logic #(
     wire [511:0]   or_slot_tx_data;
     wire         or_slot_tx_last;
 
-    assign or_rx_ready = or_decoupled_tready && (or_rx_in_frame || or_meta_s_ready);
+    wire [511:0] or_ff_tdata;
+    wire         or_ff_tvalid;
+    wire         or_ff_tlast;
+    wire         or_ff_s_tready;
+
+    assign or_rx_ready = or_ff_s_tready && (or_rx_in_frame || or_meta_s_ready);
     assign or_tx_payload = {or_slot_tx_last, or_slot_tx_data};
     assign or_tx_ready = or_slot_tx_last ? (or_meta_valid && or_switch_ready) : 1'b1;
     assign or_meta_ready = or_tx_valid && or_slot_tx_last && or_switch_ready;
@@ -672,6 +703,24 @@ module pkt_logic #(
         .m_axis_tready(or_meta_ready)
     );
 
+    axis_frame_fifo_taxi #(
+        .DATA_WIDTH(512),
+        .DEPTH(SLOT_RX_FIFO_DEPTH)
+    ) or_slot_rx_fifo_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tvalid(or_rx_valid && (or_rx_in_frame || or_meta_s_ready)),
+        .s_axis_tready(or_ff_s_tready),
+        .s_axis_tlast(app_rx_req_last),
+        .m_axis_tdata(or_ff_tdata),
+        .m_axis_tvalid(or_ff_tvalid),
+        .m_axis_tready(or_decoupled_tready),
+        .m_axis_tlast(or_ff_tlast),
+        .status_overflow(),
+        .status_good_frame()
+    );
+
     axis_dfx_decoupler #(
         .DATA_W(512),
         .KEEP_W(64),
@@ -680,12 +729,12 @@ module pkt_logic #(
         .USER_W(1)
     ) or_slot_decoupler_inst (
         .decouple(slot_decouple[1]),
-        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tdata(or_ff_tdata),
         .s_axis_tkeep({64{1'b1}}),
         .s_axis_tstrb({64{1'b1}}),
-        .s_axis_tvalid(or_rx_valid && (or_rx_in_frame || or_meta_s_ready)),
+        .s_axis_tvalid(or_ff_tvalid),
         .s_axis_tready(or_decoupled_tready),
-        .s_axis_tlast(app_rx_req_last),
+        .s_axis_tlast(or_ff_tlast),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
@@ -888,7 +937,12 @@ module pkt_logic #(
     wire [511:0]   c02_slot_tx_data;
     wire         c02_slot_tx_last;
 
-    assign c02_rx_ready = c02_decoupled_tready && (c02_rx_in_frame || c02_meta_s_ready);
+    wire [511:0] c02_ff_tdata;
+    wire         c02_ff_tvalid;
+    wire         c02_ff_tlast;
+    wire         c02_ff_s_tready;
+
+    assign c02_rx_ready = c02_ff_s_tready && (c02_rx_in_frame || c02_meta_s_ready);
     assign c02_tx_payload = {c02_slot_tx_last, c02_slot_tx_data};
     assign c02_tx_ready = c02_slot_tx_last ? (c02_meta_valid && c02_switch_ready) : 1'b1;
     assign c02_meta_ready = c02_tx_valid && c02_slot_tx_last && c02_switch_ready;
@@ -915,6 +969,24 @@ module pkt_logic #(
         .m_axis_tready(c02_meta_ready)
     );
 
+    axis_frame_fifo_taxi #(
+        .DATA_WIDTH(512),
+        .DEPTH(SLOT_RX_FIFO_DEPTH)
+    ) c02_slot_rx_fifo_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tvalid(c02_rx_valid && (c02_rx_in_frame || c02_meta_s_ready)),
+        .s_axis_tready(c02_ff_s_tready),
+        .s_axis_tlast(app_rx_req_last),
+        .m_axis_tdata(c02_ff_tdata),
+        .m_axis_tvalid(c02_ff_tvalid),
+        .m_axis_tready(c02_decoupled_tready),
+        .m_axis_tlast(c02_ff_tlast),
+        .status_overflow(),
+        .status_good_frame()
+    );
+
     axis_dfx_decoupler #(
         .DATA_W(512),
         .KEEP_W(64),
@@ -923,12 +995,12 @@ module pkt_logic #(
         .USER_W(1)
     ) c02_slot_decoupler_inst (
         .decouple(slot_decouple[2]),
-        .s_axis_tdata(app_rx_payload[511:0]),
+        .s_axis_tdata(c02_ff_tdata),
         .s_axis_tkeep({64{1'b1}}),
         .s_axis_tstrb({64{1'b1}}),
-        .s_axis_tvalid(c02_rx_valid && (c02_rx_in_frame || c02_meta_s_ready)),
+        .s_axis_tvalid(c02_ff_tvalid),
         .s_axis_tready(c02_decoupled_tready),
-        .s_axis_tlast(app_rx_req_last),
+        .s_axis_tlast(c02_ff_tlast),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
