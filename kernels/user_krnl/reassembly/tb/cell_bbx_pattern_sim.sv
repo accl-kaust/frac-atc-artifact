@@ -45,8 +45,6 @@ module cell_bbx #(
         inst_name = $sformatf("%m");
         if (inst_name.len() >= 24 && inst_name.substr(inst_name.len()-24, inst_name.len()-13) == "c01_bbx_inst") begin
             response_byte = 8'hff;
-        end else if (inst_name.len() >= 24 && inst_name.substr(inst_name.len()-24, inst_name.len()-13) == "c02_bbx_inst") begin
-            response_byte = 8'h02;
         end
     end
 

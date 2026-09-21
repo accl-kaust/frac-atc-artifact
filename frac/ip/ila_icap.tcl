@@ -9,7 +9,7 @@
 # Every probe is a static net. The slot handshakes are the partition-pin nets
 # at each cNN_bbx_inst; nothing reaches inside a reconfigurable partition.
 #
-# 36 probes, 284 bits, 8192 samples. Capture control (C_EN_STRG_QUAL) and the
+# 32 probes, 279 bits, 8192 samples. Capture control (C_EN_STRG_QUAL) and the
 # advanced trigger are on, so a run can be qualified on a decouple edge rather
 # than filling the buffer with idle. Probes are wired in pkt_logic.v.
 #
@@ -21,7 +21,7 @@
 #  4     1      icap_pr_done
 #  5     1      icap_pr_err
 #  6     1      icap_avail
-#  7     3      slot_decouple[2:0]
+#  7     2      slot_decouple[1:0]
 #  8     1      reconf_active
 #  9     8      reconf_active_slot_id[7:0]
 #  10    8      reconf_last_slot_id[7:0]
@@ -40,20 +40,16 @@
 #  23    1      or_pr_rx_tready      c01 s_axis_tready
 #  24    1      or_pr_tx_tvalid      c01 m_axis_tvalid
 #  25    1      or_pr_tx_tready      c01 m_axis_tready
-#  26    1      c02_pr_rx_tvalid     c02 s_axis_tvalid
-#  27    1      c02_pr_rx_tready     c02 s_axis_tready
-#  28    1      c02_pr_tx_tvalid     c02 m_axis_tvalid
-#  29    1      c02_pr_tx_tready     c02 m_axis_tready
-#  30    1      disp_expecting_header
-#  31    1      disp_config_header_line
-#  32    16     disp_header_workload[15:0]
-#  33    20     disp_request_bytes_remaining[19:0]
-#  34    1      pkt_rx_tvalid        dispatcher rx_tvalid
-#  35    1      pkt_rx_tready        dispatcher rx_tready
+#  26    1      disp_expecting_header
+#  27    1      disp_config_header_line
+#  28    16     disp_header_workload[15:0]
+#  29    20     disp_request_bytes_remaining[19:0]
+#  30    1      pkt_rx_tvalid        dispatcher rx_tvalid
+#  31    1      pkt_rx_tready        dispatcher rx_tready
 
 create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_icap
 set_property -dict [list \
-                        CONFIG.C_NUM_OF_PROBES {36} \
+                        CONFIG.C_NUM_OF_PROBES {32} \
                         CONFIG.C_DATA_DEPTH {8192} \
                         CONFIG.C_EN_STRG_QUAL {1} \
                         CONFIG.C_ADV_TRIGGER {true} \
@@ -65,7 +61,7 @@ set_property -dict [list \
                         CONFIG.C_PROBE4_WIDTH {1} \
                         CONFIG.C_PROBE5_WIDTH {1} \
                         CONFIG.C_PROBE6_WIDTH {1} \
-                        CONFIG.C_PROBE7_WIDTH {3} \
+                        CONFIG.C_PROBE7_WIDTH {2} \
                         CONFIG.C_PROBE8_WIDTH {1} \
                         CONFIG.C_PROBE9_WIDTH {8} \
                         CONFIG.C_PROBE10_WIDTH {8} \
@@ -86,12 +82,8 @@ set_property -dict [list \
                         CONFIG.C_PROBE25_WIDTH {1} \
                         CONFIG.C_PROBE26_WIDTH {1} \
                         CONFIG.C_PROBE27_WIDTH {1} \
-                        CONFIG.C_PROBE28_WIDTH {1} \
-                        CONFIG.C_PROBE29_WIDTH {1} \
+                        CONFIG.C_PROBE28_WIDTH {16} \
+                        CONFIG.C_PROBE29_WIDTH {20} \
                         CONFIG.C_PROBE30_WIDTH {1} \
-                        CONFIG.C_PROBE31_WIDTH {1} \
-                        CONFIG.C_PROBE32_WIDTH {16} \
-                        CONFIG.C_PROBE33_WIDTH {20} \
-                        CONFIG.C_PROBE34_WIDTH {1} \
-                        CONFIG.C_PROBE35_WIDTH {1}
+                        CONFIG.C_PROBE31_WIDTH {1}
                    ] [get_ips ila_icap]

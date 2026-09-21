@@ -383,8 +383,10 @@ async def test_single_packet_or_app(dut):
 
 
 @cocotb.test()
-async def test_single_packet_c02_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0002, expected_payload=slot_response(0x02))
+async def test_single_packet_unrouted_workload_falls_back_to_slot0(dut):
+    # With two slots, a workload id without a channel of its own routes to the
+    # default (pattern) channel, so slot 0 answers.
+    await run_single_packet_request(dut, workload_id=0x0002, expected_payload=slot_response(0x01))
 
 
 @cocotb.test()
