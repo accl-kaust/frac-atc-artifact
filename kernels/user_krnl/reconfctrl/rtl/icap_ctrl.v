@@ -18,10 +18,22 @@ module icap_ctrl #(
 
     output wire                 pr_done,
     output wire                 pr_err,
-    output wire                 avail
+    output wire                 avail,
+
+    // The ICAPE3 pins themselves, brought out so a static ILA can see what the
+    // primitive is actually driven with and what it answers. Nothing consumes
+    // them in logic; they exist to be probed.
+    output wire                 icap_csib,
+    output wire                 icap_rdwrb,
+    output wire [DATA_WIDTH-1:0] icap_o
 );
 
 assign s_axis_tready = 1'b1;
+
+// The tie-offs the primitive is instantiated with. Repeated here rather than
+// tapped from the instance, because a Verilog input pin is not a readable net.
+assign icap_csib  = ~s_axis_tvalid;
+assign icap_rdwrb = 1'b0;
 
 `ifdef SIMULATION
 reg pr_done_reg = 1'b0;
@@ -29,6 +41,7 @@ reg pr_done_reg = 1'b0;
 assign pr_done = pr_done_reg;
 assign pr_err = 1'b0;
 assign avail = 1'b1;
+assign icap_o = {DATA_WIDTH{1'b0}};
 
 always @(posedge clk) begin
     if (rst) begin
@@ -48,13 +61,13 @@ ICAPE3 #(
 )
 ICAPE3_inst(
     .AVAIL(avail),     // 1-bit output: Availability status of ICAP.
-    .O(),             // 32-bit output: Configuration data output bus.
+    .O(icap_o),       // 32-bit output: Configuration data output bus.
     .PRDONE(pr_done),   // 1-bit output: Indicates completion of Partial Reconfiguration.
     .PRERROR(pr_err), // 1-bit output: Indicates error during Partial Reconfiguration.
     .CLK(clk),         // 1-bit input: Clock input.
-    .CSIB(~s_axis_tvalid),       // 1-bit input: Active-Low ICAP enable.
+    .CSIB(icap_csib),            // 1-bit input: Active-Low ICAP enable.
     .I(s_axis_tdata),             // 32-bit input: Configuration data input bus.
-    .RDWRB(1'b0)        // 1-bit input: Read/Write Select input.
+    .RDWRB(icap_rdwrb)  // 1-bit input: Read/Write Select input.
 );
 `endif
 

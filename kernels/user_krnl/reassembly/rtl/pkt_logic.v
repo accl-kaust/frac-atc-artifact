@@ -60,6 +60,14 @@ module pkt_logic #(
     wire                         dispatcher_tready;
     wire                         scheduler_rx_tready;
 
+    // Dispatcher request-framing state, for the static ILA only. The workload
+    // field is the same slice the dispatcher cuts from its own rx_tdata; it is
+    // read here rather than exported, so the dispatcher needs no port for it.
+    wire         disp_expecting_header;
+    wire         disp_config_header_line;
+    wire [15:0]  disp_header_workload = pkt_rx_tdata[511:496];
+    wire [19:0]  disp_request_bytes_remaining;
+
     dispatcher dispatcher_inst (
         .clk(clk),
         .rst(rst),
@@ -68,7 +76,10 @@ module pkt_logic #(
         .rx_tready(pkt_rx_tready),
         .tx_tdata(dispatcher_tdata),
         .tx_tvalid(dispatcher_tvalid),
-        .tx_tready(dispatcher_tready)
+        .tx_tready(dispatcher_tready),
+        .dbg_expecting_header(disp_expecting_header),
+        .dbg_config_header_line(disp_config_header_line),
+        .dbg_request_bytes_remaining(disp_request_bytes_remaining)
     );
 
     wire [512 + 16 + 32 + 16 + 1:0] scheduler_tdata;
@@ -167,6 +178,11 @@ module pkt_logic #(
     wire [7:0]   reconf_last_slot_id;
     wire [63:0]  reconf_cycles;
     wire [63:0]  reconf_last_cycles;
+
+    // The ICAPE3 pins as the primitive actually sees them, for the static ILA.
+    wire         icap_csib;
+    wire         icap_rdwrb;
+    wire [31:0]  icap_o;
 
     assign icap_pr_done_reconf = icap_pr_done_reg10;
     assign icap_pr_err_reconf = icap_pr_err_reg10;
@@ -331,29 +347,11 @@ module pkt_logic #(
         .s_axis_tvalid(reconf_axis_icap_tvalid),
         .pr_done(icap_pr_done),
         .pr_err(icap_pr_err),
-        .avail(icap_avail)
+        .avail(icap_avail),
+        .icap_csib(icap_csib),
+        .icap_rdwrb(icap_rdwrb),
+        .icap_o(icap_o)
     );
-
-`ifndef SIMULATION
-    ila_icap ila_icap_inst (
-        .clk(clk),
-        .probe0(reconf_axis_icap_tvalid),
-        .probe1(reconf_axis_icap_tready),
-        .probe2(reconf_axis_icap_tdata),
-        .probe3(reconf_axis_icap_tlast),
-        .probe4(icap_pr_done),
-        .probe5(icap_pr_err),
-        .probe6(icap_avail),
-        .probe7(slot_decouple),
-        .probe8(reconf_active),
-        .probe9(reconf_active_slot_id),
-        .probe10(reconf_last_slot_id),
-        .probe11(reconf_cycles),
-        .probe12(reconf_last_cycles),
-        .probe13(reconf_state),
-        .probe14(reconf_last_error)
-    );
-`endif
 
     always @(posedge clk) begin
         if (rst) begin
@@ -1192,5 +1190,55 @@ module pkt_logic #(
         .m_axis_tvalid(pkt_tx_tvalid),
         .m_axis_tready(pkt_tx_tready)
     );
+
+`ifndef SIMULATION
+    // Static-only. Every net below is driven or loaded in the static region:
+    // the cell handshakes are the partition-pin nets at each cNN_bbx_inst, not
+    // anything inside one. An ILA net reaching into a reconfigurable partition
+    // would break DFX, so none of these may be moved inward.
+    ila_icap ila_icap_inst (
+        .clk(clk),
+        // --- reconfctrl -> ICAP stream -----------------------------------
+        .probe0(reconf_axis_icap_tvalid),
+        .probe1(reconf_axis_icap_tready),
+        .probe2(reconf_axis_icap_tdata),
+        .probe3(reconf_axis_icap_tlast),
+        .probe4(icap_pr_done),
+        .probe5(icap_pr_err),
+        .probe6(icap_avail),
+        .probe7(slot_decouple),
+        .probe8(reconf_active),
+        .probe9(reconf_active_slot_id),
+        .probe10(reconf_last_slot_id),
+        .probe11(reconf_cycles),
+        .probe12(reconf_last_cycles),
+        .probe13(reconf_state),
+        .probe14(reconf_last_error),
+        // --- the ICAPE3 pins themselves ----------------------------------
+        .probe15(icap_csib),
+        .probe16(icap_rdwrb),
+        .probe17(icap_o),
+        // --- slot boundary handshakes, static side of each partition -----
+        .probe18(pattern_pr_rx_tvalid),   // c00 s_axis_tvalid
+        .probe19(pattern_pr_rx_tready),   // c00 s_axis_tready
+        .probe20(pattern_pr_tx_tvalid),   // c00 m_axis_tvalid
+        .probe21(pattern_pr_tx_tready),   // c00 m_axis_tready
+        .probe22(or_pr_rx_tvalid),        // c01 s_axis_tvalid
+        .probe23(or_pr_rx_tready),        // c01 s_axis_tready
+        .probe24(or_pr_tx_tvalid),        // c01 m_axis_tvalid
+        .probe25(or_pr_tx_tready),        // c01 m_axis_tready
+        .probe26(c02_pr_rx_tvalid),       // c02 s_axis_tvalid
+        .probe27(c02_pr_rx_tready),       // c02 s_axis_tready
+        .probe28(c02_pr_tx_tvalid),       // c02 m_axis_tvalid
+        .probe29(c02_pr_tx_tready),       // c02 m_axis_tready
+        // --- dispatcher request framing ----------------------------------
+        .probe30(disp_expecting_header),
+        .probe31(disp_config_header_line),
+        .probe32(disp_header_workload),
+        .probe33(disp_request_bytes_remaining),
+        .probe34(pkt_rx_tvalid),
+        .probe35(pkt_rx_tready)
+    );
+`endif
 
 endmodule

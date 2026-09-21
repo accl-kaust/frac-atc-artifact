@@ -29,7 +29,19 @@ module dispatcher
     //output wire [512 + 88 + 16 + 16:0] tx_tdata, //{packet_size, workload_selection,  session_ID, rx_tdata}
     output wire [512 + 32 + 32 + 16:0] tx_tdata, //{packet_size, workload_selection,  session_ID, rx_tdata}
     output wire tx_tvalid,
-    input wire tx_tready
+    input wire tx_tready,
+
+    // Request-framing state, brought out for a static ILA. Header recognition
+    // is `expecting_header && request_first`, so a byte-accounting desync
+    // during a long upload lets a payload line be taken for a header and
+    // misroute everything after it. Nothing consumes these in logic.
+    //
+    // header_workload_selection is deliberately absent: it is a plain slice of
+    // rx_tdata, which the caller already holds, so a port for it would carry
+    // nothing the caller cannot cut for itself.
+    output wire        dbg_expecting_header,
+    output wire        dbg_config_header_line,
+    output wire [19:0] dbg_request_bytes_remaining
     );
 
     reg [15:0] workload_selection;
@@ -63,6 +75,11 @@ module dispatcher
     wire [31:0] active_request_bytes = config_header_line ? header_request_bytes : request_bytes_remaining;
 
     assign rx_tready = rx_accept;
+
+    assign dbg_expecting_header        = expecting_header;
+    assign dbg_config_header_line      = config_header_line;
+    assign dbg_request_bytes_remaining = request_bytes_remaining[19:0];
+
     //dataline counter, recognize new configuration line
     always @(posedge clk) begin
         if (rst) begin
