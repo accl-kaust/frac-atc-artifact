@@ -51,6 +51,7 @@ rtl:
   - kernels/network_krnl/rtl/mem_single_inf.sv
   - kernels/user_krnl/reassembly/rtl/user_krnl.v
   - kernels/user_krnl/reassembly/rtl/axis_fifo_taxi.sv
+  - kernels/user_krnl/reassembly/rtl/axis_frame_fifo_taxi.sv
   - kernels/user_krnl/reassembly/rtl/axis_data_fifo_replacements.sv
   - kernels/user_krnl/reassembly/rtl/axis_register.v
   - kernels/user_krnl/reassembly/rtl/axis_pipeline_register.v

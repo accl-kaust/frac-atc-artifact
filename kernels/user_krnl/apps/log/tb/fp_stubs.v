@@ -3,10 +3,12 @@
 // Behavioural stubs for the three Xilinx floating-point cores log uses.
 // The real .xci are not in the repo (regenerate with src/ip/gen_ip.tcl).
 //
-// Port lists match what gen_ip.tcl actually produces: only floating_point_0
-// enables Has_B_TLAST, so floating_point_1 and floating_point_2 have no tlast
-// ports at all. Connecting them is a synthesis error -- the accl originals did,
-// which is why those workloads never built from a clean tree.
+// Port lists match what gen_ip.tcl actually produces: none of the three enables
+// a tlast, so none has tlast ports at all. Connecting them is a synthesis error
+// -- the accl originals did, which is why those workloads never built from a
+// clean tree. floating_point_0 kept Has_B_TLAST longest; it was removed once
+// opt_design trimmed the unused path inside the abstract shell and broke a LUT
+// in the core's own skid-buffer combiner.
 //
 // Not float models: invertible INTEGER ops at the real cores' latencies, so a
 // testbench can predict results exactly. floating_point_1 concatenates both of
@@ -35,15 +37,14 @@ module floating_point_0 (
     input wire aclk,
     input wire s_axis_a_tvalid, output wire s_axis_a_tready, input wire [31:0] s_axis_a_tdata,
     input wire s_axis_b_tvalid, output wire s_axis_b_tready, input wire [31:0] s_axis_b_tdata,
-    input wire s_axis_b_tlast,
     output wire m_axis_result_tvalid, input wire m_axis_result_tready,
-    output wire [31:0] m_axis_result_tdata, output wire m_axis_result_tlast);
+    output wire [31:0] m_axis_result_tdata);
     assign s_axis_a_tready = 1'b1;
     assign s_axis_b_tready = 1'b1;
     fp_pipe #(.LATENCY(12)) u (.clk(aclk),
-        .in_valid(s_axis_a_tvalid && s_axis_b_tvalid), .in_last(s_axis_b_tlast),
+        .in_valid(s_axis_a_tvalid && s_axis_b_tvalid), .in_last(1'b0),
         .in_data(s_axis_a_tdata - s_axis_b_tdata),
-        .out_valid(m_axis_result_tvalid), .out_last(m_axis_result_tlast),
+        .out_valid(m_axis_result_tvalid), .out_last(),
         .out_data(m_axis_result_tdata));
 endmodule
 

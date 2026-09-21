@@ -165,11 +165,9 @@ module norm #(
       .s_axis_b_tvalid      (sub_issue),
       .s_axis_b_tready      (sub_b_ready),
       .s_axis_b_tdata       (min_val),
-      .s_axis_b_tlast       (1'b1),
       .m_axis_result_tvalid (sub_res_valid),
       .m_axis_result_tready (sub_res_ready),
-      .m_axis_result_tdata  (sub_res_data),
-      .m_axis_result_tlast  ()
+      .m_axis_result_tdata  (sub_res_data)
     );
 
     wire sub_to_div = sub_res_valid && (state == ST_NORM);

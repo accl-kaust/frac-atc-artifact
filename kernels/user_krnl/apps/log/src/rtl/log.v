@@ -92,11 +92,9 @@ module log #(
       .s_axis_b_tvalid     (issue_fire),
       .s_axis_b_tready     (sub_b_ready),
       .s_axis_b_tdata      (x),
-      .s_axis_b_tlast      (last_val && line_last),
       .m_axis_result_tvalid(sub_res_valid),
       .m_axis_result_tready(sub_res_ready),
-      .m_axis_result_tdata (sub_res_data),
-      .m_axis_result_tlast ()
+      .m_axis_result_tdata (sub_res_data)
   );
 
   // ------------------------------------- operand alignment (kept on purpose)

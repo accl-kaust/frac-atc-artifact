@@ -17,7 +17,14 @@ root:
       id: 0
       slot_id: 0
       region:
+        # Clock-region column X4 carries the U280's I/O banks, and fpga_u280.xdc
+        # pins static cells into X4Y11: hbm_cattrip (IOB_X0Y606), msp_uart_txd
+        # (IOB_X0Y609), qsfp0_refclk_fs (IOB_X0Y590) and qsfp0_refclk_oe_b
+        # (IOB_X0Y589). A reconfigurable partition may not contain static logic,
+        # so place_design refused the whole design with DRC HDPR-6 rather than
+        # place anything. Carve that one clock region out; the other 23 stay.
         add: CLOCKREGION_X2Y11:CLOCKREGION_X7Y8
+        remove: CLOCKREGION_X4Y11:CLOCKREGION_X4Y11
       components:
       - name: or_slot
         id: 0
@@ -59,7 +66,16 @@ root:
       id: 2
       slot_id: 2
       region:
+        # Same as C00: X4Y5 holds the 100 MHz reference clock's input buffer,
+        # clk_100mhz_0_ibufg_inst (IOB_X0Y286 and HPIOBDIFFINBUF_X0Y132).
+        #
+        # C01 needs no carve-out. Its X4Y6/X4Y7 are the same I/O column, but
+        # nothing in fpga_u280.xdc is pinned there, so no static cell lands
+        # inside it. That is a property of the current pin list rather than of
+        # the floorplan -- a new pin in those two regions would break C01 the
+        # same way, and the fix would be the same one line.
         add: CLOCKREGION_X3Y5:CLOCKREGION_X7Y5
+        remove: CLOCKREGION_X4Y5:CLOCKREGION_X4Y5
       components:
       - name: or_slot
         id: 10

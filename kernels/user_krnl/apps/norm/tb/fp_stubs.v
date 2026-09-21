@@ -29,15 +29,14 @@ module floating_point_0 (
     input wire aclk,
     input wire s_axis_a_tvalid, output wire s_axis_a_tready, input wire [31:0] s_axis_a_tdata,
     input wire s_axis_b_tvalid, output wire s_axis_b_tready, input wire [31:0] s_axis_b_tdata,
-    input wire s_axis_b_tlast,
     output wire m_axis_result_tvalid, input wire m_axis_result_tready,
-    output wire [31:0] m_axis_result_tdata, output wire m_axis_result_tlast);
+    output wire [31:0] m_axis_result_tdata);
     assign s_axis_a_tready = 1'b1;
     assign s_axis_b_tready = 1'b1;
     fp_pipe #(.LATENCY(12)) u (.clk(aclk),
-        .in_valid(s_axis_a_tvalid && s_axis_b_tvalid), .in_last(s_axis_b_tlast),
+        .in_valid(s_axis_a_tvalid && s_axis_b_tvalid), .in_last(1'b0),
         .in_data(s_axis_a_tdata - s_axis_b_tdata),
-        .out_valid(m_axis_result_tvalid), .out_last(m_axis_result_tlast),
+        .out_valid(m_axis_result_tvalid), .out_last(),
         .out_data(m_axis_result_tdata));
 endmodule
 
