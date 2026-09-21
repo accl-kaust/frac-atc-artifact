@@ -32,15 +32,6 @@ root:
       - name: pattern_slot
         id: 1
         unit: pattern_slot
-      - name: top_k
-        id: 2
-        unit: top_k
-      - name: log
-        id: 3
-        unit: log
-      - name: norm
-        id: 4
-        unit: norm
     - name: C01
       id: 1
       slot_id: 1
@@ -48,20 +39,11 @@ root:
         add: CLOCKREGION_X3Y7:CLOCKREGION_X7Y6
       components:
       - name: or_slot
-        id: 5
+        id: 2
         unit: or_slot
       - name: pattern_slot
-        id: 6
+        id: 3
         unit: pattern_slot
-      - name: top_k
-        id: 7
-        unit: top_k
-      - name: log
-        id: 8
-        unit: log
-      - name: norm
-        id: 9
-        unit: norm
     - name: C02
       id: 2
       slot_id: 2
@@ -78,17 +60,8 @@ root:
         remove: CLOCKREGION_X4Y5:CLOCKREGION_X4Y5
       components:
       - name: or_slot
-        id: 10
+        id: 4
         unit: or_slot
       - name: pattern_slot
-        id: 11
+        id: 5
         unit: pattern_slot
-      - name: top_k
-        id: 12
-        unit: top_k
-      - name: log
-        id: 13
-        unit: log
-      - name: norm
-        id: 14
-        unit: norm
