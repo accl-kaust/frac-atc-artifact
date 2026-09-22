@@ -98,6 +98,7 @@
      integer chosen;
      integer set_i;
      integer reset_i;
+     integer mux_i;
      reg matched_any;
      reg allocated;
 
@@ -348,16 +349,30 @@
 
     assign output_queue_tvalid_FIFO = output_queue_tvalid;
 
+    // Forward exactly the words the queue FIFOs hand over.  A FIFO pops on
+    // (m_axis_tvalid && m_axis_tready), i.e. on output_tvalid[q] &&
+    // output_tready[q], so the push into the output pipeline has to be
+    // qualified by that very pair.  output_queue_number must not gate it: the
+    // selection FSM below only writes that register in the cycle of the first
+    // pop, so while the first word of a newly selected queue is being pulled it
+    // still holds 8'hFF (or the previously drained queue) and the word was
+    // silently discarded - which dropped the first beat of every multi-beat
+    // request and left only its last beat.  output_tready and
+    // output_tready_single_FIFO are one-hot (registered copies of the one-hot
+    // output_tready_sel / output_tready_single), so at most one source matches.
     always @* begin
-       if (output_queue_number < QUEUE_NUM) begin
-            output_queue_tvalid = output_tvalid[output_queue_number] && output_tready_sel[output_queue_number];
-            output_queue_tdata = output_tdata[output_queue_number][512 + 32 + 16 + 16 + 1:0];
-       end else if (output_queue_number == QUEUE_NUM) begin
-            output_queue_tvalid = output_tvalid_single && output_tready_single_FIFO;
+       output_queue_tvalid = 1'b0;
+       output_queue_tdata = {(512 + 32 + 16 + 16 + 2){1'b0}};
+       if (output_tvalid_single && output_tready_single_FIFO) begin
+            output_queue_tvalid = 1'b1;
             output_queue_tdata = output_tdata_single[512 + 32 + 16 + 16 + 1:0];
        end else begin
-            output_queue_tvalid = 0;
-            output_queue_tdata = 0;
+            for (mux_i = 0; mux_i < QUEUE_NUM; mux_i = mux_i + 1) begin
+                if (output_tvalid[mux_i] && output_tready[mux_i]) begin
+                    output_queue_tvalid = 1'b1;
+                    output_queue_tdata = output_tdata[mux_i][512 + 32 + 16 + 16 + 1:0];
+                end
+            end
        end
     end
 
