@@ -586,8 +586,8 @@ func main() {
 	kmask := flag.String("kmask", "0xffff", "bytes 60-61 of the header; top_k reads them as its 16-bit result mask")
 	singleSegment := flag.Bool("single-segment", false, "send header and data in one TCP segment (promises the TCP stack more response bytes than the design returns)")
 	dumpRequest := flag.Bool("dump-request", false, "hex dump every request segment before sending")
-	doIdentify := flag.Bool("identify", false, "probe slots 0..2 and report which accelerator answers in each")
-	identifySlots := flag.String("identify-slots", "0,1,2", "slots to probe in -identify mode")
+	doIdentify := flag.Bool("identify", false, "probe slots 0..1 and report which accelerator answers in each")
+	identifySlots := flag.String("identify-slots", "0,1", "slots to probe in -identify mode")
 
 	floats := flag.String("floats", "", "comma-separated float32 data values")
 	ints := flag.String("ints", "", "comma-separated uint32 data values (decimal or 0x hex)")
