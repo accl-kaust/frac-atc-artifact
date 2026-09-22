@@ -31,6 +31,7 @@
      input wire rx_tvalid,
      output reg rx_tready,
      // Output: {request_end, dstPort[15:0], workload_type[15:0], meta[31:0], tcp_tlast, payload[511:0]}
+     //   meta = {request_size[15:0], connID[15:0]} -- see rx_req_size below
      output wire [512 + 16 + 32 + 16 + 1:0] tx_tdata,
      output wire tx_tvalid,
      input wire tx_tready
@@ -44,6 +45,20 @@
      // Bit positions: payload[511:0], tlast[512], meta[544:513], workload[560:545], packet_size[592:561], dstPort[608:593]
      wire [15:0] rx_dstPort = rx_tdata[608:593];
      wire        rx_is_header = rx_tdata[480];
+
+     // What the slot receives as meta_TDATA.  The TCP stack's per-packet
+     // {length, connID} in rx_tdata[544:513] is what the queues are matched
+     // and released on below (counter_inst accumulates the packet lengths
+     // against the header's packet_size, as upstream does).  The slot gets
+     // the size of the whole request in the length field instead: the
+     // header's packet_size, which the dispatcher carries in rx_tdata[592:561]
+     // and which this module already keeps per queue in counter[].  A
+     // workload can then take the request's length straight from meta -- echo
+     // returns it as the response length, log/norm subtract the header line --
+     // rather than count beats, and a request that spans several TCP packets
+     // is no longer reported with the last packet's length.
+     wire [15:0] rx_connid   = rx_tdata[528:513];
+     wire [15:0] rx_req_size = rx_tdata[576:561];   // packet_size[15:0]
 
      //Normal queues input - widened by 16 bits for dstPort
      reg  [1 + 512 + 32 + 16 + 16: 0] input_tdata [QUEUE_NUM - 1: 0]; //last of message + dstPort + workload + meta + tlast + payload
@@ -177,7 +192,7 @@
                 input_tvalid_single = rx_tvalid;
                 // Format: {message_end (1-bit), dstPort (16-bit), workload_type (16-bit), meta_data (32-bit), tlast(1-bit), payload (512_bit)}
                 // Use stored dstPort and workload from META, and current meta+payload from rx_tdata
-                input_tdata_single = {1'b0, input_META_single[47:32], input_META_single[31:16], rx_tdata[544:0]};
+                input_tdata_single = {1'b0, input_META_single[47:32], input_META_single[31:16], rx_req_size, rx_connid, rx_tdata[512:0]};
                 rx_tready = 1'b1;
                 if(input_tdata_single[512] == 1) begin //the last of the packet
                    input_tdata_single[512+32+16+16+1] = 1'b1; //the last of the message, always the last
@@ -194,7 +209,9 @@
                         input_tvalid[m] = rx_tvalid;
                         // Format: {message_end (1-bit), dstPort (16-bit), workload_type (16-bit), meta_data (32-bit), tlast(1-bit), payload (512_bit)}
                         // Use stored dstPort and workload from META, and current meta+payload from rx_tdata
-                        input_tdata[m] = {1'b0, input_META[m][47:32], input_META[m][31:16], rx_tdata[544:0]};
+                        // counter[m] is this request's packet_size, so the meta is right even
+                        // when another connection's header has since passed the dispatcher
+                        input_tdata[m] = {1'b0, input_META[m][47:32], input_META[m][31:16], counter[m][15:0], rx_connid, rx_tdata[512:0]};
                         rx_tready = 1'b1;
                         // Accumulate bytes only on TLAST; release the slot only when we have met/exceeded packet_size
                         if(rx_tdata[512]) begin // TLAST indicates end of a TCP packet
@@ -230,7 +247,7 @@
                         // Output format: {message_end, dstPort, workload_type, meta, tlast, payload}
                         // rx_tdata[544:0] = {meta[31:0], tlast, payload[511:0]}
                         // workload_selection is at rx_tdata[560:545]
-                        input_tdata_single = {1'b1, rx_dstPort, rx_tdata[560:545], rx_tdata[544:0]};
+                        input_tdata_single = {1'b1, rx_dstPort, rx_tdata[560:545], rx_req_size, rx_connid, rx_tdata[512:0]};
                         input_META_single = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
                         rx_tready = 1'b1;
                     end else begin
@@ -240,7 +257,7 @@
                             if (!allocated && rx_is_header && (input_META[alloc_i] == {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}})) begin
                                 input_tvalid[alloc_i] = rx_tvalid;
                                 // Output format: {message_end, dstPort, workload_type, meta, tlast, payload}
-                                input_tdata[alloc_i] = {1'b0, rx_dstPort, rx_tdata[560:545], rx_tdata[544:0]};
+                                input_tdata[alloc_i] = {1'b0, rx_dstPort, rx_tdata[560:545], rx_req_size, rx_connid, rx_tdata[512:0]};
                                 // Store {dstPort, workload_type, connID} in META
                                 input_META[alloc_i] = {rx_dstPort, rx_tdata[560:545], rx_tdata[528:513]};
                                 counter[alloc_i] = rx_tdata[592:561];  // packet_size

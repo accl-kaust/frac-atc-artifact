@@ -2,6 +2,13 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
+// Simulation stand-in for the PR cells.  The static design instantiates the
+// blackbox cell_bbx (reconfctrl/rtl/cell_bbx.sv); here it resolves to the real
+// RM tops from apps/, so the bench verifies the RTL that is synthesised into
+// the slots: c00 is pattern_slot (echo), c01 is or_slot.  Which one an
+// instance stands for follows from its name, as pkt_logic.v names them
+// c00_bbx_inst / c01_bbx_inst.  Both RMs are instantiated and the one that is
+// not selected is held idle (tvalid / tready gated off).
 module cell_bbx #(
     parameter int AXIS_DATA_W = 512 + 1 + 32,
     parameter int KEEP_W      = 1,
@@ -33,9 +40,6 @@ module cell_bbx #(
     output wire [USER_W-1:0]      m_axis_tuser
 );
 
-    // Behavioural stand-in for the PR cells: c00 is the echo RM
-    // (apps/pattern_slot), c01 is the OR RM (apps/or_slot).  Both keep
-    // {meta, tlast} in tdata[544:512] untouched.
     reg is_or_slot = 1'b0;
 
     initial begin
@@ -47,16 +51,83 @@ module cell_bbx #(
         end
     end
 
-    assign s_axis_tready = m_axis_tready;
-    assign m_axis_tvalid = s_axis_tvalid;
-    assign m_axis_tdata = is_or_slot ? {s_axis_tdata[AXIS_DATA_W-1:512], s_axis_tdata[511:0] | {512{1'b1}}}
-                                     : s_axis_tdata;
-    assign m_axis_tkeep = s_axis_tkeep;
-    assign m_axis_tstrb = s_axis_tstrb;
-    assign m_axis_tlast = s_axis_tlast;
-    assign m_axis_tdest = s_axis_tdest;
-    assign m_axis_tid = s_axis_tid;
-    assign m_axis_tuser = s_axis_tuser;
+    wire                   echo_s_tready, or_s_tready;
+    wire [AXIS_DATA_W-1:0] echo_m_tdata,  or_m_tdata;
+    wire [KEEP_W-1:0]      echo_m_tkeep,  or_m_tkeep;
+    wire [KEEP_W-1:0]      echo_m_tstrb,  or_m_tstrb;
+    wire                   echo_m_tvalid, or_m_tvalid;
+    wire                   echo_m_tlast,  or_m_tlast;
+    wire [TDEST_W-1:0]     echo_m_tdest,  or_m_tdest;
+    wire [TID_W-1:0]       echo_m_tid,    or_m_tid;
+    wire [USER_W-1:0]      echo_m_tuser,  or_m_tuser;
+
+    pattern_slot #(
+        .AXIS_DATA_W(AXIS_DATA_W),
+        .KEEP_W(KEEP_W),
+        .TDEST_W(TDEST_W),
+        .TID_W(TID_W),
+        .USER_W(USER_W)
+    ) echo_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(s_axis_tdata),
+        .s_axis_tkeep(s_axis_tkeep),
+        .s_axis_tstrb(s_axis_tstrb),
+        .s_axis_tvalid(s_axis_tvalid && !is_or_slot),
+        .s_axis_tready(echo_s_tready),
+        .s_axis_tlast(s_axis_tlast),
+        .s_axis_tdest(s_axis_tdest),
+        .s_axis_tid(s_axis_tid),
+        .s_axis_tuser(s_axis_tuser),
+        .m_axis_tdata(echo_m_tdata),
+        .m_axis_tkeep(echo_m_tkeep),
+        .m_axis_tstrb(echo_m_tstrb),
+        .m_axis_tvalid(echo_m_tvalid),
+        .m_axis_tready(m_axis_tready && !is_or_slot),
+        .m_axis_tlast(echo_m_tlast),
+        .m_axis_tdest(echo_m_tdest),
+        .m_axis_tid(echo_m_tid),
+        .m_axis_tuser(echo_m_tuser)
+    );
+
+    or_slot #(
+        .AXIS_DATA_W(AXIS_DATA_W),
+        .KEEP_W(KEEP_W),
+        .TDEST_W(TDEST_W),
+        .TID_W(TID_W),
+        .USER_W(USER_W)
+    ) or_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(s_axis_tdata),
+        .s_axis_tkeep(s_axis_tkeep),
+        .s_axis_tstrb(s_axis_tstrb),
+        .s_axis_tvalid(s_axis_tvalid && is_or_slot),
+        .s_axis_tready(or_s_tready),
+        .s_axis_tlast(s_axis_tlast),
+        .s_axis_tdest(s_axis_tdest),
+        .s_axis_tid(s_axis_tid),
+        .s_axis_tuser(s_axis_tuser),
+        .m_axis_tdata(or_m_tdata),
+        .m_axis_tkeep(or_m_tkeep),
+        .m_axis_tstrb(or_m_tstrb),
+        .m_axis_tvalid(or_m_tvalid),
+        .m_axis_tready(m_axis_tready && is_or_slot),
+        .m_axis_tlast(or_m_tlast),
+        .m_axis_tdest(or_m_tdest),
+        .m_axis_tid(or_m_tid),
+        .m_axis_tuser(or_m_tuser)
+    );
+
+    assign s_axis_tready = is_or_slot ? or_s_tready : echo_s_tready;
+    assign m_axis_tdata  = is_or_slot ? or_m_tdata  : echo_m_tdata;
+    assign m_axis_tkeep  = is_or_slot ? or_m_tkeep  : echo_m_tkeep;
+    assign m_axis_tstrb  = is_or_slot ? or_m_tstrb  : echo_m_tstrb;
+    assign m_axis_tvalid = is_or_slot ? or_m_tvalid : echo_m_tvalid;
+    assign m_axis_tlast  = is_or_slot ? or_m_tlast  : echo_m_tlast;
+    assign m_axis_tdest  = is_or_slot ? or_m_tdest  : echo_m_tdest;
+    assign m_axis_tid    = is_or_slot ? or_m_tid    : echo_m_tid;
+    assign m_axis_tuser  = is_or_slot ? or_m_tuser  : echo_m_tuser;
 
 endmodule
 

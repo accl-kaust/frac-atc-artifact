@@ -3,13 +3,16 @@
 //   iverilog -g2012 -s tb_norm -o tb.vvp tb/tb_norm.v tb/fp_stubs.v src/rtl/norm.v && vvp tb.vvp
 module tb_norm;
     reg clk=0, rst=1; always #5 clk = ~clk;
-    reg  [511:0] s_tdata; reg s_tvalid=0, s_tlast=0; wire s_tready;
-    wire [511:0] m_tdata; wire m_tvalid, m_tlast; reg m_tready=1;
+    // slot boundary: tdata = {meta[31:0], tlast, payload[511:0]}; the request
+    // meta is {tcp_len, session}, the response's last beat {resp_bytes, session}
+    localparam [15:0] SESSION = 16'h0777;
+    reg  [544:0] s_tdata; reg s_tvalid=0, s_tlast=0; wire s_tready;
+    wire [544:0] m_tdata; wire m_tvalid, m_tlast; reg m_tready=1;
 
     norm dut (.clk(clk), .rst(rst),
-        .s_axis_tdata(s_tdata), .s_axis_tkeep({64{1'b1}}), .s_axis_tstrb({64{1'b1}}),
+        .s_axis_tdata(s_tdata), .s_axis_tkeep(1'b1), .s_axis_tstrb(1'b1),
         .s_axis_tvalid(s_tvalid), .s_axis_tready(s_tready), .s_axis_tlast(s_tlast),
-        .s_axis_tdest(3'd2), .s_axis_tid(4'd7), .s_axis_tuser(1'b0),
+        .s_axis_tdest(1'b1), .s_axis_tid(1'b0), .s_axis_tuser(1'b0),
         .m_axis_tdata(m_tdata), .m_axis_tkeep(), .m_axis_tstrb(),
         .m_axis_tvalid(m_tvalid), .m_axis_tready(m_tready), .m_axis_tlast(m_tlast),
         .m_axis_tdest(), .m_axis_tid(), .m_axis_tuser());
@@ -17,7 +20,7 @@ module tb_norm;
     // same IEEE-754 ordering key the DUT uses
     function [31:0] fkey(input [31:0] f); fkey = f[31] ? ~f : (f | 32'h80000000); endfunction
 
-    reg [511:0] beats [0:1]; reg beat_last [0:1];
+    reg [544:0] beats [0:1]; reg beat_last [0:1];
     integer nbeat=0, errors=0, i, b;
     reg [31:0] vals [0:31];
     reg [31:0] vmin, vmax, vrange, expect_w;
@@ -28,7 +31,8 @@ module tb_norm;
 
     task send(input [511:0] d, input last);
     begin @(negedge clk); while(!s_tready) @(negedge clk);
-          s_tdata=d; s_tvalid=1; s_tlast=last; @(negedge clk); s_tvalid=0; s_tlast=0; end
+          // meta = {request size, session}: header + 2 data lines = 192 bytes
+          s_tdata={16'd192, SESSION, last, d}; s_tvalid=1; s_tlast=last; @(negedge clk); s_tvalid=0; s_tlast=0; end
     endtask
 
     initial begin
@@ -75,9 +79,16 @@ module tb_norm;
         end
         if (beat_last[0] !== 1'b0 || beat_last[1] !== 1'b1) begin
             $display("  FAIL tlast: beat0=%0d beat1=%0d", beat_last[0], beat_last[1]); errors=errors+1; end
+        if (beats[0][512] !== 1'b0 || beats[1][512] !== 1'b1) begin
+            $display("  FAIL in-band tlast: beat0=%0d beat1=%0d", beats[0][512], beats[1][512]); errors=errors+1; end
         $display("  tlast: beat0=%0d beat1=%0d", beat_last[0], beat_last[1]);
+        // response meta on the tlast beat: request size less the header
+        // line = 128 bytes; session from the request
+        if (beats[1][544:513] !== {16'd128, SESSION}) begin
+            $display("  FAIL meta on tlast beat: got %h want %h", beats[1][544:513], {16'd128, SESSION}); errors=errors+1; end
+        $display("  meta on tlast beat = %h  (length %0d, session %h)", beats[1][544:513], beats[1][544:529], beats[1][528:513]);
 
-        if (errors==0) $display("\nPASS: min/max over both signs, range constant, word order natural");
+        if (errors==0) $display("\nPASS: min/max over both signs, range constant, word order natural, meta {128, session}");
         else           $display("\nFAIL: %0d errors", errors);
         $finish;
     end

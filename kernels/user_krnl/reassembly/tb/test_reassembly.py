@@ -42,8 +42,19 @@ def pack_reconf_command(opcode, addr, size, slot_id=0):
     return bytes(payload)
 
 
+def response_metadata(conn_id, byte_count):
+    """
+    The TCP tx metadata pkt_sender hands the stack, {length, session}, read
+    from the response beat that carries tlast.  The scheduler gives the slot
+    {request size, session} as meta (the header's packet_size, not the length
+    of one TCP packet), so the echo forwards it unchanged and the response is
+    reported as long as the whole request, however many TCP packets it came in.
+    """
+    return TcpNotification(length=byte_count, conn_id=conn_id).pack()
+
+
 def reconf_response_metadata(conn_id):
-    return TcpNotification(length=BYTE_LANES, conn_id=conn_id).pack()
+    return response_metadata(conn_id, BYTE_LANES)
 
 
 @dataclass
@@ -201,12 +212,14 @@ class TB:
 
 
 def echo_response(payloads) -> bytes:
-    """C00 (apps/pattern_slot): every request beat is echoed, payload and metadata unchanged."""
+    """C00 (apps/pattern_slot): every request beat is echoed, payload and meta
+    unchanged; the meta names the request size, which is the response size."""
     return b"".join(payloads)
 
 
 def or_response(payloads) -> bytes:
-    """C01 (apps/or_slot): every request beat comes back with its payload OR-ed with all ones."""
+    """C01 (apps/or_slot): every request beat comes back with its payload OR-ed
+    with all ones, meta unchanged."""
     return bytes([0xff]) * sum(len(payload) for payload in payloads)
 
 
@@ -227,7 +240,7 @@ async def run_single_packet_request(dut, workload_id, expected):
 
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, BYTE_LANES)
-    assert frame_to_int(metadata_frame) == request.metadata
+    assert frame_to_int(metadata_frame) == response_metadata(request.conn_id, len(expected_payload))
 
 
 async def run_multi_packet_request(dut, workload_id, expected):
@@ -246,7 +259,8 @@ async def run_multi_packet_request(dut, workload_id, expected):
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
+    # two TCP packets of 64 bytes: the meta names the 128-byte request, not the last packet
+    assert frame_to_int(metadata_frame) == response_metadata(request.conn_id, len(expected_payload))
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, len(expected_payload))
 
@@ -268,7 +282,7 @@ async def run_single_tcp_packet_multi_beat_app_request(dut, workload_id, expecte
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == notification.pack()
+    assert frame_to_int(metadata_frame) == response_metadata(notification.conn_id, len(expected_payload))
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, len(expected_payload))
 
@@ -290,7 +304,7 @@ async def test_header_flags_replace_ff_prefix_for_single_packet(dut):
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == notification.pack()
+    assert frame_to_int(metadata_frame) == response_metadata(notification.conn_id, BYTE_LANES)
     assert bytes(data_frame.tdata) == echo_response([bytes(header)])
     assert_keep_all(data_frame, BYTE_LANES)
 
@@ -317,7 +331,7 @@ async def test_multi_packet_payload_ff_and_flag_bits_are_not_header(dut):
 
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
-    assert frame_to_int(metadata_frame) == notifications[-1].pack()
+    assert frame_to_int(metadata_frame) == response_metadata(conn_id, 2 * BYTE_LANES)
     assert bytes(data_frame.tdata) == echo_response([first, continuation])
     assert_keep_all(data_frame, 2 * BYTE_LANES)
     await tb.expect_no_response()
@@ -344,7 +358,7 @@ async def run_repeated_multi_packet_requests(dut, workload_id, line_count, reque
         metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
         expected_payload = expected(request.payloads)
-        assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
+        assert frame_to_int(metadata_frame) == response_metadata(request.conn_id, len(expected_payload))
         assert bytes(data_frame.tdata) == expected_payload
         assert_keep_all(data_frame, len(expected_payload))
 
@@ -371,7 +385,7 @@ async def run_back_to_back_three_line_requests(dut, workload_id, expected):
         metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
         expected_payload = expected(request.payloads)
-        assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
+        assert frame_to_int(metadata_frame) == response_metadata(request.conn_id, len(expected_payload))
         assert bytes(data_frame.tdata) == expected_payload
         assert_keep_all(data_frame, len(expected_payload))
 

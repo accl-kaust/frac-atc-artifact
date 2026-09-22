@@ -20,6 +20,13 @@
 //   tx_data_TVALID / tx_data_TREADY   m_axis_tvalid / m_axis_tready
 //   meta_TVALID_out                   implied: meta is read on the tlast beat
 //
+// meta_TDATA[31:16] is the size of the whole request in bytes (the header's
+// packet_size; the scheduler puts it there, see scheduler.v rx_req_size), not
+// the length of one TCP packet.  The echo returns every request beat, so the
+// response is as long as the request and the meta goes out unchanged, exactly
+// as upstream echo_workload.v does (meta_TDATA_out = meta_TDATA); pkt_sender
+// reads it from the tlast beat as the TCP tx metadata {length, session}.
+//
 // workload_selection is not needed: pkt_logic.v only steers this slot's own
 // requests onto s_axis.  The parameter defaults must match the cell_bbx
 // instantiation in pkt_logic.v (c00_bbx_inst / c01_bbx_inst).
