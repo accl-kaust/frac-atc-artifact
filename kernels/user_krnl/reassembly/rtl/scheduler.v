@@ -58,19 +58,14 @@
      //Normal queues output - widened by 16 bits for dstPort
      wire [1 + 512 + 32 + 16 + 16: 0] output_tdata [QUEUE_NUM - 1: 0];
      wire [QUEUE_NUM - 1: 0] output_tvalid;
-     wire [QUEUE_NUM - 1: 0] output_tready;
+     reg [QUEUE_NUM - 1: 0] output_tready;
      reg  [7:0] credits [QUEUE_NUM - 1: 0];
      reg [7:0] output_deduct_credits [QUEUE_NUM - 1: 0];
 
      //Single-packet queue output - widened by 16 bits for dstPort
      wire [1 + 512 + 32 + 16 + 16: 0] output_tdata_single;
      wire output_tvalid_single;
-     wire output_tready_single_FIFO;
-
-     // Downstream readiness of the shared output path (pipeline register -> FIFO).
-     // Every pop of a queue FIFO is gated on this, so a stalled slot backs the
-     // arbiter off instead of popping beats into a full FIFO.
-     wire output_tready_pip;
+     reg output_tready_single_FIFO;
 
      //meta_reg - add dstPort storage
      reg  [WORKLOAD_SIZE + CONN_ID + 16 - 1: 0] input_META [QUEUE_NUM - 1: 0]; // {dstPort, workload, connID}
@@ -80,47 +75,46 @@
      reg [31:0] counter [QUEUE_NUM - 1: 0];
      reg [31:0] counter_inst [QUEUE_NUM - 1: 0];
 
-     // Output selection control.
-     //
-     // One registered grant, held for the whole of a request. Every downstream
-     // control -- both FIFO pops and the push into the output pipeline -- is a
-     // pure combinational function of it, so they cannot drift apart.
-     localparam [7:0] GRANT_SINGLE = QUEUE_NUM;
-     reg        grant_valid = 1'b0;
-     reg  [7:0] grant_idx   = 8'd0;
-     reg  [7:0] rr_ptr      = 8'd0;   // round-robin start, so no queue starves
-
-     wire       grant_is_single = grant_valid && (grant_idx == GRANT_SINGLE);
-     wire       grant_is_queue  = grant_valid && (grant_idx < QUEUE_NUM);
-     wire [7:0] grant_q_idx     = grant_is_queue ? grant_idx : 8'd0;
+     // output selection control
+     reg [QUEUE_NUM - 1: 0] output_tready_sel;
+     reg output_tready_single = 0;
 
      // module-level loop temps (avoid declaring in blocks)
+     integer map_i;
      integer initial_i;
      integer queue;
      integer m;
      integer alloc_i;
      integer clr_i;
      integer output_queue;
+     integer active_idx;
+     integer idx;
      integer step;
      integer found_next;
      integer next_idx;
+     integer keep_i;
+     integer hold_i;
+     integer choose_i;
+     integer chosen;
+     integer set_i;
      integer reset_i;
      reg matched_any;
      reg allocated;
 
-     // Pop a queue FIFO on exactly the cycles its head is pushed downstream.
-     // output_tready_pip is the backpressure that used to be missing entirely:
-     // without it the arbiter popped beats into a full output FIFO and they
-     // were silently dropped.
-     genvar gt;
-     generate
-         for (gt = 0; gt < QUEUE_NUM; gt = gt + 1) begin : GEN_OUTPUT_TREADY
-             assign output_tready[gt] = grant_is_queue && (grant_idx == gt) &&
-                                        output_tready_pip;
+     always @(posedge clk) begin
+        if (rst) begin
+            for (reset_i = 0; reset_i < QUEUE_NUM; reset_i = reset_i + 1) begin
+                output_tready[reset_i] <= 1'b0;
+            end
+            output_tready_single_FIFO <= 1'b0;
+        end else begin
+         // Map selected output TREADY signals to FIFO TREADYs
+         for (map_i = 0; map_i < QUEUE_NUM; map_i = map_i + 1) begin
+             output_tready[map_i] <= output_tready_sel[map_i];
          end
-     endgenerate
-
-     assign output_tready_single_FIFO = grant_is_single && output_tready_pip;
+         output_tready_single_FIFO <= output_tready_single;
+        end
+     end
 
 
     // Per-queue input FIFOs
@@ -154,6 +148,7 @@
 
      //initialize all virtual queues and credits
      initial begin
+        output_tready_sel = {QUEUE_NUM{1'b0}};
         for (initial_i = 0; initial_i < QUEUE_NUM; initial_i = initial_i + 1) begin
             credits[initial_i] = 8'b0;
             output_deduct_credits[initial_i] = 8'b0;
@@ -187,16 +182,6 @@
             end
        end
        if(rx_tvalid == 1 && rx_tready == 1)begin
-            // Deassert every write strobe first; the branches below raise the
-            // one queue this beat belongs to. Without this, a beat routed to
-            // one queue leaves the other queues' input_tvalid asserted from the
-            // previous beat, re-writing their stale input_tdata into their
-            // FIFOs. Two interleaved connections corrupt each other that way.
-            input_tvalid_single = 1'b0;
-            for (clr_i = 0; clr_i < QUEUE_NUM; clr_i = clr_i + 1) begin
-                input_tvalid[clr_i] = 1'b0;
-            end
-
             //matches the meta
 
             //The complete single-request situation, concatenating the first one
@@ -320,7 +305,7 @@
         // Widened by 16 bits for dstPort: 7 + (512+32+16+16+1) = 584
         wire [584-1:0] output_tdata_pip;
         wire output_tvalid_pip;
-        wire output_fifo_s_tready;
+        wire output_tready_pip;
 
         axis_pipeline_register #(
           .DATA_WIDTH(584),  // {7'b0, output_queue_tdata} is 7 + (512+32+16+16+1) = 584
@@ -335,14 +320,14 @@
           .s_axis_tready(output_tready_pip),
           .m_axis_tdata(output_tdata_pip),
           .m_axis_tvalid(output_tvalid_pip),
-          .m_axis_tready(output_fifo_s_tready)
+          .m_axis_tready(1'b1)
         );
 
         axis_data_fifo_0 fifo_inst_output(
           .rst(rst),
           .clk(clk),
           .s_axis_tvalid(output_tvalid_pip),
-          .s_axis_tready(output_fifo_s_tready),
+          .s_axis_tready(),
           .s_axis_tdata(output_tdata_pip),
           .m_axis_tvalid(tx_tvalid),
           .m_axis_tready(tx_tready),
@@ -353,68 +338,115 @@
 
     //output signal - widened by 16 bits for dstPort
     // Format: {request_end, dstPort[15:0], workload_type[15:0], meta[31:0], tcp_tlast, payload[511:0]}
-    wire [512 + 32 + 16 + 16 + 1:0] output_queue_tdata;
-    wire output_queue_tvalid;
+    reg [512 + 32 + 16 + 16 + 1:0] output_queue_tdata;
     wire output_queue_tvalid_FIFO;
+    reg output_queue_tvalid;
+    reg [7:0] output_queue_number = 8'hFF;
 
-    assign output_queue_tvalid = grant_is_single ? output_tvalid_single :
-                                 grant_is_queue  ? output_tvalid[grant_q_idx] : 1'b0;
 
-    assign output_queue_tdata  = grant_is_single ?
-                                 output_tdata_single[512 + 32 + 16 + 16 + 1:0] :
-                                 output_tdata[grant_q_idx][512 + 32 + 16 + 16 + 1:0];
+
 
     assign output_queue_tvalid_FIFO = output_queue_tvalid;
 
-    // A beat actually moves downstream this cycle, and whether it ends a request.
-    wire output_queue_fire = output_queue_tvalid && output_tready_pip;
-    wire output_queue_last = output_queue_tdata[512 + 32 + 16 + 16 + 1];
+    always @* begin
+       if (output_queue_number < QUEUE_NUM) begin
+            output_queue_tvalid = output_tvalid[output_queue_number] && output_tready_sel[output_queue_number];
+            output_queue_tdata = output_tdata[output_queue_number][512 + 32 + 16 + 16 + 1:0];
+       end else if (output_queue_number == QUEUE_NUM) begin
+            output_queue_tvalid = output_tvalid_single && output_tready_single_FIFO;
+            output_queue_tdata = output_tdata_single[512 + 32 + 16 + 16 + 1:0];
+       end else begin
+            output_queue_tvalid = 0;
+            output_queue_tdata = 0;
+       end
+    end
 
-    // Arbiter. A grant is taken at a request boundary and held until the
-    // request's final beat is accepted downstream, so a stalled slot can never
-    // retire a request that was not actually sent.
     always @(posedge clk) begin
         if (rst) begin
-            grant_valid <= 1'b0;
-            grant_idx   <= 8'd0;
-            rr_ptr      <= 8'd0;
+            output_queue_number = 8'hFF;
+            output_tready_sel = {QUEUE_NUM{1'b0}};
+            output_tready_single = 1'b0;
             for (reset_i = 0; reset_i < QUEUE_NUM; reset_i = reset_i + 1) begin
-                output_deduct_credits[reset_i] <= 8'd0;
+                output_deduct_credits[reset_i] = 8'd0;
             end
         end else begin
-            //output credits clear and update
-            for (output_queue = 0; output_queue < QUEUE_NUM; output_queue = output_queue + 1) begin
-                if (credits[output_queue] == output_deduct_credits[output_queue]) begin
-                    output_deduct_credits[output_queue] <= 8'b0000;
+        //output credits clear and update
+       for (output_queue = 0; output_queue < QUEUE_NUM; output_queue = output_queue + 1) begin
+            if (credits[output_queue] == output_deduct_credits[output_queue]) begin
+                output_deduct_credits[output_queue] = 8'b0000;
+            end
+       end
+
+       //single-packet queue output has priority
+        if(output_tvalid_single == 1'b1) begin
+            output_queue_number = QUEUE_NUM;
+            output_tready_sel = {QUEUE_NUM{1'b0}};
+            output_tready_single = 1;
+        end
+
+       //Other normal queues situations
+       else begin
+            output_tready_single = 0; //clear the TREADY_single, since the single packet queue is not going to be output
+
+            // Determine active queue (one that currently has TREADY asserted and still has credits)
+            active_idx = -1;
+            for (idx = 0; idx < QUEUE_NUM; idx = idx + 1) begin
+                if (output_tready_sel[idx] == 1'b1 && (credits[idx] > output_deduct_credits[idx])) begin
+                    active_idx = idx;
                 end
             end
 
-            if (!grant_valid) begin
-                // Single-packet requests keep their priority, but they can no
-                // longer preempt a multi-packet request mid-stream.
-                if (output_tvalid_single) begin
-                    grant_valid <= 1'b1;
-                    grant_idx   <= GRANT_SINGLE;
-                end else begin
-                    found_next = 0;
-                    for (step = 0; step < QUEUE_NUM; step = step + 1) begin
-                        next_idx = rr_ptr + step;
-                        if (next_idx >= QUEUE_NUM) next_idx = next_idx - QUEUE_NUM;
-                        if (!found_next && (credits[next_idx] > output_deduct_credits[next_idx])) begin
-                            grant_valid <= 1'b1;
-                            grant_idx   <= next_idx[7:0];
-                            found_next  = 1;
+            if (active_idx != -1) begin
+                if (output_tvalid[active_idx]  == 1) begin
+                    output_queue_number = active_idx[7:0];
+                    if(output_tdata[active_idx][512+32+16+16+1] == 1 && output_tvalid[active_idx] == 1) begin //The last dataline in the last packet of the request
+                        output_tready_sel[active_idx] = 1'b0;     //This queue need to be shifted
+                        output_deduct_credits[active_idx] =  output_deduct_credits[active_idx] + 1; //decuct the credit
+                        // find next ready queue in round-robin order
+                        found_next = 0;
+                        for (step = 1; step <= QUEUE_NUM; step = step + 1) begin
+                            next_idx = active_idx + step;
+                            if (next_idx >= QUEUE_NUM) next_idx = next_idx - QUEUE_NUM;
+                            if (!found_next && (output_tvalid[next_idx] == 1) && (credits[next_idx] > output_deduct_credits[next_idx])) begin
+                                output_tready_sel[next_idx] = 1'b1;
+                                found_next = 1;
+                            end
+                        end
+                        if (!found_next) begin
+                            if(output_tvalid_single == 1'b1) begin  // single queue is ready to be output
+                               output_tready_single = 1'b1;
+                            end else if ((output_tvalid[active_idx] == 1) && (credits[active_idx] > output_deduct_credits[active_idx])) begin
+                               output_tready_sel[active_idx] = 1'b1;
+                            end
+                        end
+                    end else begin //Have packet to pull, but not fully pulled, keep pulling
+                        output_tready_single = 0;
+                        for (keep_i = 0; keep_i < QUEUE_NUM; keep_i = keep_i + 1) begin
+                            output_tready_sel[keep_i] = (keep_i == active_idx);
                         end
                     end
+                end else begin // active queue but not valid yet, keep pulling
+                    output_tready_single = 0;
+                    for (hold_i = 0; hold_i < QUEUE_NUM; hold_i = hold_i + 1) begin
+                        output_tready_sel[hold_i] = (hold_i == active_idx);
+                    end
                 end
-            end else if (output_queue_fire && output_queue_last) begin
-                // Request delivered: retire its credit and re-arbitrate.
-                if (grant_is_queue) begin
-                    output_deduct_credits[grant_q_idx] <= output_deduct_credits[grant_q_idx] + 8'd1;
-                    rr_ptr <= (grant_q_idx + 8'd1 >= QUEUE_NUM) ? 8'd0 : grant_q_idx + 8'd1;
-                end
-                grant_valid <= 1'b0;
+            end else begin  //shift TREADY when no queue is ready
+               chosen = -1;
+               for (choose_i = 0; choose_i < QUEUE_NUM; choose_i = choose_i + 1) begin
+                    if (chosen == -1 && (credits[choose_i] > output_deduct_credits[choose_i])) begin
+                        chosen = choose_i;
+                    end
+               end
+               if (chosen != -1) begin
+                    for (set_i = 0; set_i < QUEUE_NUM; set_i = set_i + 1) begin
+                        output_tready_sel[set_i] = (set_i == chosen);
+                    end
+               end else begin
+                    output_tready_sel = {QUEUE_NUM{1'b0}};
+               end
             end
+        end
         end
     end
 
