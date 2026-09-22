@@ -101,20 +101,6 @@
      reg matched_any;
      reg allocated;
 
-     always @(posedge clk) begin
-        if (rst) begin
-            for (reset_i = 0; reset_i < QUEUE_NUM; reset_i = reset_i + 1) begin
-                output_tready[reset_i] <= 1'b0;
-            end
-            output_tready_single_FIFO <= 1'b0;
-        end else begin
-         // Map selected output TREADY signals to FIFO TREADYs
-         for (map_i = 0; map_i < QUEUE_NUM; map_i = map_i + 1) begin
-             output_tready[map_i] <= output_tready_sel[map_i];
-         end
-         output_tready_single_FIFO <= output_tready_single;
-        end
-     end
 
 
     // Per-queue input FIFOs
@@ -348,9 +334,23 @@
 
     assign output_queue_tvalid_FIFO = output_queue_tvalid;
 
+    // A queue FIFO is read exactly when the output mux forwards it: pop enable
+    // and forward condition are the same expression, so a beat can never be
+    // popped without being forwarded, nor forwarded without being popped.
+    // (Previously output_tready was a one-cycle-delayed copy of
+    // output_tready_sel while the mux was gated by output_queue_number, which
+    // the arbiter updates a cycle later: the first beat popped after a source
+    // change was dropped, and one extra beat could be popped after the last.)
+    always @* begin
+        for (map_i = 0; map_i < QUEUE_NUM; map_i = map_i + 1) begin
+            output_tready[map_i] = output_tready_sel[map_i] && (output_queue_number == map_i);
+        end
+        output_tready_single_FIFO = output_tready_single && (output_queue_number == QUEUE_NUM);
+    end
+
     always @* begin
        if (output_queue_number < QUEUE_NUM) begin
-            output_queue_tvalid = output_tvalid[output_queue_number] && output_tready_sel[output_queue_number];
+            output_queue_tvalid = output_tvalid[output_queue_number] && output_tready[output_queue_number];
             output_queue_tdata = output_tdata[output_queue_number][512 + 32 + 16 + 16 + 1:0];
        end else if (output_queue_number == QUEUE_NUM) begin
             output_queue_tvalid = output_tvalid_single && output_tready_single_FIFO;
