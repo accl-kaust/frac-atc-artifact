@@ -7,12 +7,7 @@ module reconfctrl #(
     parameter AXI_DATA_WIDTH = 256,
     parameter AXIS_DATA_WIDTH = 512,
     parameter ICAP_DATA_WIDTH = 32,
-    parameter SLOT_COUNT = 2,
-    // ICAPE3 PRDONE never falls if the device ignores the bitstream (a missing
-    // sync word draws no PRERROR either), so RECONF_WAIT_DONE needs a bound to
-    // fail out of instead of holding the controller and the decouple forever.
-    // ~0.5 s at 250 MHz.
-    parameter [31:0] PR_DONE_TIMEOUT_CYCLES = 32'h0800_0000
+    parameter SLOT_COUNT = 2
 ) (
     input  wire                         clk,
     input  wire                         rst,
@@ -63,7 +58,7 @@ module reconfctrl #(
     output reg  [ADDR_WIDTH-1:0]        m_axi_araddr,
     output wire [1:0]                   m_axi_arburst,
     output wire [5:0]                   m_axi_arid,
-    output reg  [7:0]                   m_axi_arlen,
+    output wire [7:0]                   m_axi_arlen,
     output wire [2:0]                   m_axi_arsize,
     output reg                          m_axi_arvalid,
     input  wire                         m_axi_arready,
@@ -101,8 +96,7 @@ localparam [7:0]
     ERR_AXI_RRESP = 8'd6,
     ERR_RLAST     = 8'd7,
     ERR_SLOT      = 8'd8,
-    ERR_ICAP      = 8'd9,
-    ERR_PR_TIMEOUT = 8'd10;
+    ERR_ICAP      = 8'd9;
 
 localparam [3:0]
     STATE_IDLE            = 4'd0,
@@ -131,20 +125,14 @@ reg [AXIS_DATA_WIDTH-1:0] data_line_reg = {AXIS_DATA_WIDTH{1'b0}};
 reg [6:0] line_bytes_reg = 7'd0;
 reg half_select_reg = 1'b0;
 reg [AXIS_DATA_WIDTH-1:0] read_response_reg = {AXIS_DATA_WIDTH{1'b0}};
+reg [AXI_DATA_WIDTH-1:0] read_data_reg = {AXI_DATA_WIDTH{1'b0}};
 reg [2:0] icap_word_index_reg = 3'd0;
-// The reconf read path holds exactly one HBM beat at a time: fetch 32 bytes,
-// serialize up to eight ICAP words out of it, fetch the next. No buffering
-// between the memory and the ICAP beyond this register.
-reg [AXI_DATA_WIDTH-1:0] reconf_beat_data_reg = {AXI_DATA_WIDTH{1'b0}};
-reg [3:0] reconf_beat_words_reg = 4'd0;
-reg [31:0] wait_done_cycles_reg = 32'd0;
 reg [7:0] status_reg = ERR_OK;
 reg reconf_active_reg = 1'b0;
 reg [7:0] active_slot_id_reg = 8'd0;
 reg [7:0] last_slot_id_reg = 8'd0;
 reg [63:0] reconf_cycles_reg = 64'd0;
 reg [63:0] last_reconf_cycles_reg = 64'd0;
-reg icap_pr_done_prev_reg = 1'b0;
 reg icap_pr_done_seen_reg = 1'b0;
 reg icap_pr_err_seen_reg = 1'b0;
 
@@ -171,19 +159,9 @@ assign m_axi_awsize = 3'd5;
 assign m_axi_awburst = 2'b01;
 assign m_axi_wdata_parity = {(AXI_DATA_WIDTH/8){1'b0}};
 assign m_axi_arid = 6'd0;
+assign m_axi_arlen = 8'd0;
 assign m_axi_arsize = 3'd5;
 assign m_axi_arburst = 2'b01;
-
-function [3:0] reconf_beat_words_for_remaining;
-    input [63:0] word_count;
-begin
-    if (word_count > 64'd8) begin
-        reconf_beat_words_for_remaining = 4'd8;
-    end else begin
-        reconf_beat_words_for_remaining = word_count[3:0];
-    end
-end
-endfunction
 
 function [AXI_DATA_WIDTH/8-1:0] strobe_for_bytes;
     input [5:0] byte_count;
@@ -352,7 +330,6 @@ always @(posedge clk) begin
         m_axi_wvalid <= 1'b0;
         m_axi_bready <= 1'b0;
         m_axi_araddr <= {ADDR_WIDTH{1'b0}};
-        m_axi_arlen <= 8'd0;
         m_axi_arvalid <= 1'b0;
         m_axi_rready <= 1'b0;
         current_addr_reg <= {ADDR_WIDTH{1'b0}};
@@ -362,10 +339,8 @@ always @(posedge clk) begin
         line_bytes_reg <= 7'd0;
         half_select_reg <= 1'b0;
         read_response_reg <= {AXIS_DATA_WIDTH{1'b0}};
+        read_data_reg <= {AXI_DATA_WIDTH{1'b0}};
         icap_word_index_reg <= 3'd0;
-        reconf_beat_data_reg <= {AXI_DATA_WIDTH{1'b0}};
-        reconf_beat_words_reg <= 4'd0;
-        wait_done_cycles_reg <= 32'd0;
         status_reg <= ERR_OK;
         last_error <= ERR_OK;
         reconf_active_reg <= 1'b0;
@@ -373,19 +348,12 @@ always @(posedge clk) begin
         last_slot_id_reg <= 8'd0;
         reconf_cycles_reg <= 64'd0;
         last_reconf_cycles_reg <= 64'd0;
-        icap_pr_done_prev_reg <= 1'b0;
         icap_pr_done_seen_reg <= 1'b0;
         icap_pr_err_seen_reg <= 1'b0;
     end else begin
-        // ICAPE3 PRDONE idles HIGH and only drops once the device has accepted
-        // the header of a partial. Sampling the level therefore reports done
-        // before anything happened; only a rising edge after the command
-        // started means a reconfiguration completed.
-        icap_pr_done_prev_reg <= icap_pr_done;
-
         if (reconf_active_reg) begin
             reconf_cycles_reg <= reconf_cycles_reg + 64'd1;
-            if (icap_pr_done && !icap_pr_done_prev_reg) begin
+            if (icap_pr_done) begin
                 icap_pr_done_seen_reg <= 1'b1;
             end
             if (icap_pr_err) begin
@@ -405,7 +373,6 @@ always @(posedge clk) begin
                 m_axi_wlast <= 1'b0;
                 m_axi_bready <= 1'b0;
                 m_axi_arvalid <= 1'b0;
-                m_axi_arlen <= 8'd0;
                 m_axi_rready <= 1'b0;
 
                 if (s_axis_tvalid && s_axis_tready) begin
@@ -441,7 +408,6 @@ always @(posedge clk) begin
                         current_addr_reg <= cmd_addr[ADDR_WIDTH-1:0];
                         icap_words_remaining_reg <= {2'd0, cmd_size[63:2]};
                         icap_word_index_reg <= 3'd0;
-                        wait_done_cycles_reg <= 32'd0;
                         active_slot_id_reg <= cmd_slot_id;
                         reconf_cycles_reg <= 64'd0;
                         reconf_active_reg <= 1'b1;
@@ -511,7 +477,6 @@ always @(posedge clk) begin
 
             STATE_READ_ADDR_0: begin
                 m_axi_araddr <= current_addr_reg;
-                m_axi_arlen <= 8'd0;
                 m_axi_arvalid <= 1'b1;
 
                 if (m_axi_arvalid && m_axi_arready) begin
@@ -547,7 +512,6 @@ always @(posedge clk) begin
 
             STATE_READ_ADDR_1: begin
                 m_axi_araddr <= current_addr_reg + ADDR_INCR_32;
-                m_axi_arlen <= 8'd0;
                 m_axi_arvalid <= 1'b1;
 
                 if (m_axi_arvalid && m_axi_arready) begin
@@ -584,14 +548,8 @@ always @(posedge clk) begin
                 end
             end
 
-            // One beat per read, one outstanding read, no buffering: ADDR
-            // issues a single-beat AR, DATA latches the beat, STREAM serializes
-            // it into the ICAP and loops back to ADDR for the next 32 bytes.
-            // Slower than burst reads, but every transfer is observable and
-            // there is no queue to reason about.
             STATE_RECONF_ADDR: begin
                 m_axi_araddr <= current_addr_reg;
-                m_axi_arlen <= 8'd0;
                 m_axi_arvalid <= 1'b1;
 
                 if (m_axi_arvalid && m_axi_arready) begin
@@ -606,15 +564,13 @@ always @(posedge clk) begin
                     m_axi_rready <= 1'b0;
 
                     if (m_axi_rresp != 2'b00) begin
-                        finish_reconf(ERR_AXI_RRESP);
+                        start_status(ERR_AXI_RRESP);
                     end else if (!m_axi_rlast) begin
-                        finish_reconf(ERR_RLAST);
+                        start_status(ERR_RLAST);
                     end else begin
-                        reconf_beat_data_reg <= m_axi_rdata;
-                        reconf_beat_words_reg <= reconf_beat_words_for_remaining(icap_words_remaining_reg);
-                        current_addr_reg <= current_addr_reg + ADDR_INCR_32;
+                        read_data_reg <= m_axi_rdata;
                         icap_word_index_reg <= 3'd0;
-                        m_axis_icap_tdata <= select_icap_word(m_axi_rdata, 3'd0);
+                        m_axis_icap_tdata <= m_axi_rdata[31:0];
                         m_axis_icap_tlast <= icap_words_remaining_reg == 64'd1;
                         m_axis_icap_tvalid <= 1'b1;
                         state_reg <= STATE_RECONF_STREAM;
@@ -629,29 +585,29 @@ always @(posedge clk) begin
                         m_axis_icap_tvalid <= 1'b0;
                         m_axis_icap_tlast <= 1'b0;
                         state_reg <= STATE_RECONF_WAIT_DONE;
-                    end else if ({1'b0, icap_word_index_reg} + 4'd1 == reconf_beat_words_reg) begin
-                        icap_words_remaining_reg <= icap_words_remaining_reg - 64'd1;
-                        m_axis_icap_tvalid <= 1'b0;
-                        m_axis_icap_tlast <= 1'b0;
-                        state_reg <= STATE_RECONF_ADDR;
                     end else begin
                         icap_words_remaining_reg <= icap_words_remaining_reg - 64'd1;
-                        icap_word_index_reg <= icap_word_index_reg + 3'd1;
-                        m_axis_icap_tdata <= select_icap_word(reconf_beat_data_reg, icap_word_index_reg + 3'd1);
-                        m_axis_icap_tlast <= icap_words_remaining_reg == 64'd2;
+
+                        if (icap_word_index_reg == 3'd7) begin
+                            current_addr_reg <= current_addr_reg + ADDR_INCR_32;
+                            icap_word_index_reg <= 3'd0;
+                            m_axis_icap_tvalid <= 1'b0;
+                            m_axis_icap_tlast <= 1'b0;
+                            state_reg <= STATE_RECONF_ADDR;
+                        end else begin
+                            icap_word_index_reg <= icap_word_index_reg + 3'd1;
+                            m_axis_icap_tdata <= select_icap_word(read_data_reg, icap_word_index_reg + 3'd1);
+                            m_axis_icap_tlast <= icap_words_remaining_reg == 64'd2;
+                        end
                     end
                 end
             end
 
             STATE_RECONF_WAIT_DONE: begin
-                wait_done_cycles_reg <= wait_done_cycles_reg + 32'd1;
-
                 if (icap_pr_err || icap_pr_err_seen_reg) begin
                     finish_reconf(ERR_ICAP);
-                end else if (icap_pr_done_seen_reg) begin
+                end else if (icap_pr_done || icap_pr_done_seen_reg) begin
                     finish_reconf(ERR_OK);
-                end else if (wait_done_cycles_reg >= PR_DONE_TIMEOUT_CYCLES) begin
-                    finish_reconf(ERR_PR_TIMEOUT);
                 end
             end
 

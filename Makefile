@@ -88,7 +88,6 @@ RTL_FILES += kernels/network_krnl/rtl/mem_single_inf.sv
 #user krnl
 RTL_FILES += kernels/user_krnl/reassembly/rtl/user_krnl.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_fifo_taxi.sv
-RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_frame_fifo_taxi.sv
 RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_data_fifo_replacements.sv
 RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_register.v
 RTL_FILES += kernels/user_krnl/reassembly/rtl/axis_pipeline_register.v
