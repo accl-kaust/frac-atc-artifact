@@ -5,6 +5,13 @@
 // The static design instantiates one of these per reconfigurable slot.  The
 // corresponding RM unit top exposes the same flat AXIS boundary but provides
 // the real implementation during out-of-context synthesis.
+//
+// tdata carries the upstream offrac workload interface (echo_workload.v)
+// flattened onto one stream, in both directions:
+//   tdata[544:513] = meta_TDATA / meta_TDATA_out   {tcp_len[15:0], session_id[15:0]}
+//   tdata[512]     = tlast, in-band (the tlast line duplicates it)
+//   tdata[511:0]   = payload
+// The parameter defaults equal the instantiation in pkt_logic.v.
 
 `resetall
 `timescale 1ns / 1ps
@@ -12,10 +19,10 @@
 
 (* DONT_TOUCH = "yes" *)
 module cell_bbx #(
-    parameter int AXIS_DATA_W = 8,
+    parameter int AXIS_DATA_W = 512 + 1 + 32,
     parameter int KEEP_W      = 1,
-    parameter int TDEST_W     = 3,
-    parameter int TID_W       = 4,
+    parameter int TDEST_W     = 1,
+    parameter int TID_W       = 1,
     parameter int USER_W      = 1
 ) (
     input  wire                   clk,
