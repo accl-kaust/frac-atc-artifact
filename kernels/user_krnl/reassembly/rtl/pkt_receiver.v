@@ -42,7 +42,11 @@ module pkt_receiver (
         input wire                pkt_tx_tready
     );
 
-    localparam [15:0] MAX_PACKET_BYTES = 16'd512;
+    // Longest TCP segment accepted; longer notifications are dropped without
+    // a read_package.  A request may be larger than this: the scheduler
+    // reassembles it across segments up to the header's declared size.  A
+    // 4096-byte segment is 64 beats; every FIFO on the path holds 512.
+    localparam [15:0] MAX_PACKET_BYTES = 16'd4096;
 
     wire [87:0] notif_tx_tdata;
     wire        notif_tx_tvalid;

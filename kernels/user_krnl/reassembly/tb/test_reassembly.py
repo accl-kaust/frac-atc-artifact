@@ -12,8 +12,11 @@ from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStrea
 
 
 BYTE_LANES = 64
-MAX_PACKET_BYTES = 512      # pkt_receiver.v MAX_PACKET_BYTES: longest TCP segment accepted
-MAX_REQUEST_BYTES = 4096    # the largest request the deployment sends (header line included)
+MAX_PACKET_BYTES = 4096     # pkt_receiver.v MAX_PACKET_BYTES: longest TCP segment accepted
+# A request may span several segments; the scheduler holds a multi-segment
+# request in a 512-beat queue FIFO until its declared size has arrived, and
+# pkt_sender holds the whole response in a 512-beat FIFO before announcing it.
+MAX_REQUEST_BYTES = 512 * BYTE_LANES
 RECONF_APP = 0x00AB
 OP_WRITE_HBM = 1
 OP_READ_HBM = 2
@@ -391,20 +394,20 @@ async def run_back_to_back_three_line_requests(dut, workload_id, expected):
         assert_keep_all(data_frame, len(expected_payload))
 
 
-def segment_request(request, header_alone):
+def segment_request(request, segment_bytes, header_alone):
     """
-    Split a request into the TCP segments pkt_receiver.v accepts (64-byte
-    multiples, at most MAX_PACKET_BYTES each).  header_alone is what sw/app
-    sends: the header line as its own segment, then MAX_PACKET_BYTES of data
-    per segment.  Otherwise the request is cut into MAX_PACKET_BYTES segments
-    with the header inside the first one.
+    Split a request into TCP segments of segment_bytes (64-byte multiples, at
+    most MAX_PACKET_BYTES, which pkt_receiver.v enforces).  header_alone is
+    what sw/app sends: the header line as its own segment, then segment_bytes
+    of data per segment.  Otherwise the request is cut into segment_bytes
+    segments with the header inside the first one.
     """
     if header_alone:
         segments = [request[:BYTE_LANES]]
         data = request[BYTE_LANES:]
-        segments += [data[o:o + MAX_PACKET_BYTES] for o in range(0, len(data), MAX_PACKET_BYTES)]
+        segments += [data[o:o + segment_bytes] for o in range(0, len(data), segment_bytes)]
     else:
-        segments = [request[o:o + MAX_PACKET_BYTES] for o in range(0, len(request), MAX_PACKET_BYTES)]
+        segments = [request[o:o + segment_bytes] for o in range(0, len(request), segment_bytes)]
     for segment in segments:
         assert BYTE_LANES <= len(segment) <= MAX_PACKET_BYTES and len(segment) % BYTE_LANES == 0
     return segments
@@ -425,66 +428,77 @@ async def send_segments(tb, segments, conn_id):
         await tb.send_rx_payload(segment)
 
 
-async def run_segmented_echo_request(tb, total_bytes, header_alone, conn_id):
+async def run_segmented_echo_request(tb, total_bytes, segment_bytes, header_alone, conn_id):
     """
     The echo returns every beat, so the response is the whole request and the
-    response metadata names its full size -- not the size of the TCP segment
-    the last beat arrived in.  Every FIFO on the path has to hold the request:
-    the scheduler releases a multi-packet request only once it is complete,
-    and pkt_sender emits the tx metadata only once the response's last beat is
-    in its payload FIFO.
+    response metadata names its declared size -- not the size of the TCP
+    segment the last beat arrived in.  Every FIFO on the path has to hold the
+    request: the scheduler releases a multi-segment request only once its
+    declared size has arrived, and pkt_sender emits the tx metadata only once
+    the response's last beat is in its payload FIFO.
     """
     request = build_echo_request(total_bytes, conn_id)
-    await send_segments(tb, segment_request(request, header_alone), conn_id)
+    segments = segment_request(request, segment_bytes, header_alone)
+    await send_segments(tb, segments, conn_id)
     await tb.send_tx_status_ok()
 
-    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 200, "us")
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 400, "us")
 
-    assert frame_to_int(metadata_frame) == response_metadata(conn_id, total_bytes)
-    assert bytes(data_frame.tdata) == request
+    assert frame_to_int(metadata_frame) == response_metadata(conn_id, total_bytes), (
+        f"{total_bytes}B in {len(segments)} segments of {segment_bytes}B: meta {frame_to_int(metadata_frame):#010x}")
+    assert bytes(data_frame.tdata) == request, (
+        f"{total_bytes}B in {len(segments)} segments of {segment_bytes}B: {len(data_frame.tdata)}B back")
     assert_keep_all(data_frame, total_bytes)
     await tb.expect_no_response()
 
 
 @cocotb.test()
-async def test_max_request_echo_header_segment_then_max_segments(dut):
-    """4096 bytes as sw/app frames it: a 64-byte header segment, then 512-byte segments."""
+async def test_echo_request_in_one_max_segment(dut):
+    """A 4096-byte request in a single 4096-byte segment, the longest pkt_receiver accepts."""
     tb = TB(dut)
     await tb.reset()
-    await run_segmented_echo_request(tb, MAX_REQUEST_BYTES, header_alone=True, conn_id=0x6100)
+    await run_segmented_echo_request(tb, MAX_PACKET_BYTES, MAX_PACKET_BYTES, header_alone=False, conn_id=0x6100)
+    await run_segmented_echo_request(tb, MAX_PACKET_BYTES, MAX_PACKET_BYTES, header_alone=True, conn_id=0x6101)
 
 
 @cocotb.test()
-async def test_max_request_echo_in_max_segments(dut):
-    """4096 bytes as eight 512-byte segments, the header inside the first."""
+async def test_echo_request_larger_than_a_segment(dut):
+    """
+    Requests declared larger than one segment, delivered in 4096-byte
+    segments and reassembled by the scheduler: 8192, 16384 and the 32768
+    bytes that fill a 512-beat queue FIFO exactly.
+    """
     tb = TB(dut)
     await tb.reset()
-    await run_segmented_echo_request(tb, MAX_REQUEST_BYTES, header_alone=False, conn_id=0x6101)
+    for total_bytes in [2 * MAX_PACKET_BYTES, 4 * MAX_PACKET_BYTES, MAX_REQUEST_BYTES]:
+        await run_segmented_echo_request(tb, total_bytes, MAX_PACKET_BYTES, header_alone=False, conn_id=0x6110)
+        await run_segmented_echo_request(tb, total_bytes, MAX_PACKET_BYTES, header_alone=True, conn_id=0x6111)
 
 
 @cocotb.test()
-async def test_echo_request_sizes_up_to_max(dut):
-    """Multi-segment echo requests of every shape between two lines and the 4096-byte cap, back to back on one connection."""
+async def test_echo_request_4096_in_1024B_segments(dut):
+    """4096 bytes as 4 x 1024, and as a header segment plus 1024/1024/1024/960."""
     tb = TB(dut)
     await tb.reset()
-    for total_bytes in [128, 512, 576, 1024, 2048, 4032, MAX_REQUEST_BYTES]:
-        await run_segmented_echo_request(tb, total_bytes, header_alone=True, conn_id=0x6200)
-        await run_segmented_echo_request(tb, total_bytes, header_alone=False, conn_id=0x6201)
+    await run_segmented_echo_request(tb, 4096, 1024, header_alone=False, conn_id=0x6120)
+    await run_segmented_echo_request(tb, 4096, 1024, header_alone=True, conn_id=0x6121)
 
 
 @cocotb.test()
-async def test_max_request_single_segment_is_rejected(dut):
-    """A 4096-byte request in one TCP segment exceeds MAX_PACKET_BYTES and is dropped at pkt_receiver."""
+async def test_echo_request_sizes_in_512B_segments(dut):
+    """Requests of every shape between two lines and 4096 bytes in 512-byte segments (sw/app's framing), back to back on one connection."""
     tb = TB(dut)
     await tb.reset()
-    await tb.expect_notification_rejected(TcpNotification(length=MAX_REQUEST_BYTES, conn_id=0x6300))
+    for total_bytes in [128, 512, 576, 1024, 2048, 4032, 4096]:
+        await run_segmented_echo_request(tb, total_bytes, 512, header_alone=True, conn_id=0x6200)
+        await run_segmented_echo_request(tb, total_bytes, 512, header_alone=False, conn_id=0x6201)
 
 
 @cocotb.test(expect_fail=True)
 async def test_two_connections_interleaved_max_requests(dut):
     """
     Two connections, both 4096 bytes, their 512-byte segments arriving
-    alternately with no idle cycle between them at the scheduler input.
+    alternately, back to back at the scheduler input.
 
     KNOWN FAILURE on this branch.  The scheduler raises input_tvalid for the
     queue a beat belongs to but never lowers the other queues', so while one
@@ -498,8 +512,8 @@ async def test_two_connections_interleaved_max_requests(dut):
     tb = TB(dut)
     await tb.reset()
     conns = [0x6400, 0x6401]
-    requests = {conn_id: build_echo_request(MAX_REQUEST_BYTES, conn_id) for conn_id in conns}
-    segments = {conn_id: segment_request(requests[conn_id], header_alone=True) for conn_id in conns}
+    requests = {conn_id: build_echo_request(4096, conn_id) for conn_id in conns}
+    segments = {conn_id: segment_request(requests[conn_id], 512, header_alone=True) for conn_id in conns}
     for idx in range(len(segments[conns[0]])):
         for conn_id in conns:
             await send_segments(tb, [segments[conn_id][idx]], conn_id)
@@ -510,9 +524,9 @@ async def test_two_connections_interleaved_max_requests(dut):
         metadata_frame, data_frame = await with_timeout(tb.recv_response(), 400, "us")
         meta = frame_to_int(metadata_frame)
         conn_id = meta & 0xffff
-        assert meta == response_metadata(conn_id, MAX_REQUEST_BYTES)
+        assert meta == response_metadata(conn_id, 4096)
         assert bytes(data_frame.tdata) == requests[conn_id], (
-            f"conn {conn_id:#x}: {len(data_frame.tdata)} bytes back for a {MAX_REQUEST_BYTES}-byte request")
+            f"conn {conn_id:#x}: {len(data_frame.tdata)} bytes back for a 4096-byte request")
     await tb.expect_no_response()
 
 
