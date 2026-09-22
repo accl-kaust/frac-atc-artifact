@@ -20,6 +20,10 @@
 //   tx_data_TVALID / tx_data_TREADY   m_axis_tvalid / m_axis_tready
 //   meta_TVALID_out                   implied: meta is read on the tlast beat
 //
+// meta_TDATA[31:16] is the size of the whole request in bytes (see
+// pattern_slot.v).  One response beat per request beat, so the meta goes out
+// unchanged and names the response length.
+//
 // workload_selection is not needed: pkt_logic.v only steers this slot's own
 // requests onto s_axis.  The parameter defaults must match the cell_bbx
 // instantiation in pkt_logic.v (c00_bbx_inst / c01_bbx_inst).

@@ -13,6 +13,12 @@ shared subtract core and a divide by the per-request constant (max - min).
   data beats           : 16 x 32-bit IEEE-754 singles, little-endian word order.
   response             : one beat per input data line, y[i] in word i, tlast on
                          the beat for the request's last line.
+  slot boundary        : tdata = {meta[31:0], tlast, payload[511:0]}, 545 bits.
+                         Request meta is {request size, session}, the size
+                         being the header's packet_size for the whole request;
+                         the last response beat carries {response bytes,
+                         session} -- the request size less the header line --
+                         which pkt_sender hands the TCP stack as the tx metadata.
 
 WHAT THIS VERIFIES.  The real cores are not in the repo (regenerate them with
 src/ip/gen_ip.tcl), so this runs against tb/fp_stubs.v, which applies
@@ -80,6 +86,76 @@ NORM_LINE_CYCLES = WORDS_PER_LINE + FP_SUB_LATENCY + FP_DIV_LATENCY + 2
 
 CLK_PERIOD_NS = 4
 DUT_FLUSH_CYCLES = 128                      # norm.v default
+
+
+# ------------------------------------------------------ slot boundary beats
+#
+# The slot's tdata is the upstream offrac workload interface flattened onto one
+# AXI-Stream (see ../src/rtl/norm.v): {meta[31:0], tlast, payload[511:0]}, 545
+# bits, one beat per 64-byte line.  cocotbext-axi sees a one-lane bus of
+# 545-bit "bytes", so a frame's tdata is a list of ints, one per beat.
+
+PAYLOAD_W = 512
+META_W = 32
+TLAST_BIT = PAYLOAD_W
+META_SHIFT = PAYLOAD_W + 1
+PAYLOAD_MASK = (1 << PAYLOAD_W) - 1
+
+SESSION = 0x1234        # default session id; varied where it matters
+
+
+def slot_meta(length, session):
+    """meta = {length[15:0], session[15:0]}."""
+    return ((length & 0xffff) << 16) | (session & 0xffff)
+
+
+def pack_beats(payload, session=SESSION, req_bytes=None):
+    """
+    Split a byte payload into slot beats, in-band tlast on the last one.  The
+    request meta is {request size, session}: the scheduler puts the header's
+    packet_size -- the size of the whole request, header line included -- in
+    the length field of every beat (scheduler.v rx_req_size), so that is what
+    the slot derives its response meta from.
+    """
+    lines = [payload[i:i+BYTE_LANES] for i in range(0, len(payload), BYTE_LANES)]
+    if req_bytes is None:
+        req_bytes = len(payload)
+    return [(slot_meta(req_bytes, session) << META_SHIFT)
+            | (int(i == len(lines) - 1) << TLAST_BIT)
+            | int.from_bytes(line, "little")
+            for i, line in enumerate(lines)]
+
+
+def beat_payload(beat):
+    return (beat & PAYLOAD_MASK).to_bytes(BYTE_LANES, "little")
+
+
+def beat_tlast(beat):
+    return (beat >> TLAST_BIT) & 1
+
+
+def beat_meta(beat):
+    return (beat >> META_SHIFT) & ((1 << META_W) - 1)
+
+
+def frame_payload(frame):
+    return b"".join(beat_payload(beat) for beat in frame.tdata)
+
+
+def check_response_meta(frame, response_bytes, session=SESSION):
+    """
+    In-band tlast only on the final beat, and that beat's meta is
+    {response bytes, session}: pkt_sender hands it to the TCP stack as the tx
+    metadata, so a wrong length there truncates or stalls the reply on the
+    board.  Nothing reads the meta of earlier beats, so they are not checked.
+    """
+    lasts = [beat_tlast(beat) for beat in frame.tdata]
+    assert lasts == [0] * (len(lasts) - 1) + [1], f"in-band tlast per beat: {lasts}"
+    got = beat_meta(frame.tdata[-1])
+    want = slot_meta(response_bytes, session)
+    assert got == want, (
+        f"response meta {got:#010x}, want {want:#010x} (length {got >> 16} vs "
+        f"{response_bytes}, session {got & 0xffff:#06x} vs {session:#06x})")
 
 
 def response_timeout_ns(line_count):
@@ -205,7 +281,7 @@ class TB:
 
         # tstrb is not part of AxiStreamBus and the slot ignores it -- drive it
         # anyway so the input side is never X.
-        dut.s_axis_tstrb.setimmediatevalue(2**BYTE_LANES - 1)
+        dut.s_axis_tstrb.setimmediatevalue(1)   # KEEP_W = 1: one 545-bit lane
 
         self.max_lines = dut_max_lines(dut)
         self.log.info("MAX_LINES = %d", self.max_lines)
@@ -226,20 +302,22 @@ class TB:
         self.dut.rst.value = 0
         await wait_cycles(self.dut, 2)
 
-    async def send_request(self, values, header=False, **frame_kwargs):
+    async def send_request(self, values, header=False, session=SESSION, **frame_kwargs):
         payload, sent = build_request(values, header)
-        await self.source.send(AxiStreamFrame(payload, **frame_kwargs))
+        await self.source.send(AxiStreamFrame(pack_beats(payload, session), **frame_kwargs))
         return sent
 
-    async def recv_response(self, line_count):
+    async def recv_response(self, line_count, session=SESSION):
         frame = await with_timeout(self.sink.recv(), response_timeout_ns(line_count), "ns")
         # one frame means tlast fired exactly once, on the final beat
-        assert len(frame.tdata) == line_count * BYTE_LANES, (
-            f"expected {line_count} response beats, got {len(frame.tdata) / BYTE_LANES}")
+        assert len(frame.tdata) == line_count, (
+            f"expected {line_count} response beats, got {len(frame.tdata)}")
+        # one response line per data line: the request size less the header
+        check_response_meta(frame, line_count * BYTE_LANES, session)
         return frame
 
     def check(self, frame, sent):
-        got = unpack_words(frame.tdata)
+        got = unpack_words(frame_payload(frame))
         want = reference_response(sent)
         if got != want:
             vmin, vmax = reference_min_max(sent)
@@ -250,9 +328,9 @@ class TB:
                 f"(dut range low half {got[bad] & 0xffff:#06x}, "
                 f"expected {(vmax - vmin) & 0xffff:#06x})")
 
-    async def run_request(self, values, header=False, **frame_kwargs):
-        sent = await self.send_request(values, header, **frame_kwargs)
-        frame = await self.recv_response(len(sent) // WORDS_PER_LINE)
+    async def run_request(self, values, header=False, session=SESSION, **frame_kwargs):
+        sent = await self.send_request(values, header, session, **frame_kwargs)
+        frame = await self.recv_response(len(sent) // WORDS_PER_LINE, session)
         self.check(frame, sent)
         return frame
 
@@ -423,7 +501,7 @@ async def run_test_range_is_constant(dut):
     tb.check(frame, sent)
 
     vmin, vmax = reference_min_max(sent)
-    lows = {w & 0xffff for w in unpack_words(frame.tdata)}
+    lows = {w & 0xffff for w in unpack_words(frame_payload(frame))}
     assert lows == {(vmax - vmin) & 0xffff}, f"range not constant across the request: {lows}"
 
     assert tb.sink.empty()
@@ -443,7 +521,7 @@ async def run_test_all_equal(dut):
     frame = await tb.recv_response(1)
     tb.check(frame, sent)
 
-    assert all(w & 0xffff == 0 for w in unpack_words(frame.tdata))
+    assert all(w & 0xffff == 0 for w in unpack_words(frame_payload(frame)))
 
     assert tb.sink.empty()
     await wait_cycles(dut, 2)
@@ -466,7 +544,7 @@ async def run_test_word_order(dut):
     tb.check(frame, sent)
 
     vmin, _ = reference_min_max(sent)
-    words = unpack_words(frame.tdata)
+    words = unpack_words(frame_payload(frame))
     assert words[0] >> 16 == ((values[0] - vmin) & VALUE_MAX) & 0xffff
     assert words[-1] >> 16 == ((values[-1] - vmin) & VALUE_MAX) & 0xffff
     assert words != sorted(words), "vector too weak: a sort would be invisible"
@@ -513,16 +591,16 @@ async def run_test_sideband(dut):
 
     for tid, tdest, tuser in [(1, 1, 0), (id_count - 1, dest_count - 1, 1), (0, 0, 0)]:
         payload, sent = build_request(random_values(lines * WORDS_PER_LINE), header=True)
-        beats = len(payload) // BYTE_LANES
+        beats = pack_beats(payload)
 
         # the intended sideband is on the first beat only; every later beat
         # carries something else, which the slot must ignore
         other = ((tid + 1) % id_count, (tdest + 1) % dest_count, tuser ^ 1)
         await tb.source.send(AxiStreamFrame(
-            payload,
-            tid=[tid] * BYTE_LANES + [other[0]] * BYTE_LANES * (beats - 1),
-            tdest=[tdest] * BYTE_LANES + [other[1]] * BYTE_LANES * (beats - 1),
-            tuser=[tuser] * BYTE_LANES + [other[2]] * BYTE_LANES * (beats - 1),
+            beats,
+            tid=[tid] + [other[0]] * (len(beats) - 1),
+            tdest=[tdest] + [other[1]] * (len(beats) - 1),
+            tuser=[tuser] + [other[2]] * (len(beats) - 1),
         ))
 
         frame = await tb.recv_response(lines)
@@ -531,6 +609,37 @@ async def run_test_sideband(dut):
         assert sideband(frame.tid) == tid
         assert sideband(frame.tdest) == tdest
         assert sideband(frame.tuser) == tuser
+
+    assert tb.sink.empty()
+    await wait_cycles(dut, 2)
+
+
+async def run_test_response_meta(dut):
+    """
+    The last response beat's meta is {response bytes, session}, both taken
+    from the request's meta: the session as is, the length as the request size
+    less the header line when the request had one (one response line per data
+    line).  The slot does not count beats -- a request whose declared size
+    disagrees with its beats is reported at the declared size.
+    """
+    tb = TB(dut)
+    await tb.reset()
+
+    for session in [0x0000, 0x0001, 0xabcd, 0xffff]:
+        for header in [True, False]:
+            for lines in [1, min(3, tb.max_lines)]:
+                sent = await tb.send_request(random_values(lines * WORDS_PER_LINE), header, session)
+                frame = await tb.recv_response(lines, session)
+                tb.check(frame, sent)
+
+    # declared size is the source of truth: 3 data lines declared, 2 sent
+    lines = min(2, tb.max_lines)
+    payload, sent = build_request(random_values(lines * WORDS_PER_LINE), header=True)
+    await tb.source.send(AxiStreamFrame(pack_beats(payload, req_bytes=(lines + 2) * BYTE_LANES)))
+    frame = await with_timeout(tb.sink.recv(), response_timeout_ns(lines), "ns")
+    assert len(frame.tdata) == lines
+    check_response_meta(frame, (lines + 1) * BYTE_LANES)
+    tb.check(frame, sent)
 
     assert tb.sink.empty()
     await wait_cycles(dut, 2)
@@ -723,12 +832,13 @@ async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
         header = random.choice([True, False])
         tid = random.randrange(id_count)
         tdest = random.randrange(dest_count)
+        session = random.randrange(0x10000)
 
-        sent = await tb.send_request(values, header, tid=tid, tdest=tdest)
-        pending.append((sent, lines, tid, tdest))
+        sent = await tb.send_request(values, header, session, tid=tid, tdest=tdest)
+        pending.append((sent, lines, tid, tdest, session))
 
-    for sent, lines, tid, tdest in pending:
-        frame = await tb.recv_response(lines)
+    for sent, lines, tid, tdest, session in pending:
+        frame = await tb.recv_response(lines, session)
         tb.check(frame, sent)
         assert sideband(frame.tid) == tid
         assert sideband(frame.tdest) == tdest
@@ -766,6 +876,7 @@ if getattr(cocotb, 'top', None) is not None:
                 run_test_all_equal,
                 run_test_word_order,
                 run_test_sideband,
+                run_test_response_meta,
                 run_test_response_held,
                 run_test_timing,
                 run_test_buffer_limit,

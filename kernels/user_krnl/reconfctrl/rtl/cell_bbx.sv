@@ -8,7 +8,9 @@
 //
 // tdata carries the upstream offrac workload interface (echo_workload.v)
 // flattened onto one stream, in both directions:
-//   tdata[544:513] = meta_TDATA / meta_TDATA_out   {tcp_len[15:0], session_id[15:0]}
+//   tdata[544:513] = meta_TDATA      {request_bytes[15:0], session_id[15:0]}
+//                    meta_TDATA_out  {response_bytes[15:0], session_id[15:0]}, read
+//                    by pkt_sender from the beat that carries tlast
 //   tdata[512]     = tlast, in-band (the tlast line duplicates it)
 //   tdata[511:0]   = payload
 // The parameter defaults equal the instantiation in pkt_logic.v.

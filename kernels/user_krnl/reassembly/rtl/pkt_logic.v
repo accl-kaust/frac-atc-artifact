@@ -86,7 +86,7 @@ module pkt_logic #(
     );
 
     wire [512:0] app_rx_payload = scheduler_tdata[512:0];
-    wire [31:0]  app_rx_meta = scheduler_tdata[512+32:512+1]; // {tcp_len[15:0], session_id[15:0]} = upstream meta_TDATA
+    wire [31:0]  app_rx_meta = scheduler_tdata[512+32:512+1]; // {request_bytes[15:0], session_id[15:0]}: upstream meta_TDATA with the whole request's size in the length field (see scheduler.v rx_req_size)
     wire [15:0]  app_rx_workload = scheduler_tdata[512+32+16:512+32+1];
     wire         app_rx_req_last = scheduler_tdata[512+32+16+16+1];
 
@@ -370,14 +370,18 @@ module pkt_logic #(
     // echo_workload.v), with the workload ports flattened onto one
     // AXI-Stream so the PR cell keeps a single flat AXIS boundary:
     //
-    //   tdata[544:513] = meta_TDATA      {tcp_len[15:0], session_id[15:0]}
+    //   tdata[544:513] = meta_TDATA      {request_bytes[15:0], session_id[15:0]}
     //   tdata[512]     = rx_TDATA[512]   tlast, in-band (tlast line duplicates it)
     //   tdata[511:0]   = rx_TDATA[511:0] payload
     //
+    // meta_TDATA[31:16] is the size of the whole request (the header's
+    // packet_size, put there by the scheduler), not the TCP packet's length
+    // as upstream had it, so the slot can take the request length from meta.
     // Every beat of a request enters the slot.  Every beat the slot emits is
     // already {meta_TDATA_out, tlast, payload}, the format the output switch
     // and pkt_sender consume, so it is forwarded as-is (upstream pushes the
-    // same word into the per-workload result FIFO).
+    // same word into the per-workload result FIFO); pkt_sender takes the meta
+    // of the beat carrying tlast as the TCP tx metadata {length, session}.
     // ------------------------------------------------------------------
     localparam integer SLOT_DATA_W = 512 + 1 + 32;
 

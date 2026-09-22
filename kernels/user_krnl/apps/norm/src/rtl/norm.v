@@ -39,19 +39,33 @@
 // Remaining IP: floating_point_0 (Add_Subtract), floating_point_3 (Divide).
 //
 // Request format: 16 x 32-bit values per 512-bit line, little-endian word
-// order; s_axis_tlast marks the final line. A leading all-ones header line is
+// order; tlast marks the final line. A leading all-ones header line is
 // consumed and ignored, as before.
 // Response: one beat per input line, y[i] in word i.
+//
+// Slot boundary, the same as pattern_slot.v / or_slot.v (the upstream offrac
+// workload ports flattened onto one AXI-Stream), in both directions:
+//   tdata[544:513] = meta      request: {request_bytes, session}  (meta_TDATA)
+//                              response: {resp_bytes, session} (meta_TDATA_out)
+//   tdata[512]     = tlast, in-band (the tlast line duplicates it)
+//   tdata[511:0]   = payload
+// meta_TDATA[31:16] is the size of the whole request (the header's
+// packet_size, put there by the scheduler; see scheduler.v rx_req_size).
+// pkt_sender takes the meta of the response beat that carries tlast as the
+// TCP tx metadata, so resp_bytes must be the number of bytes in the response:
+// one line per data line, i.e. the request size less the header line when the
+// request had one.  Both fields come from the request's meta; nothing is
+// counted here, as in pattern_slot.v, which forwards the meta unchanged.
 //
 // NOTE: the original packed results in REVERSE word order (it left-shifted the
 // accumulator and inserted at [31:0]). This emits y[i] in word i.
 //
 (* DONT_TOUCH = "yes" *)
 module norm #(
-    parameter integer AXIS_DATA_W = 512,
-    parameter integer KEEP_W      = AXIS_DATA_W/8,
-    parameter integer TDEST_W     = 3,
-    parameter integer TID_W       = 4,
+    parameter integer AXIS_DATA_W = 512 + 1 + 32,  // {meta, tlast, payload}
+    parameter integer KEEP_W      = 1,
+    parameter integer TDEST_W     = 1,
+    parameter integer TID_W       = 1,
     parameter integer USER_W      = 1,
     parameter integer VALUE_W     = 32,
     parameter integer MAX_LINES   = 256,        // request replay depth, in lines
@@ -81,7 +95,9 @@ module norm #(
     output wire [USER_W-1:0]      m_axis_tuser
 );
 
-    localparam integer WORDS_PER_LINE = AXIS_DATA_W / VALUE_W;    // 16
+    localparam integer PAYLOAD_W      = 512;
+    localparam integer LINE_BYTES     = PAYLOAD_W / 8;            // 64
+    localparam integer WORDS_PER_LINE = PAYLOAD_W / VALUE_W;      // 16
     localparam integer IDX_W          = $clog2(WORDS_PER_LINE);   // 4
     localparam integer LINE_AW        = $clog2(MAX_LINES);
     localparam [LINE_AW:0] LINE_LIMIT = MAX_LINES[LINE_AW:0];   // sized
@@ -102,8 +118,8 @@ module norm #(
     // path and this array), so it is not a clean RAM output register; a
     // ram_style="block" attribute alone does not change that. Giving the array
     // its own output register and muxing after it would move it to ~4 RAMB36.
-    reg [AXIS_DATA_W-1:0] linebuf [0:MAX_LINES-1];
-    reg [AXIS_DATA_W-1:0] hold;            // line being scanned / replayed
+    reg [PAYLOAD_W-1:0]   linebuf [0:MAX_LINES-1];
+    reg [PAYLOAD_W-1:0]   hold;            // line being scanned / replayed
     reg [LINE_AW:0]       nlines;
     reg                   frame_active, last_seen;
 
@@ -117,7 +133,7 @@ module norm #(
     reg [IDX_W-1:0]       rep_idx;
     reg                   rep_loaded, issuing;
 
-    reg [AXIS_DATA_W-1:0] acc;
+    reg [PAYLOAD_W-1:0]   acc;
     reg [IDX_W-1:0]       pack_idx;
     reg                   resp_valid, resp_last;
 
@@ -135,8 +151,20 @@ module norm #(
     reg [TDEST_W-1:0]     resp_tdest;
     reg [TID_W-1:0]       resp_tid;
     reg [USER_W-1:0]      resp_tuser;
+    reg [15:0]            resp_session;    // meta_TDATA[15:0], first beat
+    reg [15:0]            req_bytes;       // meta_TDATA[31:16], first beat
+    reg                   saw_header;      // the request began with a header line
 
-    wire is_header = (s_axis_tdata[447:0] == {448{1'b1}});
+    // Slot boundary fields (see the header comment).
+    wire [PAYLOAD_W-1:0]  rx_payload   = s_axis_tdata[PAYLOAD_W-1:0];
+    wire                  rx_last      = s_axis_tdata[PAYLOAD_W];
+    wire [15:0]           rx_session   = s_axis_tdata[PAYLOAD_W+1 +: 16];
+    wire [15:0]           rx_req_bytes = s_axis_tdata[PAYLOAD_W+17 +: 16];
+
+    wire is_header = (rx_payload[447:0] == {448{1'b1}});
+
+    // One response line per data line: the request less its header line.
+    wire [15:0] resp_bytes = req_bytes - (saw_header ? LINE_BYTES[15:0] : 16'd0);
     assign s_axis_tready = (state == ST_RX) && !scanning && (nlines < LINE_LIMIT)
                        && (flush_cnt == 0);
     wire rx_fire = s_axis_tvalid && s_axis_tready;
@@ -201,24 +229,28 @@ module norm #(
             rep_line <= 0; rep_idx <= 0; rep_loaded <= 1'b0; issuing <= 1'b0;
             acc <= 0; pack_idx <= 0; resp_valid <= 1'b0; resp_last <= 1'b0;
             resp_tdest <= 0; resp_tid <= 0; resp_tuser <= 0;
+            resp_session <= 16'd0; req_bytes <= 16'd0; saw_header <= 1'b0;
             outstanding <= 0; flush_cnt <= FLUSH_CYCLES[FLUSH_W-1:0];
         end else begin
 
             // ---- pass 1: receive and scan -------------------------------
             if (rx_fire) begin
                 if (!frame_active) begin
-                    resp_tdest <= s_axis_tdest;
-                    resp_tid   <= s_axis_tid;
-                    resp_tuser <= s_axis_tuser;
+                    resp_tdest   <= s_axis_tdest;
+                    resp_tid     <= s_axis_tid;
+                    resp_tuser   <= s_axis_tuser;
+                    resp_session <= rx_session;
+                    req_bytes    <= rx_req_bytes;
+                    saw_header   <= is_header;
                 end
                 frame_active <= 1'b1;
                 if (!frame_active && is_header) begin
-                    frame_active <= !s_axis_tlast;
+                    frame_active <= !rx_last;
                 end else begin
-                    linebuf[nlines[LINE_AW-1:0]] <= s_axis_tdata;
-                    hold      <= s_axis_tdata;
+                    linebuf[nlines[LINE_AW-1:0]] <= rx_payload;
+                    hold      <= rx_payload;
                     nlines    <= nlines + 1'b1;
-                    last_seen <= s_axis_tlast;
+                    last_seen <= rx_last;
                     scan_idx  <= 0;
                     scanning  <= 1'b1;
                 end
@@ -299,7 +331,8 @@ module norm #(
         end
     end
 
-    assign m_axis_tdata  = acc;
+    // {meta_TDATA_out, tlast, payload}
+    assign m_axis_tdata  = {resp_bytes, resp_session, resp_last, acc};
     assign m_axis_tvalid = resp_valid;
     assign m_axis_tlast  = resp_last;
     assign m_axis_tkeep  = {KEEP_W{1'b1}};

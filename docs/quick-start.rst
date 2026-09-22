@@ -189,7 +189,7 @@ The FPGA-specific options are implemented in the fork's
 
 This minimal request consists of the header alone. The ``pattern_slot``
 accelerator is an echo workload: it returns the 64-byte header unchanged, with
-the request's TCP length and session ID as response metadata. A working exchange produces nonzero request
+the request's size and session ID as response metadata. A working exchange produces nonzero request
 ``count`` values and ``min``, ``avg``, and ``max`` latency statistics in the
 ``tperf`` output. This benchmark measures request completion and latency; its
 current client does not verify the response payload.
