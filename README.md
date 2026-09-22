@@ -1,3 +1,9 @@
+# fRAC
+
+fRAC enables request-level, in-network invocation of FPGA accelerators. It
+reassembles incoming request data, schedules requests to accelerators, and
+supports swapping accelerators at runtime through partial reconfiguration.
+
 ## Directory
 
 ``` sh
@@ -21,10 +27,11 @@
 
 ## Documentation
 
-The network-driven partial-reconfiguration controller is documented in
-[`docs/`](docs/README.md). The documentation includes the controller
-architecture, network command ABI, ICAP bitstream format, build and deployment
-flow, verification coverage, and current implementation limitations.
+Start with the [fRAC overview](docs/index.rst) for the network architecture,
+request processing, runtime accelerator replacement, and design philosophy.
+The detailed guides cover the reconfiguration controller, network command ABI,
+ICAP bitstream format, build and deployment flow, verification coverage, and
+current implementation limitations.
 
 ## Build Instructions
 
