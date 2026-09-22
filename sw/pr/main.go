@@ -22,10 +22,19 @@ const (
 	reqFlagLast          = 0x2
 	reqFlagSingle        = reqFlagFirst | reqFlagLast
 
-	opWriteHBM     = 1
-	opReconfICAP   = 3
-	opQueryICAP    = 4
-	defaultSlotC00 = 0
+	opWriteHBM   = 1
+	opReadHBM    = 2
+	opReconfICAP = 3
+	opQueryICAP  = 4
+
+	// READ_HBM returns raw data, zero-padded to a line, and reconfctrl rejects
+	// a larger size with ERR_SIZE.
+	maxReadBytes = 64
+
+	// reconfctrl is integrated with SLOT_COUNT=3 (pkt_logic.v) and rejects a
+	// larger slot id with ERR_SLOT. Slot N is cell C0N, and workload id N is
+	// what pkt_logic.v routes to it.
+	slotCount = 3
 
 	errOK = 0
 )
@@ -163,7 +172,10 @@ func probeWorkload(conn net.Conn, timeout time.Duration, workloadID uint16, labe
 	return nil
 }
 
-func uploadBitstream(conn net.Conn, timeout time.Duration, hbmAddr uint64, prData []byte, chunkSize int, dumpRequests int) (int, error) {
+// uploadBitstream stages prData in HBM. WRITE_HBM ignores the command's slot
+// byte, but it is carried anyway so a captured request says which slot the
+// upload was for.
+func uploadBitstream(conn net.Conn, timeout time.Duration, hbmAddr uint64, prData []byte, chunkSize int, slotID byte, dumpRequests int) (int, error) {
 	totalWritten := 0
 	for offset := 0; offset < len(prData); {
 		end := offset + chunkSize
@@ -178,7 +190,7 @@ func uploadBitstream(conn net.Conn, timeout time.Duration, hbmAddr uint64, prDat
 		}
 
 		addr := hbmAddr + uint64(totalWritten)
-		req := buildReconfRequest(opWriteHBM, defaultSlotC00, addr, uint64(len(chunk)), writePayload)
+		req := buildReconfRequest(opWriteHBM, slotID, addr, uint64(len(chunk)), writePayload)
 		writeIndex := offset / chunkSize
 		if writeIndex < dumpRequests {
 			fmt.Printf("WRITE_HBM[%d] request (%dB):\n%s", writeIndex, len(req), hex.Dump(req))
@@ -212,6 +224,63 @@ func runReconfig(conn net.Conn, timeout time.Duration, hbmAddr uint64, prSize in
 	return nil
 }
 
+// readHBM reads back what was staged, in maxReadBytes chunks. A successful
+// READ_HBM response carries the data itself with no leading status code, so
+// unlike every other opcode there is nothing here to check for ERR_OK -- a
+// failure arrives as a status line whose first byte is the error.
+func readHBM(conn net.Conn, timeout time.Duration, hbmAddr uint64, size int) ([]byte, error) {
+	out := make([]byte, 0, size)
+	for offset := 0; offset < size; offset += maxReadBytes {
+		want := size - offset
+		if want > maxReadBytes {
+			want = maxReadBytes
+		}
+		addr := hbmAddr + uint64(offset)
+		req := buildReconfRequest(opReadHBM, 0, addr, uint64(want), nil)
+		_, _, response, err := sendAndReadStatus(conn, timeout, fmt.Sprintf("READ_HBM[%d]", offset/maxReadBytes), req)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, response[:want]...)
+	}
+	return out, nil
+}
+
+var errorNames = map[byte]string{
+	0: "ERR_OK",
+	1: "ERR_OPCODE",
+	2: "ERR_ALIGN",
+	3: "ERR_SIZE",
+	4: "ERR_ADDR",
+	5: "ERR_AXI_BRESP",
+	6: "ERR_AXI_RRESP",
+	7: "ERR_RLAST",
+	8: "ERR_SLOT",
+	9: "ERR_ICAP",
+}
+
+func errorName(code byte) string {
+	if name, ok := errorNames[code]; ok {
+		return name
+	}
+	return fmt.Sprintf("unknown(0x%02x)", code)
+}
+
+// printQueryStatus decodes the structured QUERY_STATUS response. Byte 0 only
+// reports whether the query itself was accepted; the result of the preceding
+// operation is byte 3, and the two must not be confused.
+func printQueryStatus(response []byte) {
+	fmt.Printf("  query_result   %s\n", errorName(response[0]))
+	fmt.Printf("  reconf_active  %d\n", response[1])
+	fmt.Printf("  last_slot_id   %d\n", response[2])
+	fmt.Printf("  last_error     %s\n", errorName(response[3]))
+	fmt.Printf("  icap_avail     %d\n", response[4])
+	fmt.Printf("  prdone_seen    %d\n", response[5])
+	fmt.Printf("  prerror_seen   %d\n", response[6])
+	fmt.Printf("  last_cycles    %d\n", binary.LittleEndian.Uint64(response[8:16]))
+	fmt.Printf("  active_cycles  %d\n", binary.LittleEndian.Uint64(response[16:24]))
+}
+
 func queryStatus(conn net.Conn, timeout time.Duration, slotID byte, gap time.Duration) error {
 	req := buildReconfRequest(opQueryICAP, slotID, 0, 0, nil)
 	writeLatency, readLatency, response, err := sendAndReadStatus(conn, timeout, "QUERY_ICAP_STATUS", req)
@@ -222,6 +291,7 @@ func queryStatus(conn net.Conn, timeout time.Duration, slotID byte, gap time.Dur
 		return fmt.Errorf("QUERY_ICAP_STATUS status not OK:\n%s", hex.Dump(response))
 	}
 	fmt.Printf("QUERY_ICAP_STATUS: request=%dB write_latency=%s status_read_latency=%s\n", len(req), writeLatency, readLatency)
+	printQueryStatus(response)
 	sleepGap(gap)
 	return nil
 }
@@ -234,14 +304,28 @@ func main() {
 	recvBuffer := flag.Int("recv-buffer", 2048, "TCP receive buffer size in bytes")
 	sendGap := flag.Duration("send-gap", time.Millisecond, "delay after probe/reconfig/status requests")
 	statusDelay := flag.Duration("status-delay", 5*time.Millisecond, "delay after RECONF_ICAP before QUERY_ICAP_STATUS")
-	preProbes := flag.Bool("pre-probes", false, "send C00/C01 workload probes before HBM upload")
+	slot := flag.Int("slot", 0, fmt.Sprintf("slot to reconfigure, 0..%d (slot N is cell C0N)", slotCount-1))
+	preProbes := flag.Bool("pre-probes", false, "send a workload probe to the selected slot before HBM upload")
 	queryAfterReconfig := flag.Bool("query-status", false, "send QUERY_ICAP_STATUS after RECONF_ICAP")
-	postProbe := flag.Bool("post-probe", false, "send C00 workload probe after RECONF_ICAP")
+	postProbe := flag.Bool("post-probe", false, "send a workload probe to the selected slot after RECONF_ICAP")
 	dumpRequests := flag.Int("dump-requests", 0, "hex dump this many WRITE_HBM requests before sending")
+	queryOnly := flag.Bool("query-only", false, "send QUERY_ICAP_STATUS and exit: no upload, no reconfiguration, no bitstream argument")
+	readBack := flag.Int("read-hbm", 0, "read this many bytes from -hbm-addr and exit; with a BITSTREAM argument, compare them against its first bytes")
+	noReconf := flag.Bool("no-reconf", false, "upload to HBM and stop: no RECONF_ICAP, so nothing reaches the configuration engine")
+	verify := flag.Bool("verify", false, "after upload, read the WHOLE staged image back and compare it with the file, reporting the first mismatching byte")
 	flag.Parse()
 
-	if flag.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "usage: %s [flags] BITSTREAM\n", os.Args[0])
+	if *queryOnly && flag.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "usage: %s [flags] -query-only\n", os.Args[0])
+		os.Exit(2)
+	}
+	if !*queryOnly && *readBack == 0 && flag.NArg() != 1 {
+		fmt.Fprintf(os.Stderr, "usage: %s [flags] BITSTREAM\n       %s [flags] -query-only\n       %s [flags] -read-hbm N [BITSTREAM]\n",
+			os.Args[0], os.Args[0], os.Args[0])
+		os.Exit(2)
+	}
+	if *readBack < 0 {
+		fmt.Fprintf(os.Stderr, "read-hbm must be non-negative, got %d\n", *readBack)
 		os.Exit(2)
 	}
 	if *hbmAddr&0x1f != 0 {
@@ -260,25 +344,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "recv-buffer must be at least %d bytes, got %d\n", requestLineBytes, *recvBuffer)
 		os.Exit(2)
 	}
+	if *slot < 0 || *slot >= slotCount {
+		fmt.Fprintf(os.Stderr, "slot must be in 0..%d, got %d\n", slotCount-1, *slot)
+		os.Exit(2)
+	}
 	if *dumpRequests < 0 {
 		fmt.Fprintf(os.Stderr, "dump-requests must be non-negative, got %d\n", *dumpRequests)
 		os.Exit(2)
 	}
 
-	bitstreamPath := flag.Arg(0)
-	bitstream, err := os.ReadFile(bitstreamPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read bitstream %s: %v\n", bitstreamPath, err)
-		os.Exit(1)
+	var prData []byte
+	var prSize int
+	if flag.NArg() == 1 {
+		bitstreamPath := flag.Arg(0)
+		bitstream, err := os.ReadFile(bitstreamPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read bitstream %s: %v\n", bitstreamPath, err)
+			os.Exit(1)
+		}
+		if len(bitstream) == 0 {
+			fmt.Fprintf(os.Stderr, "bitstream %s is empty\n", bitstreamPath)
+			os.Exit(2)
+		}
+		prSize = roundUp(len(bitstream), 4)
+		prData = padCopy(bitstream, prSize)
+		fmt.Printf("bitstream: file=%s original=%dB pr_size=%dB hbm_addr=0x%x slot=%d\n",
+			bitstreamPath, len(bitstream), prSize, *hbmAddr, *slot)
 	}
-	if len(bitstream) == 0 {
-		fmt.Fprintf(os.Stderr, "bitstream %s is empty\n", bitstreamPath)
-		os.Exit(2)
-	}
-	prSize := roundUp(len(bitstream), 4)
-	prData := padCopy(bitstream, prSize)
-	fmt.Printf("bitstream: file=%s original=%dB pr_size=%dB hbm_addr=0x%x\n", bitstreamPath, len(bitstream), prSize, *hbmAddr)
-
 	conn, err := net.DialTimeout("tcp", *addr, *timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect %s: %v\n", *addr, err)
@@ -299,38 +391,113 @@ func main() {
 
 	startedAt := time.Now()
 
-	if *preProbes {
-		if err := probeWorkload(conn, *timeout, 0x0000, "PRE_C00_WORKLOAD", *sendGap); err != nil {
+	// pkt_logic.v routes workload id N to cell C0N, so the slot number is the
+	// workload id to probe it with.
+	slotID := byte(*slot)
+	slotWorkload := uint16(*slot)
+
+	if *queryOnly {
+		if err := queryStatus(conn, *timeout, slotID, 0); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if err := probeWorkload(conn, *timeout, 0x0001, "PRE_C01_WORKLOAD", *sendGap); err != nil {
+		return
+	}
+
+	if *readBack > 0 {
+		data, err := readHBM(conn, *timeout, *hbmAddr, *readBack)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("READ_HBM: %dB from hbm_addr=0x%x\n", len(data), *hbmAddr)
+		fmt.Print(hex.Dump(data))
+		if prData != nil {
+			compare := len(data)
+			if compare > len(prData) {
+				compare = len(prData)
+			}
+			if bytes.Equal(data[:compare], prData[:compare]) {
+				fmt.Printf("match: the first %dB in HBM are the first %dB of the file\n", compare, compare)
+			} else {
+				fmt.Printf("MISMATCH: the file's first %dB are\n%s", compare, hex.Dump(prData[:compare]))
+				os.Exit(1)
+			}
+		}
+		return
+	}
+
+	if *preProbes {
+		if err := probeWorkload(conn, *timeout, slotWorkload, fmt.Sprintf("PRE_C%02d_WORKLOAD", *slot), *sendGap); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}
 
-	written, err := uploadBitstream(conn, *timeout, *hbmAddr, prData, *chunkSize, *dumpRequests)
+	written, err := uploadBitstream(conn, *timeout, *hbmAddr, prData, *chunkSize, slotID, *dumpRequests)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	fmt.Printf("upload complete: pr_size=%dB hbm_written=%dB\n", prSize, written)
 
-	if err := runReconfig(conn, *timeout, *hbmAddr, prSize, defaultSlotC00, *sendGap); err != nil {
+	if *verify {
+		// Reading the first line only proves the upload started; a dropped or
+		// misaddressed chunk anywhere after that is invisible. Read it all.
+		startedVerify := time.Now()
+		readBack, err := readHBM(conn, *timeout, *hbmAddr, prSize)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if len(readBack) != prSize {
+			fmt.Fprintf(os.Stderr, "verify: read %dB of %dB\n", len(readBack), prSize)
+			os.Exit(1)
+		}
+		mismatch := -1
+		for idx := range readBack {
+			if readBack[idx] != prData[idx] {
+				mismatch = idx
+				break
+			}
+		}
+		if mismatch >= 0 {
+			lo := mismatch &^ 0x3f
+			hi := lo + requestLineBytes
+			if hi > prSize {
+				hi = prSize
+			}
+			fmt.Printf("VERIFY FAILED: first mismatch at byte %d (0x%x), hbm_addr=0x%x\n",
+				mismatch, mismatch, *hbmAddr+uint64(mismatch))
+			fmt.Printf("  file:\n%s  hbm:\n%s", hex.Dump(prData[lo:hi]), hex.Dump(readBack[lo:hi]))
+			os.Exit(1)
+		}
+		fmt.Printf("verify OK: all %dB in HBM match the file (%s)\n", prSize, time.Since(startedVerify))
+	}
+
+	if *noReconf {
+		fmt.Println("-no-reconf: stopping before RECONF_ICAP")
+		return
+	}
+
+	if err := runReconfig(conn, *timeout, *hbmAddr, prSize, slotID, *sendGap); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	if *queryAfterReconfig {
 		time.Sleep(*statusDelay)
-		if err := queryStatus(conn, *timeout, defaultSlotC00, *sendGap); err != nil {
+		if err := queryStatus(conn, *timeout, slotID, *sendGap); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}
 
 	if *postProbe {
-		if err := probeWorkload(conn, *timeout, 0x0000, "POST_C00_WORKLOAD", *sendGap); err != nil {
+		// A probe is a header-only request. or_slot, pattern_slot and top_k
+		// answer one; log and norm consume the header and return to idle, so
+		// this blocks for the whole timeout against either of those. Use
+		// sw/app with a data line for them instead.
+		if err := probeWorkload(conn, *timeout, slotWorkload, fmt.Sprintf("POST_C%02d_WORKLOAD", *slot), *sendGap); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

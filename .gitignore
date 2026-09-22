@@ -8,3 +8,6 @@ build
 sim_build/
 results.xml
 __pycache__/
+docs/_build/
+dump.fst
+dump.vcd
