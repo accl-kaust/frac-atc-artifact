@@ -200,11 +200,22 @@ class TB:
         raise AssertionError(f"unexpected extra response metadata 0x{frame_to_int(metadata_frame):08x}")
 
 
-async def run_single_packet_request(dut, workload_id, expected_payload):
+def echo_response(payloads) -> bytes:
+    """C00 (apps/pattern_slot): every request beat is echoed, payload and metadata unchanged."""
+    return b"".join(payloads)
+
+
+def or_response(payloads) -> bytes:
+    """C01 (apps/or_slot): every request beat comes back with its payload OR-ed with all ones."""
+    return bytes([0xff]) * sum(len(payload) for payload in payloads)
+
+
+async def run_single_packet_request(dut, workload_id, expected):
     tb = TB(dut)
     await tb.reset()
 
     request = SinglePacketRequest(conn_id=0x1234, workload_id=workload_id)
+    expected_payload = expected([request.payload])
 
     read_cmd = await tb.send_notification(request.notification)
     assert read_cmd == request.metadata
@@ -219,11 +230,12 @@ async def run_single_packet_request(dut, workload_id, expected_payload):
     assert frame_to_int(metadata_frame) == request.metadata
 
 
-async def run_multi_packet_request(dut, workload_id, expected_payload):
+async def run_multi_packet_request(dut, workload_id, expected):
     tb = TB(dut)
     await tb.reset()
 
     request = MultiPacketRequest(packet_lengths=(BYTE_LANES, BYTE_LANES), conn_id=0x2345, workload_id=workload_id)
+    expected_payload = expected(request.payloads)
 
     for notification, payload in zip(request.notifications, request.payloads):
         read_cmd = await tb.send_notification(notification)
@@ -239,13 +251,14 @@ async def run_multi_packet_request(dut, workload_id, expected_payload):
     assert_keep_all(data_frame, len(expected_payload))
 
 
-async def run_single_tcp_packet_multi_beat_app_request(dut, workload_id, expected_payload):
+async def run_single_tcp_packet_multi_beat_app_request(dut, workload_id, expected):
     tb = TB(dut)
     await tb.reset()
 
     total_size = 2 * BYTE_LANES
     notification = TcpNotification(length=total_size, conn_id=0x2456)
     payload = RequestHeader(total_size=total_size, workload_id=workload_id).to_bytes() + bytes([0x5a] * BYTE_LANES)
+    expected_payload = expected([payload])
 
     read_cmd = await tb.send_notification(notification)
     assert read_cmd == notification.pack()
@@ -278,7 +291,7 @@ async def test_header_flags_replace_ff_prefix_for_single_packet(dut):
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
     assert frame_to_int(metadata_frame) == notification.pack()
-    assert bytes(data_frame.tdata) == bytes([0x01]) + bytes(BYTE_LANES - 1)
+    assert bytes(data_frame.tdata) == echo_response([bytes(header)])
     assert_keep_all(data_frame, BYTE_LANES)
 
 
@@ -305,12 +318,12 @@ async def test_multi_packet_payload_ff_and_flag_bits_are_not_header(dut):
     metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
     assert frame_to_int(metadata_frame) == notifications[-1].pack()
-    assert bytes(data_frame.tdata) == bytes([0x01]) + bytes(BYTE_LANES - 1)
-    assert_keep_all(data_frame, BYTE_LANES)
+    assert bytes(data_frame.tdata) == echo_response([first, continuation])
+    assert_keep_all(data_frame, 2 * BYTE_LANES)
     await tb.expect_no_response()
 
 
-async def run_repeated_multi_packet_requests(dut, workload_id, line_count, request_count, expected_payload):
+async def run_repeated_multi_packet_requests(dut, workload_id, line_count, request_count, expected):
     tb = TB(dut)
     await tb.reset()
 
@@ -330,12 +343,13 @@ async def run_repeated_multi_packet_requests(dut, workload_id, line_count, reque
 
         metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
+        expected_payload = expected(request.payloads)
         assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
         assert bytes(data_frame.tdata) == expected_payload
         assert_keep_all(data_frame, len(expected_payload))
 
 
-async def run_back_to_back_three_line_requests(dut, workload_id, expected_payload):
+async def run_back_to_back_three_line_requests(dut, workload_id, expected):
     tb = TB(dut)
     await tb.reset()
 
@@ -356,64 +370,45 @@ async def run_back_to_back_three_line_requests(dut, workload_id, expected_payloa
     for request in requests:
         metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
 
+        expected_payload = expected(request.payloads)
         assert frame_to_int(metadata_frame) == request.notifications[-1].pack()
         assert bytes(data_frame.tdata) == expected_payload
         assert_keep_all(data_frame, len(expected_payload))
 
 
 @cocotb.test()
-async def test_single_packet_pattern_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))
+async def test_single_packet_echo_app(dut):
+    await run_single_packet_request(dut, workload_id=0x0000, expected=echo_response)
 
 
 @cocotb.test()
 async def test_single_packet_or_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0001, expected_payload=bytes([0xff]) + bytes(BYTE_LANES - 1))
+    await run_single_packet_request(dut, workload_id=0x0001, expected=or_response)
 
 
 @cocotb.test()
-async def test_multi_packet_pattern_app(dut):
-    await run_multi_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))
+async def test_multi_packet_echo_app(dut):
+    await run_multi_packet_request(dut, workload_id=0x0000, expected=echo_response)
 
 
 @cocotb.test()
-async def test_single_tcp_packet_multi_beat_pattern_app(dut):
-    await run_single_tcp_packet_multi_beat_app_request(
-        dut,
-        workload_id=0x0000,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
-    )
+async def test_single_tcp_packet_multi_beat_echo_app(dut):
+    await run_single_tcp_packet_multi_beat_app_request(dut, workload_id=0x0000, expected=echo_response)
 
 
 @cocotb.test()
-async def test_repeated_three_line_pattern_app(dut):
-    await run_repeated_multi_packet_requests(
-        dut,
-        workload_id=0x0000,
-        line_count=3,
-        request_count=8,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
-    )
+async def test_repeated_three_line_echo_app(dut):
+    await run_repeated_multi_packet_requests(dut, workload_id=0x0000, line_count=3, request_count=8, expected=echo_response)
 
 
 @cocotb.test()
-async def test_back_to_back_three_line_pattern_app(dut):
-    await run_back_to_back_three_line_requests(
-        dut,
-        workload_id=0x0000,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
-    )
+async def test_back_to_back_three_line_echo_app(dut):
+    await run_back_to_back_three_line_requests(dut, workload_id=0x0000, expected=echo_response)
 
 
 @cocotb.test()
-async def test_repeated_six_line_pattern_app(dut):
-    await run_repeated_multi_packet_requests(
-        dut,
-        workload_id=0x0000,
-        line_count=6,
-        request_count=8,
-        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
-    )
+async def test_repeated_six_line_echo_app(dut):
+    await run_repeated_multi_packet_requests(dut, workload_id=0x0000, line_count=6, request_count=8, expected=echo_response)
 
 
 @cocotb.test()

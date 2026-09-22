@@ -3,10 +3,10 @@
 `default_nettype none
 
 module cell_bbx #(
-    parameter int AXIS_DATA_W = 8,
+    parameter int AXIS_DATA_W = 512 + 1 + 32,
     parameter int KEEP_W      = 1,
-    parameter int TDEST_W     = 3,
-    parameter int TID_W       = 4,
+    parameter int TDEST_W     = 1,
+    parameter int TID_W       = 1,
     parameter int USER_W      = 1
 ) (
     input  wire                   clk,
@@ -33,20 +33,24 @@ module cell_bbx #(
     output wire [USER_W-1:0]      m_axis_tuser
 );
 
-    reg [7:0] response_byte = 8'h01;
+    // Behavioural stand-in for the PR cells: c00 is the echo RM
+    // (apps/pattern_slot), c01 is the OR RM (apps/or_slot).  Both keep
+    // {meta, tlast} in tdata[544:512] untouched.
+    reg is_or_slot = 1'b0;
 
     initial begin
         string inst_name;
 
         inst_name = $sformatf("%m");
         if (inst_name.len() >= 24 && inst_name.substr(inst_name.len()-24, inst_name.len()-13) == "c01_bbx_inst") begin
-            response_byte = 8'hff;
+            is_or_slot = 1'b1;
         end
     end
 
     assign s_axis_tready = m_axis_tready;
     assign m_axis_tvalid = s_axis_tvalid;
-    assign m_axis_tdata = {KEEP_W{response_byte}};
+    assign m_axis_tdata = is_or_slot ? {s_axis_tdata[AXIS_DATA_W-1:512], s_axis_tdata[511:0] | {512{1'b1}}}
+                                     : s_axis_tdata;
     assign m_axis_tkeep = s_axis_tkeep;
     assign m_axis_tstrb = s_axis_tstrb;
     assign m_axis_tlast = s_axis_tlast;
