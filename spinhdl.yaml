@@ -13,20 +13,16 @@ root:
   - name: frac_static
     id: 0
     cells:
-    # Two cells, both in SLR1. The former C00 spanned 23 clock regions across
-    # SLR2 (X2Y11:X7Y8); every partition pin of its 512-bit boundary crossed
-    # at least one SLR from the static logic, and that region is dropped
-    # entirely until reconfiguration is proven on the small floorplan.
+    # The floorplan proven on hardware by the reconf_hdr_frmt build: two small
+    # cells in SLR0, right of the X4 I/O column, two clock regions each.
+    # Neither cell touches X4, so no carve-out is needed. The static pblock in
+    # frac/xdc/floorplan.xdc owns the left half of SLR0 (X0-X3) and all of
+    # SLR1 -- keep it clear of these regions.
     - name: C00
       id: 0
       slot_id: 0
       region:
-        # Clock-region column X4 carries the U280's I/O banks. Nothing in
-        # fpga_u280.xdc is pinned in X4Y6/X4Y7 today, so no carve-out is
-        # needed here -- a property of the current pin list rather than of
-        # the floorplan. A new pin in those two regions would break this cell
-        # with DRC HDPR-6, and the fix would be a one-line remove like C01's.
-        add: CLOCKREGION_X3Y7:CLOCKREGION_X7Y6
+        add: CLOCKREGION_X5Y3:CLOCKREGION_X6Y3
       components:
       - name: or_slot
         id: 0
@@ -38,13 +34,7 @@ root:
       id: 1
       slot_id: 1
       region:
-        # X4Y5 holds the 100 MHz reference clock's input buffer,
-        # clk_100mhz_0_ibufg_inst (IOB_X0Y286 and HPIOBDIFFINBUF_X0Y132).
-        # A reconfigurable partition may not contain static logic, so
-        # place_design refuses the whole design with DRC HDPR-6 unless that
-        # one clock region is carved out; the other four stay.
-        add: CLOCKREGION_X3Y5:CLOCKREGION_X7Y5
-        remove: CLOCKREGION_X4Y5:CLOCKREGION_X4Y5
+        add: CLOCKREGION_X5Y2:CLOCKREGION_X6Y2
       components:
       - name: or_slot
         id: 2
