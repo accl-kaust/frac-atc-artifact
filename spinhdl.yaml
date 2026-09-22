@@ -13,19 +13,17 @@ root:
   - name: frac_static
     id: 0
     cells:
-    # Three cells, taken from the opt_hbm_icap_fifo floorplan, with C02
-    # relocated to X5Y4:X7Y5. The static pblock in frac/xdc/floorplan.xdc
-    # takes everything these three leave free -- keep the two files
-    # consistent.
+    # Three cells, all in the right-hand columns and none in SLR2. Every cell
+    # starts at X5, so none touches the X4 I/O column and none needs a
+    # carve-out. The static pblock in frac/xdc/floorplan.xdc takes what is
+    # left -- keep the two files consistent.
     - name: C00
       id: 0
       slot_id: 0
       region:
-        # X4Y11 holds pinned static I/O (IOB_X0Y589/590/606/609). A
-        # reconfigurable partition may not contain static logic, so without
-        # this carve-out place_design refuses the design with DRC HDPR-6.
-        add: CLOCKREGION_X2Y11:CLOCKREGION_X7Y8
-        remove: CLOCKREGION_X4Y11:CLOCKREGION_X4Y11
+        # Shrunk from X3Y7:X7Y6: the left edge moves X3 -> X5 so the cell no
+        # longer reaches into the middle of SLR1.
+        add: CLOCKREGION_X5Y6:CLOCKREGION_X7Y7
       components:
       - name: or_slot
         id: 0
@@ -37,9 +35,7 @@ root:
       id: 1
       slot_id: 1
       region:
-        # Needs no carve-out: nothing is pinned in X4Y6/X4Y7 with the current
-        # pin list. A new pin there would break this cell with DRC HDPR-6.
-        add: CLOCKREGION_X3Y7:CLOCKREGION_X7Y6
+        add: CLOCKREGION_X5Y4:CLOCKREGION_X7Y5
       components:
       - name: or_slot
         id: 2
@@ -51,10 +47,9 @@ root:
       id: 2
       slot_id: 2
       region:
-        # Relocated from the original X3Y5:X7Y5. Starting at X5 keeps the cell
-        # clear of the X4 I/O column entirely, so unlike the original it needs
-        # no X4Y5 carve-out for the 100 MHz refclk input buffer.
-        add: CLOCKREGION_X5Y4:CLOCKREGION_X7Y5
+        # The geometry proven on hardware by the reconf_hdr_frmt build, and the
+        # only cell here that sits in SLR0 alongside the ICAPE3.
+        add: CLOCKREGION_X5Y3:CLOCKREGION_X6Y3
       components:
       - name: or_slot
         id: 4
