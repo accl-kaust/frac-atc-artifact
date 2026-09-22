@@ -32,8 +32,9 @@
 // # Two transport rules the hardware enforces
 //
 //  1. pkt_receiver.v drops any TCP segment that is not a multiple of 64 bytes,
-//     is shorter than 64, or is longer than 512. Every segment this tool sends
-//     obeys that.
+//     is shorter than 64, or is longer than 4096 (its MAX_PACKET_BYTES). A
+//     request may be larger than one segment; the scheduler reassembles it up
+//     to the declared size. Every segment this tool sends obeys the rule.
 //
 //  2. The response length announced to the TCP stack is the length of the
 //     request's FIRST TCP segment (pkt_logic.v latches the RX metadata of the
@@ -69,7 +70,7 @@ const (
 	// One 512-bit AXI-Stream beat.
 	requestLineBytes = 64
 	// pkt_receiver.v's MAX_PACKET_BYTES.
-	maxSegmentBytes = 512
+	maxSegmentBytes = 4096
 
 	requestPrefixBytes = 56
 
