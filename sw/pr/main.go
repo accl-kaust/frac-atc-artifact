@@ -31,10 +31,10 @@ const (
 	// a larger size with ERR_SIZE.
 	maxReadBytes = 64
 
-	// reconfctrl is integrated with SLOT_COUNT=2 (pkt_logic.v) and rejects a
+	// reconfctrl is integrated with SLOT_COUNT=3 (pkt_logic.v) and rejects a
 	// larger slot id with ERR_SLOT. Slot N is cell C0N, and workload id N is
 	// what pkt_logic.v routes to it.
-	slotCount = 2
+	slotCount = 3
 
 	errOK = 0
 )

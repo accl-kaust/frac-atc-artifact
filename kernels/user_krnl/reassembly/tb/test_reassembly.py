@@ -372,6 +372,11 @@ async def test_single_packet_or_app(dut):
 
 
 @cocotb.test()
+async def test_single_packet_c02_app(dut):
+    await run_single_packet_request(dut, workload_id=0x0002, expected_payload=bytes([0x02]) + bytes(BYTE_LANES - 1))
+
+
+@cocotb.test()
 async def test_multi_packet_pattern_app(dut):
     await run_multi_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))
 

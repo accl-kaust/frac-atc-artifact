@@ -13,16 +13,19 @@ root:
   - name: frac_static
     id: 0
     cells:
-    # The floorplan proven on hardware by the reconf_hdr_frmt build: two small
-    # cells in SLR0, right of the X4 I/O column, two clock regions each.
-    # Neither cell touches X4, so no carve-out is needed. The static pblock in
-    # frac/xdc/floorplan.xdc owns the left half of SLR0 (X0-X3) and all of
-    # SLR1 -- keep it clear of these regions.
+    # Three cells, taken from the opt_hbm_icap_fifo floorplan, with C02
+    # relocated to X5Y4:X7Y5. The static pblock in frac/xdc/floorplan.xdc
+    # takes everything these three leave free -- keep the two files
+    # consistent.
     - name: C00
       id: 0
       slot_id: 0
       region:
-        add: CLOCKREGION_X5Y3:CLOCKREGION_X6Y3
+        # X4Y11 holds pinned static I/O (IOB_X0Y589/590/606/609). A
+        # reconfigurable partition may not contain static logic, so without
+        # this carve-out place_design refuses the design with DRC HDPR-6.
+        add: CLOCKREGION_X2Y11:CLOCKREGION_X7Y8
+        remove: CLOCKREGION_X4Y11:CLOCKREGION_X4Y11
       components:
       - name: or_slot
         id: 0
@@ -34,11 +37,28 @@ root:
       id: 1
       slot_id: 1
       region:
-        add: CLOCKREGION_X5Y2:CLOCKREGION_X6Y2
+        # Needs no carve-out: nothing is pinned in X4Y6/X4Y7 with the current
+        # pin list. A new pin there would break this cell with DRC HDPR-6.
+        add: CLOCKREGION_X3Y7:CLOCKREGION_X7Y6
       components:
       - name: or_slot
         id: 2
         unit: or_slot
       - name: pattern_slot
         id: 3
+        unit: pattern_slot
+    - name: C02
+      id: 2
+      slot_id: 2
+      region:
+        # Relocated from the original X3Y5:X7Y5. Starting at X5 keeps the cell
+        # clear of the X4 I/O column entirely, so unlike the original it needs
+        # no X4Y5 carve-out for the 100 MHz refclk input buffer.
+        add: CLOCKREGION_X5Y4:CLOCKREGION_X7Y5
+      components:
+      - name: or_slot
+        id: 4
+        unit: or_slot
+      - name: pattern_slot
+        id: 5
         unit: pattern_slot
