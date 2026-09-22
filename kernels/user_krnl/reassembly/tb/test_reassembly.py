@@ -200,7 +200,7 @@ class TB:
         raise AssertionError(f"unexpected extra response metadata 0x{frame_to_int(metadata_frame):08x}")
 
 
-async def run_single_packet_request(dut, workload_id, expected_payload):
+async def run_single_packet_request(dut, workload_id, expected_payload, expect_single_response=False):
     tb = TB(dut)
     await tb.reset()
 
@@ -217,6 +217,9 @@ async def run_single_packet_request(dut, workload_id, expected_payload):
     assert bytes(data_frame.tdata) == expected_payload
     assert_keep_all(data_frame, BYTE_LANES)
     assert frame_to_int(metadata_frame) == request.metadata
+
+    if expect_single_response:
+        await tb.expect_no_response()
 
 
 async def run_multi_packet_request(dut, workload_id, expected_payload):
@@ -374,6 +377,20 @@ async def test_single_packet_or_app(dut):
 @cocotb.test()
 async def test_single_packet_c02_app(dut):
     await run_single_packet_request(dut, workload_id=0x0002, expected_payload=bytes([0x02]) + bytes(BYTE_LANES - 1))
+
+
+# The simulation cell_bbx only overrides its response byte for c01_bbx_inst and
+# c02_bbx_inst, so c03_bbx_inst answers with the default 0x01 just like c00_bbx_inst.
+# The payload therefore cannot tell the two apart; requiring exactly one response
+# is what pins workload 0x0003 to c03 instead of the c00 pattern fall-through.
+@cocotb.test()
+async def test_single_packet_c03_app(dut):
+    await run_single_packet_request(
+        dut,
+        workload_id=0x0003,
+        expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1),
+        expect_single_response=True,
+    )
 
 
 @cocotb.test()

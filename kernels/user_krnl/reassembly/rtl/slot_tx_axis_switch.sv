@@ -25,12 +25,16 @@ module slot_tx_axis_switch #(
     input  wire              s03_axis_tvalid,
     output wire              s03_axis_tready,
 
+    input  wire [DATA_W-1:0] s04_axis_tdata,
+    input  wire              s04_axis_tvalid,
+    output wire              s04_axis_tready,
+
     output wire [DATA_W-1:0] m_axis_tdata,
     output wire              m_axis_tvalid,
     input  wire              m_axis_tready
 );
 
-    localparam int S_COUNT = 4;
+    localparam int S_COUNT = 5;
     localparam int ID_W = $clog2(S_COUNT);
 
     taxi_axis_if #(
@@ -44,7 +48,7 @@ module slot_tx_axis_switch #(
         .DEST_W(1),
         .USER_EN(1'b0),
         .USER_W(1)
-    ) s_axis[4]();
+    ) s_axis[5]();
 
     taxi_axis_if #(
         .DATA_W(DATA_W),
@@ -98,6 +102,16 @@ module slot_tx_axis_switch #(
     assign s_axis[3].tdest = '0;
     assign s_axis[3].tuser = '0;
     assign s03_axis_tready = s_axis[3].tready;
+
+    assign s_axis[4].tdata = s04_axis_tdata;
+    assign s_axis[4].tkeep = '1;
+    assign s_axis[4].tstrb = '1;
+    assign s_axis[4].tvalid = s04_axis_tvalid;
+    assign s_axis[4].tlast = s04_axis_tdata[TLAST_IDX];
+    assign s_axis[4].tid = '0;
+    assign s_axis[4].tdest = '0;
+    assign s_axis[4].tuser = '0;
+    assign s04_axis_tready = s_axis[4].tready;
 
     assign m_axis_tdata = m_axis[0].tdata;
     assign m_axis_tvalid = m_axis[0].tvalid;

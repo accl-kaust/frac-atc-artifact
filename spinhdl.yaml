@@ -62,3 +62,19 @@ root:
       - name: pattern_slot
         id: 5
         unit: pattern_slot
+    - name: C03
+      id: 3
+      slot_id: 3
+      region:
+        # The geometry proven on hardware by the reconf_hdr_frmt build: two
+        # clock regions in SLR0, right of the X4 I/O column, so no carve-out.
+        # frac/xdc/floorplan.xdc splits its SLR0 static rectangles around this
+        # notch -- keep the two files consistent.
+        add: CLOCKREGION_X5Y3:CLOCKREGION_X6Y3
+      components:
+      - name: or_slot
+        id: 6
+        unit: or_slot
+      - name: pattern_slot
+        id: 7
+        unit: pattern_slot
