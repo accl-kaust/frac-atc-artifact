@@ -62,7 +62,7 @@ const (
 	// a larger size with ERR_SIZE.
 	maxReadBytes = 64
 
-	slotCount = 3
+	slotCount = 2
 
 	errOK = 0
 
