@@ -10,7 +10,7 @@ supports swapping accelerators at runtime through partial reconfiguration.
 ├── bin
 │   └── spinhdl      # DFX build orchestrator, see Build Instructions
 ├── kernels
-│   ├── cmac_krnl    # CMAC IP intialization
+│   ├── cmac_krnl    # CMAC IP initialization
 │   ├── common
 │   ├── network_krnl # Binding Network stack
 │   └── user_krnl    # Request reassembly, accelerator slots, PR control, apps
@@ -30,8 +30,6 @@ supports swapping accelerators at runtime through partial reconfiguration.
 └── README.md
 ```
 
-
-
 ## Documentation
 
 Start with the [fRAC overview](docs/index.rst) for the network architecture,
@@ -39,6 +37,27 @@ request processing, runtime accelerator replacement, and design philosophy.
 The detailed guides cover the reconfiguration controller, network command ABI,
 ICAP bitstream format, build and deployment flow, verification coverage, and
 current implementation limitations.
+
+## Prerequisites
+
+### Hardware
+
+The current design targets the Xilinx Alveo U280 FPGA accelerator card
+(`xcu280-fsvh2892-2L-e`). The documented setup uses:
+
+- An Alveo U280
+- A host with a ConnectX-6 Dx 100GbE NIC
+- A 100G QSFP cable connecting the U280's `qsfp0` port to the NIC.
+- A USB cable connecting the U280's JTAG interface to the machine running Vivado
+  for initial FPGA programming.
+
+The network client and Vivado can run on the same machine or separate machines.
+See the [quick-start guide](docs/quick-start.rst) for hardware connections, host
+software setup, FPGA programming, and a request-response test.
+
+### Software
+
+Currently, the project is only tested with Vivado 2022.2 tools.
 
 ## Build Instructions
 
@@ -51,8 +70,8 @@ Run both commands from the repository root.
 make ip
 ```
 
-1. Build fRAC with `spinhdl` (shipped in `bin/`). It reads `static.yaml`,
-  `spin.yaml` and `spinhdl.yaml`, and produces the static shell, the
+2. Build fRAC with `spinhdl` (shipped in `bin/`). It reads `static.yaml`,
+   `spin.yaml` and `spinhdl.yaml`, and produces the static shell, the
    reconfigurable modules, the full image and the partial bitstreams under
    `build/`:
 
@@ -60,11 +79,9 @@ make ip
 ./bin/spinhdl weave --parallel
 ```
 
-
-
 ## Libraries and Borrowed Code
 
 fRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1)
-as a library as well as a few kernels. Some code is borrowed from
+as a library as well as a few kernels. Some code is borrowed from the
 [Corundum](https://github.com/corundum/corundum) and
-[taxi](https://github.com/fpganinja/taxi).
+[taxi](https://github.com/fpganinja/taxi) projects.
