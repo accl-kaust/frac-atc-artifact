@@ -42,3 +42,22 @@ root:
       - name: pattern_slot
         id: 3
         unit: pattern_slot
+    - name: C02
+      id: 2
+      slot_id: 2
+      region:
+        # Stacked directly below C01, same shape as the two proven cells: two
+        # clock regions, SLR0, columns X5-X6, clear of the X4 I/O column. Cell
+        # SIZE is the one variable the campaign has never moved -- every cell
+        # ever demonstrated to reconfigure has been exactly two clock regions --
+        # so this third cell keeps it rather than testing two things at once.
+        # Y1 rather than Y0 on purpose: the HBM interface sites sit along the
+        # bottom row. frac/xdc/floorplan.xdc splits its Y1 strip around this.
+        add: CLOCKREGION_X5Y1:CLOCKREGION_X6Y1
+      components:
+      - name: or_slot
+        id: 4
+        unit: or_slot
+      - name: pattern_slot
+        id: 5
+        unit: pattern_slot

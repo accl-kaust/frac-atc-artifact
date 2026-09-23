@@ -371,6 +371,52 @@ async def test_single_packet_or_app(dut):
     await run_single_packet_request(dut, workload_id=0x0001, expected_payload=bytes([0xff]) + bytes(BYTE_LANES - 1))
 
 
+async def tally_slot_cell_beats(dut, beats):
+    """Count the beats each slot cell accepts, so a test can tell which cell a request reached."""
+    pkt_logic = dut.pkt_logic_inst
+    cells = {
+        "c00": (pkt_logic.pattern_decoupled_tvalid, pkt_logic.pattern_app_ready),
+        "c01": (pkt_logic.or_decoupled_tvalid, pkt_logic.or_app_ready),
+        "c02": (pkt_logic.c02_decoupled_tvalid, pkt_logic.c02_app_ready),
+    }
+    while True:
+        await RisingEdge(dut.clk)
+        for cell, (tvalid, tready) in cells.items():
+            if tvalid.value == 1 and tready.value == 1:
+                beats[cell] += 1
+
+
+@cocotb.test()
+async def test_single_packet_c02_app(dut):
+    tb = TB(dut)
+    await tb.reset()
+
+    beats = {"c00": 0, "c01": 0, "c02": 0}
+    monitor = cocotb.start_soon(tally_slot_cell_beats(dut, beats))
+
+    request = SinglePacketRequest(conn_id=0x1235, workload_id=0x0002)
+
+    read_cmd = await tb.send_notification(request.notification)
+    assert read_cmd == request.metadata
+
+    await tb.send_rx_payload(request.payload)
+    await tb.send_tx_status_ok()
+
+    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+
+    assert frame_to_int(metadata_frame) == request.metadata
+    # cell_bbx_pattern_sim only answers 0xff when its own instance name is c01_bbx_inst, so
+    # c02_bbx_inst replies with the default 0x01 just like the c00 fall-through does: the
+    # payload alone cannot tell the two apart. The beat tally below is what proves routing.
+    assert bytes(data_frame.tdata) == bytes([0x01]) + bytes(BYTE_LANES - 1)
+    assert_keep_all(data_frame, BYTE_LANES)
+
+    await tb.expect_no_response()
+    monitor.kill()
+
+    assert beats == {"c00": 0, "c01": 0, "c02": 1}, f"workload 0x0002 took the wrong slot: {beats}"
+
+
 @cocotb.test()
 async def test_multi_packet_pattern_app(dut):
     await run_multi_packet_request(dut, workload_id=0x0000, expected_payload=bytes([0x01]) + bytes(BYTE_LANES - 1))

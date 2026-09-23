@@ -12,7 +12,7 @@ set_property -dict [list \
                         CONFIG.C_PROBE4_WIDTH {1} \
                         CONFIG.C_PROBE5_WIDTH {1} \
                         CONFIG.C_PROBE6_WIDTH {1} \
-                        CONFIG.C_PROBE7_WIDTH {2} \
+                        CONFIG.C_PROBE7_WIDTH {3} \
                         CONFIG.C_PROBE8_WIDTH {1} \
                         CONFIG.C_PROBE9_WIDTH {8} \
                         CONFIG.C_PROBE10_WIDTH {8} \
