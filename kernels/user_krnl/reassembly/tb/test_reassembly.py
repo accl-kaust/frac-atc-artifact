@@ -14,8 +14,10 @@ from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStrea
 BYTE_LANES = 64
 MAX_PACKET_BYTES = 4096     # pkt_receiver.v MAX_PACKET_BYTES: longest TCP segment accepted
 # A request may span several segments; the scheduler holds a multi-segment
-# request in a 512-beat queue FIFO until its declared size has arrived, and
+# request in a 4096-beat queue FIFO (16384 beats for the single-packet queue,
+# the upstream gen_ip.tcl depths) until its declared size has arrived, and
 # pkt_sender holds the whole response in a 512-beat FIFO before announcing it.
+# pkt_sender's payload FIFO is therefore what bounds a request.
 MAX_REQUEST_BYTES = 512 * BYTE_LANES
 RECONF_APP = 0x00AB
 OP_WRITE_HBM = 1

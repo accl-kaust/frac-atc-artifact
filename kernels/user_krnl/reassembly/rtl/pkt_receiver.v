@@ -45,7 +45,9 @@ module pkt_receiver (
     // Longest TCP segment accepted; longer notifications are dropped without
     // a read_package.  A request may be larger than this: the scheduler
     // reassembles it across segments up to the header's declared size.  A
-    // 4096-byte segment is 64 beats; every FIFO on the path holds 512.
+    // 4096-byte segment is 64 beats; the smallest FIFOs on the path (the
+    // payload FIFOs here and in pkt_sender) hold 512, the scheduler queues
+    // 4096 (see axis_data_fifo_replacements.sv).
     localparam [15:0] MAX_PACKET_BYTES = 16'd4096;
 
     wire [87:0] notif_tx_tdata;
