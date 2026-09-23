@@ -34,7 +34,13 @@ root:
       id: 1
       slot_id: 1
       region:
-        add: CLOCKREGION_X5Y2:CLOCKREGION_X6Y2
+        # Moved out of SLR0 into SLR2, the far die. Same two-clock-region
+        # shape and same X5-X6 columns as the cell that reconfigures today,
+        # and X5Y8 holds the same 960 LAGUNA sites that the working X5Y3
+        # does, so the SLR is the only variable. C00 stays in SLR0 as an
+        # in-image control. Static never claimed SLR2, so it needs no
+        # carve-out; the cmac pblock is the only other thing up there.
+        add: CLOCKREGION_X5Y8:CLOCKREGION_X6Y8
       components:
       - name: or_slot
         id: 2
