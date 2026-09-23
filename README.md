@@ -8,7 +8,7 @@ supports swapping accelerators at runtime through partial reconfiguration.
 
 ``` sh
 ├── kernels
-│   ├── cmac_krnl # CMAC IP intialization
+│   ├── cmac_krnl # CMAC IP initialization
 │   ├── common
 │   ├── network_krnl # Binding Network stack
 │   └── user_krnl # Request reassembly, accelerator slots, and PR control
@@ -33,31 +33,51 @@ The detailed guides cover the reconfiguration controller, network command ABI,
 ICAP bitstream format, build and deployment flow, verification coverage, and
 current implementation limitations.
 
+## Prerequisites
+
+### Hardware
+
+The current design targets the Xilinx Alveo U280 FPGA accelerator card
+(`xcu280-fsvh2892-2L-e`). The documented setup uses:
+
+- An Alveo U280
+- A host with a ConnectX-6 Dx 100GbE NIC
+- A 100G QSFP cable connecting the U280's `qsfp0` port to the NIC.
+- A USB cable connecting the U280's JTAG interface to the machine running Vivado
+  for initial FPGA programming.
+
+The network client and Vivado can run on the same machine or separate machines.
+See the [quick-start guide](docs/quick-start.rst) for hardware connections, host
+software setup, FPGA programming, and a request-response test.
+
+### Software
+
+Currently, the project is only tested with Vivado 2022.2 tools.
+
 ## Build Instructions
 
-### Building from scratch ?
+### Build from scratch
 
 ``` sh
 $ make all
 ```
 
-### Seperating Builds
+### Separate builds
 
-#### fRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1) and uses it as a library as well as few kernels. To build the library
+fRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1)
+as a library along with several kernels. Build the library first:
+
 ``` sh
 $ make ip
 ```
 
-#### Finally to build fRAC
+Then build fRAC:
+
 ``` sh
 $ make frac
 ```
 
-## Prerequisites
+## Libraries and Borrowed Code
 
-Currently, the project is only tested with Xilinx 2021.2 tools.
-
-
-### Libraries and Borrowed Code
-
-Some code is borrowed from [Corundum](https://github.com/corundum/corundum) and [taxi](https://github.com/fpganinja/taxi) project.
+Some code is borrowed from the [Corundum](https://github.com/corundum/corundum)
+and [taxi](https://github.com/fpganinja/taxi) projects.
