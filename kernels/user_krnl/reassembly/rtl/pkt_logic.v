@@ -5,16 +5,7 @@ module pkt_logic #(
     parameter OR_APP = 16'h0001,
     parameter RECONF_APP = 16'h00ab,
     parameter integer APP_DELAY_CYCLES = 16,
-    parameter integer SLOT_COUNT = 2,
-    // Pipeline depth on each side of every reconfigurable slot, in AXIS skid
-    // buffer stages.  A cell can sit in a different SLR from the scheduler and
-    // the output switch, and the abstract shell implementation of each RM has to
-    // close timing on the path from the last static flop, across the die
-    // boundary and through the decoupler mux into the partition pin.  These
-    // stages give the placer a flop it can drop next to the pblock so that hop
-    // is short; raise the depth if an RM still misses timing.  Must be at least
-    // 1 on the output side, which previously held a single axis_register.
-    parameter integer PR_AXIS_PIPELINE_LENGTH = 2
+    parameter integer SLOT_COUNT = 2
 ) (
     input  wire                     clk,
     input  wire                     rst,
@@ -426,6 +417,12 @@ module pkt_logic #(
     // exactly what it was and no beat can be stranded between a pipe stage and a
     // partition that is being rewritten; a stage placed inside would still be
     // holding the RM's stale handshake when the cell came back.
+    //
+    // LENGTH is given at each instantiation rather than through a module
+    // parameter, so the depth of a slot boundary is visible where that boundary
+    // is built.  All four are 10: the cells sit in a different SLR from the
+    // scheduler and the output switch, and the abstract shell implementation of
+    // each RM has to close timing across that distance.
     axis_pipeline_register #(
         .DATA_WIDTH(SLOT_DATA_W),
         .KEEP_ENABLE(1),
@@ -438,7 +435,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
+        .LENGTH(10)
     ) pattern_slot_pr_in_pipe_inst (
         .clk(clk),
         .rst(rst),
@@ -565,7 +562,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
+        .LENGTH(10)
     ) pattern_slot_tx_reg_inst (
         .clk(clk),
         .rst(rst),
@@ -626,7 +623,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
+        .LENGTH(10)
     ) or_slot_pr_in_pipe_inst (
         .clk(clk),
         .rst(rst),
@@ -748,7 +745,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
+        .LENGTH(10)
     ) or_slot_tx_reg_inst (
         .clk(clk),
         .rst(rst),
