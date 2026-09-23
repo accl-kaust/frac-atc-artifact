@@ -1,0 +1,45 @@
+name: Publish documentation
+
+on:
+  push:
+    branches: [reconf-hdr-frmt-port]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install documentation dependencies
+        run: pip install sphinx
+
+      - name: Build documentation
+        run: sphinx-build -b html docs _build/html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _build/html
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

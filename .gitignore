@@ -2,7 +2,6 @@
 .idea
 *.log
 tmp/
-.*
 build
 *.swp
 sim_build/
