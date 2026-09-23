@@ -420,7 +420,7 @@ module pkt_logic #(
     //
     // LENGTH is given at each instantiation rather than through a module
     // parameter, so the depth of a slot boundary is visible where that boundary
-    // is built.  All four are 10: the cells sit in a different SLR from the
+    // is built.  All four are 20: the cells sit in a different SLR from the
     // scheduler and the output switch, and the abstract shell implementation of
     // each RM has to close timing across that distance.
     axis_pipeline_register #(
@@ -435,7 +435,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(10)
+        .LENGTH(20)
     ) pattern_slot_pr_in_pipe_inst (
         .clk(clk),
         .rst(rst),
@@ -562,7 +562,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(10)
+        .LENGTH(20)
     ) pattern_slot_tx_reg_inst (
         .clk(clk),
         .rst(rst),
@@ -623,7 +623,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(10)
+        .LENGTH(20)
     ) or_slot_pr_in_pipe_inst (
         .clk(clk),
         .rst(rst),
@@ -745,7 +745,7 @@ module pkt_logic #(
         .USER_ENABLE(0),
         .USER_WIDTH(1),
         .REG_TYPE(2),
-        .LENGTH(10)
+        .LENGTH(20)
     ) or_slot_tx_reg_inst (
         .clk(clk),
         .rst(rst),
