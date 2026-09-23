@@ -6,24 +6,31 @@ supports swapping accelerators at runtime through partial reconfiguration.
 
 ## Directory
 
-``` sh
+```sh
+├── bin
+│   └── spinhdl      # DFX build orchestrator, see Build Instructions
 ├── kernels
-│   ├── cmac_krnl # CMAC IP intialization
+│   ├── cmac_krnl    # CMAC IP intialization
 │   ├── common
 │   ├── network_krnl # Binding Network stack
-│   └── user_krnl # Request reassembly, accelerator slots, and PR control
+│   └── user_krnl    # Request reassembly, accelerator slots, PR control, apps
 ├── lib
-│   ├── axis # Some axis components
+│   ├── axis         # Some axis components
 │   └── fpga-network-stack # TCP Stack
 ├── frac
 │   ├── ip
-│   ├── rtl # Stitches the whole stack together
+│   ├── rtl          # Stitches the whole stack together
 │   └── xdc
-├── hls.mk # Builds TCP stack
+├── static.yaml      # spinhdl manifest: the static shell
+├── spin.yaml        # spinhdl manifest: the reconfigurable-module units
+├── spinhdl.yaml     # spinhdl manifest: cells, regions and slot IDs
+├── hls.mk           # Builds the TCP stack IP into build/lib
+├── vivado.mk        # Legacy Make/Vivado flow (full image, no PR)
 ├── Makefile
-├── vivado.mk # Build fRAC
 └── README.md
 ```
+
+
 
 ## Documentation
 
@@ -35,28 +42,29 @@ current implementation limitations.
 
 ## Build Instructions
 
-### Building from scratch ?
+Requires Vivado 2022.2 on `PATH` (plus Vitis HLS 2022.2 and CMake for step 1).
+Run both commands from the repository root.
 
-``` sh
-$ make all
+1. Build the HLS network-stack IP into `build/lib`:
+
+```sh
+make ip
 ```
 
-### Seperating Builds
+1. Build fRAC with `spinhdl` (shipped in `bin/`). It reads `static.yaml`,
+  `spin.yaml` and `spinhdl.yaml`, and produces the static shell, the
+   reconfigurable modules, the full image and the partial bitstreams under
+   `build/`:
 
-#### fRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1) and uses it as a library as well as few kernels. To build the library
-``` sh
-$ make ip
+```sh
+./bin/spinhdl weave --parallel
 ```
 
-#### Finally to build fRAC
-``` sh
-$ make frac
-```
 
-## Prerequisites
 
-Currently, the project is only tested with Xilinx 2021.2 tools.
+## Libraries and Borrowed Code
 
-### Libraries and Borrowed Code
-
-Some code is borrowed from [Corundum](https://github.com/corundum/corundum) and [taxi](https://github.com/fpganinja/taxi) project.
+fRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1)
+as a library as well as a few kernels. Some code is borrowed from
+[Corundum](https://github.com/corundum/corundum) and
+[taxi](https://github.com/fpganinja/taxi).
