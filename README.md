@@ -59,4 +59,4 @@ Currently, the project is only tested with Xilinx 2021.2 tools.
 
 ### Libraries and Borrowed Code
 
-Some code is borrowed from [Corundum](https://github.com/corundum/corundum) project.
+Some code is borrowed from [Corundum](https://github.com/corundum/corundum) and [taxi](https://github.com/fpganinja/taxi) project.
