@@ -5,7 +5,16 @@ module pkt_logic #(
     parameter OR_APP = 16'h0001,
     parameter RECONF_APP = 16'h00ab,
     parameter integer APP_DELAY_CYCLES = 16,
-    parameter integer SLOT_COUNT = 2
+    parameter integer SLOT_COUNT = 2,
+    // Pipeline depth on each side of every reconfigurable slot, in AXIS skid
+    // buffer stages.  A cell can sit in a different SLR from the scheduler and
+    // the output switch, and the abstract shell implementation of each RM has to
+    // close timing on the path from the last static flop, across the die
+    // boundary and through the decoupler mux into the partition pin.  These
+    // stages give the placer a flop it can drop next to the pblock so that hop
+    // is short; raise the depth if an RM still misses timing.  Must be at least
+    // 1 on the output side, which previously held a single axis_register.
+    parameter integer PR_AXIS_PIPELINE_LENGTH = 2
 ) (
     input  wire                     clk,
     input  wire                     rst,
@@ -387,6 +396,10 @@ module pkt_logic #(
 
     // ---- C00 ----
     wire [SLOT_DATA_W-1:0] pattern_rx_tdata = {app_rx_meta, app_rx_req_last, app_rx_payload[511:0]};
+    wire [SLOT_DATA_W-1:0] pattern_piped_tdata;
+    wire                   pattern_piped_tvalid;
+    wire                   pattern_piped_tready;
+    wire                   pattern_piped_tlast;
     wire [SLOT_DATA_W-1:0] pattern_decoupled_tdata;
     wire                   pattern_decoupled_tvalid;
     wire                   pattern_decoupled_tready;
@@ -404,8 +417,48 @@ module pkt_logic #(
     wire                   pattern_tx_valid;
     wire                   pattern_tx_ready;
 
-    // echo_workload.v: rx_TREADY comes straight from the workload.
-    assign pattern_rx_ready = pattern_decoupled_tready;
+    // echo_workload.v: rx_TREADY comes straight from the workload, now through
+    // the input pipeline.
+    assign pattern_rx_ready = pattern_piped_tready;
+
+    // The pipeline stages sit OUTSIDE the decoupler deliberately.  The decoupler
+    // stays the last thing before the RM, so isolation during reconfiguration is
+    // exactly what it was and no beat can be stranded between a pipe stage and a
+    // partition that is being rewritten; a stage placed inside would still be
+    // holding the RM's stale handshake when the cell came back.
+    axis_pipeline_register #(
+        .DATA_WIDTH(SLOT_DATA_W),
+        .KEEP_ENABLE(1),
+        .KEEP_WIDTH(1),
+        .LAST_ENABLE(1),
+        .ID_ENABLE(0),
+        .ID_WIDTH(1),
+        .DEST_ENABLE(0),
+        .DEST_WIDTH(1),
+        .USER_ENABLE(0),
+        .USER_WIDTH(1),
+        .REG_TYPE(2),
+        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
+    ) pattern_slot_pr_in_pipe_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(pattern_rx_tdata),
+        .s_axis_tkeep(1'b1),
+        .s_axis_tvalid(pattern_rx_valid),
+        .s_axis_tready(pattern_piped_tready),
+        .s_axis_tlast(app_rx_req_last),
+        .s_axis_tid(1'b0),
+        .s_axis_tdest(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(pattern_piped_tdata),
+        .m_axis_tkeep(),
+        .m_axis_tvalid(pattern_piped_tvalid),
+        .m_axis_tready(pattern_decoupled_tready),
+        .m_axis_tlast(pattern_piped_tlast),
+        .m_axis_tid(),
+        .m_axis_tdest(),
+        .m_axis_tuser()
+    );
 
     axis_dfx_decoupler #(
         .DATA_W(SLOT_DATA_W),
@@ -415,12 +468,12 @@ module pkt_logic #(
         .USER_W(1)
     ) pattern_slot_decoupler_inst (
         .decouple(slot_decouple[0]),
-        .s_axis_tdata(pattern_rx_tdata),
+        .s_axis_tdata(pattern_piped_tdata),
         .s_axis_tkeep(1'b1),
         .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_rx_valid),
+        .s_axis_tvalid(pattern_piped_tvalid),
         .s_axis_tready(pattern_decoupled_tready),
-        .s_axis_tlast(app_rx_req_last),
+        .s_axis_tlast(pattern_piped_tlast),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
@@ -495,15 +548,24 @@ module pkt_logic #(
     // Registered so the slot output has a clean timing boundary before the
     // switch.  The frame boundary the switch and pkt_sender use is the in-band
     // tdata[512], exactly as upstream; the AXIS tlast is only carried along.
-    axis_register #(
+    //
+    // Deeper than one stage because a single flop here has to serve two masters:
+    // it is the first capture point for the RM's output pin and it has to reach
+    // the switch.  With several, the placer can leave the first next to the
+    // pblock and spend the rest of the budget on the trip back.
+    axis_pipeline_register #(
         .DATA_WIDTH(SLOT_DATA_W),
         .KEEP_ENABLE(1),
         .KEEP_WIDTH(1),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
+        .ID_WIDTH(1),
         .DEST_ENABLE(0),
+        .DEST_WIDTH(1),
         .USER_ENABLE(0),
-        .REG_TYPE(2)
+        .USER_WIDTH(1),
+        .REG_TYPE(2),
+        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
     ) pattern_slot_tx_reg_inst (
         .clk(clk),
         .rst(rst),
@@ -527,6 +589,10 @@ module pkt_logic #(
 
     // ---- C01 ----
     wire [SLOT_DATA_W-1:0] or_rx_tdata = {app_rx_meta, app_rx_req_last, app_rx_payload[511:0]};
+    wire [SLOT_DATA_W-1:0] or_piped_tdata;
+    wire                   or_piped_tvalid;
+    wire                   or_piped_tready;
+    wire                   or_piped_tlast;
     wire [SLOT_DATA_W-1:0] or_decoupled_tdata;
     wire                   or_decoupled_tvalid;
     wire                   or_decoupled_tready;
@@ -544,8 +610,43 @@ module pkt_logic #(
     wire                   or_tx_valid;
     wire                   or_tx_ready;
 
-    // echo_workload.v: rx_TREADY comes straight from the workload.
-    assign or_rx_ready = or_decoupled_tready;
+    // echo_workload.v: rx_TREADY comes straight from the workload, now through
+    // the input pipeline.
+    assign or_rx_ready = or_piped_tready;
+
+    axis_pipeline_register #(
+        .DATA_WIDTH(SLOT_DATA_W),
+        .KEEP_ENABLE(1),
+        .KEEP_WIDTH(1),
+        .LAST_ENABLE(1),
+        .ID_ENABLE(0),
+        .ID_WIDTH(1),
+        .DEST_ENABLE(0),
+        .DEST_WIDTH(1),
+        .USER_ENABLE(0),
+        .USER_WIDTH(1),
+        .REG_TYPE(2),
+        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
+    ) or_slot_pr_in_pipe_inst (
+        .clk(clk),
+        .rst(rst),
+        .s_axis_tdata(or_rx_tdata),
+        .s_axis_tkeep(1'b1),
+        .s_axis_tvalid(or_rx_valid),
+        .s_axis_tready(or_piped_tready),
+        .s_axis_tlast(app_rx_req_last),
+        .s_axis_tid(1'b0),
+        .s_axis_tdest(1'b0),
+        .s_axis_tuser(1'b0),
+        .m_axis_tdata(or_piped_tdata),
+        .m_axis_tkeep(),
+        .m_axis_tvalid(or_piped_tvalid),
+        .m_axis_tready(or_decoupled_tready),
+        .m_axis_tlast(or_piped_tlast),
+        .m_axis_tid(),
+        .m_axis_tdest(),
+        .m_axis_tuser()
+    );
 
     axis_dfx_decoupler #(
         .DATA_W(SLOT_DATA_W),
@@ -555,12 +656,12 @@ module pkt_logic #(
         .USER_W(1)
     ) or_slot_decoupler_inst (
         .decouple(slot_decouple[1]),
-        .s_axis_tdata(or_rx_tdata),
+        .s_axis_tdata(or_piped_tdata),
         .s_axis_tkeep(1'b1),
         .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_rx_valid),
+        .s_axis_tvalid(or_piped_tvalid),
         .s_axis_tready(or_decoupled_tready),
-        .s_axis_tlast(app_rx_req_last),
+        .s_axis_tlast(or_piped_tlast),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
@@ -635,15 +736,19 @@ module pkt_logic #(
     // Registered so the slot output has a clean timing boundary before the
     // switch.  The frame boundary the switch and pkt_sender use is the in-band
     // tdata[512], exactly as upstream; the AXIS tlast is only carried along.
-    axis_register #(
+    axis_pipeline_register #(
         .DATA_WIDTH(SLOT_DATA_W),
         .KEEP_ENABLE(1),
         .KEEP_WIDTH(1),
         .LAST_ENABLE(1),
         .ID_ENABLE(0),
+        .ID_WIDTH(1),
         .DEST_ENABLE(0),
+        .DEST_WIDTH(1),
         .USER_ENABLE(0),
-        .REG_TYPE(2)
+        .USER_WIDTH(1),
+        .REG_TYPE(2),
+        .LENGTH(PR_AXIS_PIPELINE_LENGTH)
     ) or_slot_tx_reg_inst (
         .clk(clk),
         .rst(rst),
