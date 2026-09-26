@@ -74,6 +74,59 @@ class ToeTx:
             self.responses.append((self.metas.popleft() if self.metas else None, data))
 
 
+class ToeTxWindows:
+    """
+    The TOE's TX side deciding admission per session, as tasi_metaLoader does:
+    a request longer than the session's usable window is refused with error 2
+    and that window in [61:32], every request for a closed session with error
+    1, and only an accepted request's data is read.  Accepted data is appended
+    to its session's byte stream; data with no accepted request to go with it
+    is a protocol error.
+    """
+
+    def __init__(self, tb, window_of, closed=(), status_delay=8):
+        self.tb = tb
+        self.window_of = window_of      # (session, attempt) -> usable window in bytes
+        self.closed = set(closed)
+        self.status_delay = status_delay
+        self.attempts = defaultdict(int)
+        self.refused = defaultdict(int)
+        self.accepted = deque()         # (session, length) whose data is due
+        self.streams = defaultdict(bytearray)
+        self.errors = []
+        cocotb.start_soon(self._status())
+        cocotb.start_soon(self._data())
+
+    async def _status(self):
+        while True:
+            meta = frame_to_int(await self.tb.tx_metadata_sink.recv())
+            session, length = meta & 0xffff, meta >> 16
+            self.attempts[session] += 1
+            await ClockCycles(self.tb.dut.clk, self.status_delay)
+            if session in self.closed:
+                error, window = 1, 0
+            else:
+                window = self.window_of(session, self.attempts[session])
+                error = 0 if length <= window else 2
+            if error:
+                self.refused[session] += 1
+            else:
+                self.accepted.append((session, length))
+            status = (error << 62) | ((window & 0x3fffffff) << 32) | (length << 16) | session
+            await self.tb.tx_status_source.send(AxiStreamFrame(int_to_le_bytes(status, 8)))
+
+    async def _data(self):
+        while True:
+            data = bytes((await self.tb.tx_data_sink.recv()).tdata)
+            if not self.accepted:
+                self.errors.append(f"{len(data)} bytes sent with no accepted request")
+                continue
+            session, length = self.accepted.popleft()
+            if len(data) != length:
+                self.errors.append(f"session {session:#x}: {len(data)} bytes sent for a {length}-byte request")
+            self.streams[session] += data
+
+
 async def run_clients(dut, n_clients, sizes, framing, requests_per_client, window=1, seed=1, patience=20000):
     """
     n_clients connections sending requests of the given sizes, each keeping up
@@ -136,6 +189,40 @@ def check(result):
     assert result == (0, 0, 0), "wrong={} missing={} length mismatch={}".format(*result)
 
 
+async def run_refusing_stack(dut, n_clients, sizes, window_of, closed=(), requests_per_client=6, seed=3):
+    """
+    One-segment requests from n_clients connections, all sent up front, against
+    a TX side that refuses requests as ToeTxWindows describes.  Every open
+    connection's byte stream must come out exactly as its requests went in.
+    """
+    tb = TB(dut)
+    await tb.reset()
+    toe = ToeRxBuffer(tb)
+    tx = ToeTxWindows(tb, window_of, closed)
+    rng = random.Random(seed)
+
+    conns = [0x200 + c for c in range(n_clients)]
+    expected = defaultdict(bytearray)
+    for s in range(requests_per_client):
+        for c in conns:
+            request = make_request(rng.choice(sizes), c, s)
+            await toe.receive_segment(request, conn_id=c)
+            if c not in tx.closed:
+                expected[c] += request
+    total = sum(len(stream) for stream in expected.values())
+    for _ in range(20000):
+        if sum(len(tx.streams[c]) for c in conns) >= total:
+            break
+        await ClockCycles(dut.clk, 16)
+    await ClockCycles(dut.clk, 2000)
+
+    dut._log.info(f"{n_clients} clients, sizes {sizes}: refused {dict(tx.refused)}, "
+                  f"got {[len(tx.streams[c]) for c in conns]} of {[len(expected[c]) for c in conns]} bytes")
+    assert not tx.errors, tx.errors[:4]
+    for c in conns:
+        assert bytes(tx.streams[c]) == bytes(expected[c]), f"connection {c:#x}"
+
+
 @cocotb.test()
 async def test_one_client_one_segment_requests(dut):
     """One client, requests of 128 to 4096 bytes, each written in one piece."""
@@ -177,6 +264,27 @@ async def test_four_clients_header_segment_then_data(dut):
     own, carrying its own size.
     """
     check(await run_clients(dut, 4, [1024, 4096], "header_alone", 8))
+
+
+@cocotb.test()
+async def test_small_send_window_splits_responses(dut):
+    """
+    Every session's usable window is 1000 bytes, so 4 KB responses are
+    refused whole and must go out as several requests that fit.
+    """
+    await run_refusing_stack(dut, 3, [256, 4096], lambda session, attempt: 1000)
+
+
+@cocotb.test()
+async def test_no_send_window_at_first(dut):
+    """The first requests find no room at all; later ones find plenty."""
+    await run_refusing_stack(dut, 3, [512, 2048], lambda session, attempt: 0 if attempt <= 3 else 1 << 20)
+
+
+@cocotb.test()
+async def test_closed_connection_responses_are_dropped(dut):
+    """One client has gone: its responses are dropped, everyone else's arrive intact."""
+    await run_refusing_stack(dut, 3, [256, 1024], lambda session, attempt: 1 << 20, closed={0x201})
 
 
 @cocotb.test(expect_fail=True)

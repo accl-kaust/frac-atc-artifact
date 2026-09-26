@@ -19,7 +19,31 @@
 //
 //////////////////////////////////////////////////////////////////////////////////
 
-module pkt_sender (
+// Hands each response to the TCP stack: a request {length, session} on
+// m_axis_tx_metadata and, once the stack has accepted it, that many bytes on
+// m_axis_tx_data.
+//
+// The stack answers every request with a status whose error field
+// (s_axis_tx_status_tdata[63:62]) is 0 accepted, 1 connection not established
+// or 2 no space, and it reads data only for an accepted request.  Data sent for
+// a refused request is taken by the next accepted one as its own, and every
+// later response on every connection comes out misaligned -- so a refused
+// request's data is never sent.  A response for a connection that is gone is
+// discarded.  "No space" means the session's usable send window -- the smaller
+// of its congestion window and the peer's receive window, less what is in
+// flight -- is shorter than the request, and the status carries that window in
+// [61:32].  The response is then sent in pieces: the request is reissued for as
+// many whole lines as fit, and the rest follows in further requests.  With less
+// than a line free it is reissued after BACKOFF_CYCLES, the window opening as
+// the peer acknowledges.  So a response longer than a fresh session's
+// congestion window (10 x 1460 bytes), or than the peer's receive window, still
+// gets through, and one that fits goes out as a single request as before.
+// One request is outstanding at a time, keeping acceptance in the order of the
+// data.
+
+module pkt_sender #(
+        parameter integer BACKOFF_CYCLES = 64
+    ) (
         input wire clk,
         input wire rst,
 
@@ -42,18 +66,21 @@ module pkt_sender (
         input wire           m_axis_tx_data_tready
     );
 
-    wire status_tx_tvalid;
-    reg  status_tx_tready;
-    wire status_tx_tdata;
+    localparam [1:0] TX_OK           = 2'd0;
+    localparam [1:0] TX_NOCONNECTION = 2'd1;
 
-    // FIFO for storing TX status from the TCP stack.
+    // Status from the TCP stack: {error, usable window}.
+    wire        status_tx_tvalid;
+    reg         status_tx_tready;
+    wire [31:0] status_tx_tdata;
+
     axis_fifo_taxi #(
-        .DATA_WIDTH(1),
-        .DEPTH(256)
+        .DATA_WIDTH(32),
+        .DEPTH(16)
     ) fifo_status (
         .clk(clk),
         .rst(rst),
-        .s_axis_tdata(s_axis_tx_status_tdata[62:62]), // 1'b0: OK 1'b1: Error (Send to closed conn)
+        .s_axis_tdata({s_axis_tx_status_tdata[63:62], s_axis_tx_status_tdata[61:32]}),
         .s_axis_tvalid(s_axis_tx_status_tvalid),
         .s_axis_tready(s_axis_tx_status_tready),
         .m_axis_tdata(status_tx_tdata),
@@ -61,16 +88,18 @@ module pkt_sender (
         .m_axis_tready(status_tx_tready)
     );
 
+    wire [1:0]  status_error = status_tx_tdata[31:30];
+    wire [29:0] status_space = status_tx_tdata[29:0];
+
     /**********/
-    reg [511 + 1:0]  payload_rx_tdata;
-    reg          payload_rx_tvalid;
+    wire [511 + 1:0] payload_rx_tdata = pkt_rx_tdata[511 + 1:0]; //tlast + tdata
+    wire         payload_rx_tvalid;
     wire         payload_rx_tready;
 
     wire         payload_tx_tvalid;
-    reg          payload_tx_tready = 0;
+    reg          payload_tx_tready;
 
     wire [512: 0] output_tx;
-
 
     //FIFO for storing payload
   axis_data_fifo_513 fifo_payload (
@@ -84,20 +113,17 @@ module pkt_sender (
   .m_axis_tdata(output_tx)      // output wire [519 : 0] m_axis_tdata
 );
 
-    assign m_axis_tx_data_tlast = output_tx[512] && m_axis_tx_data_tvalid;
     assign m_axis_tx_data_tdata = output_tx[511:0];
 
     /**********/
 
-    //reg [31:0]  metadata_rx_tdata;//original 16-bit
+    // {length, session} of each response, taken from its tlast beat once the
+    // whole response is in the payload FIFO.
     wire        metadata_rx_tready;
     wire [31:0] metadata_tx_tdata;
     wire        metadata_tx_tvalid;
-    wire        metadata_tx_tready;
-    //For debug
-    wire [31:0] metadata_notification;
-    assign metadata_notification = pkt_rx_tdata[512 + 32: 512 + 1];
-
+    reg         metadata_tx_tready;
+    wire [31:0] metadata_notification = pkt_rx_tdata[512 + 32: 512 + 1];
 
     axis_fifo_taxi #(
         .DATA_WIDTH(32),
@@ -112,59 +138,128 @@ module pkt_sender (
         .m_axis_tvalid(metadata_tx_tvalid),
         .m_axis_tready(metadata_tx_tready)
     );
+
+    assign pkt_rx_tready = metadata_rx_tready & payload_rx_tready;
+    assign payload_rx_tvalid = pkt_rx_tready & pkt_rx_tvalid;
+
     /**********/
 
+    localparam [2:0] S_IDLE    = 3'd0,  // waiting for a whole response
+                     S_REQ     = 3'd1,  // requesting the next piece of it
+                     S_WAIT    = 3'd2,  // for the stack's answer
+                     S_BACKOFF = 3'd3,  // no room at all: wait, then ask again
+                     S_SEND    = 3'd4,  // the accepted piece
+                     S_DROP    = 3'd5;  // the connection is gone
 
+    reg [2:0]  state;
+    reg [15:0] cur_session;
+    reg [15:0] cur_remaining;    // bytes of the response not yet accepted
+    reg [15:0] chunk_limit;      // longest piece to ask for: all of it until refused
+    reg [15:0] chunk_len;        // piece asked for
+    reg [15:0] beats_left;       // beats of the accepted piece still to send
+    reg [15:0] backoff_cnt;
 
-reg tx_payload_active = 1'b0;
-reg tx_status_consumed = 1'b0;
+    wire [15:0] chunk_ask  = (cur_remaining > chunk_limit) ? chunk_limit : cur_remaining;
+    // whole lines of the usable window the stack reported
+    wire [15:0] space_lines = (status_space > 30'd65535) ? 16'hffc0 : {status_space[15:6], 6'd0};
 
-assign m_axis_tx_metadata_tdata = metadata_tx_tdata;
-assign m_axis_tx_metadata_tvalid = metadata_tx_tvalid && !tx_payload_active;
-assign metadata_tx_tready = m_axis_tx_metadata_tready && !tx_payload_active;
+    assign m_axis_tx_metadata_tdata  = {chunk_ask, cur_session};
+    assign m_axis_tx_metadata_tvalid = (state == S_REQ);
 
-assign pkt_rx_tready = metadata_rx_tready & payload_rx_tready;
+    wire response_end = output_tx[512];
+    wire piece_end    = beats_left == 16'd1 || response_end;
+    assign m_axis_tx_data_tlast = (state == S_SEND) && piece_end && m_axis_tx_data_tvalid;
 
-always @(posedge clk) begin
-    if (rst) begin
-        tx_payload_active <= 1'b0;
-        tx_status_consumed <= 1'b0;
-    end else begin
-        if (!tx_payload_active && metadata_tx_tvalid && metadata_tx_tready) begin
-            tx_payload_active <= 1'b1;
-            tx_status_consumed <= 1'b0;
-        end else if (tx_payload_active && payload_tx_tvalid && payload_tx_tready) begin
-            if (!tx_status_consumed && status_tx_tvalid && !status_tx_tdata && !output_tx[512]) begin
-                tx_status_consumed <= 1'b1;
+    always @(*) begin
+        m_axis_tx_data_tkeep = {64{1'b1}};
+        metadata_tx_tready = (state == S_IDLE);
+        status_tx_tready = (state == S_WAIT);
+        case (state)
+            S_SEND: begin
+                m_axis_tx_data_tvalid = payload_tx_tvalid;
+                payload_tx_tready = m_axis_tx_data_tready;
             end
-            if (output_tx[512]) begin
-                tx_payload_active <= 1'b0;
-                tx_status_consumed <= 1'b0;
+            S_DROP: begin
+                m_axis_tx_data_tvalid = 1'b0;
+                payload_tx_tready = 1'b1;
             end
+            default: begin
+                m_axis_tx_data_tvalid = 1'b0;
+                payload_tx_tready = 1'b0;
+            end
+        endcase
+    end
+
+    wire payload_fire = payload_tx_tvalid && payload_tx_tready;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            state <= S_IDLE;
+            cur_session <= 16'd0;
+            cur_remaining <= 16'd0;
+            chunk_limit <= 16'hffff;
+            chunk_len <= 16'd0;
+            beats_left <= 16'd0;
+            backoff_cnt <= 16'd0;
+        end else begin
+            case (state)
+                S_IDLE: begin
+                    if (metadata_tx_tvalid) begin
+                        cur_session <= metadata_tx_tdata[15:0];
+                        cur_remaining <= metadata_tx_tdata[31:16];
+                        chunk_limit <= 16'hffff;
+                        // nothing to announce: just clear the payload out
+                        state <= (metadata_tx_tdata[31:16] == 16'd0) ? S_DROP : S_REQ;
+                    end
+                end
+                S_REQ: begin
+                    if (m_axis_tx_metadata_tready) begin
+                        chunk_len <= chunk_ask;
+                        state <= S_WAIT;
+                    end
+                end
+                S_WAIT: begin
+                    if (status_tx_tvalid) begin
+                        if (status_error == TX_OK) begin
+                            beats_left <= (chunk_len + 16'd63) >> 6;
+                            cur_remaining <= cur_remaining - chunk_len;
+                            state <= S_SEND;
+                        end else if (status_error == TX_NOCONNECTION) begin
+                            state <= S_DROP;
+                        end else if (space_lines != 16'd0 && space_lines < chunk_len) begin
+                            chunk_limit <= space_lines;
+                            state <= S_REQ;
+                        end else begin
+                            backoff_cnt <= BACKOFF_CYCLES[15:0];
+                            state <= S_BACKOFF;
+                        end
+                    end
+                end
+                S_BACKOFF: begin
+                    if (backoff_cnt == 16'd0) begin
+                        state <= S_REQ;
+                    end else begin
+                        backoff_cnt <= backoff_cnt - 16'd1;
+                    end
+                end
+                S_SEND: begin
+                    if (payload_fire) begin
+                        beats_left <= beats_left - 16'd1;
+                        if (response_end) begin
+                            state <= S_IDLE;
+                        end else if (beats_left == 16'd1) begin
+                            state <= (cur_remaining == 16'd0) ? S_IDLE : S_REQ;
+                        end
+                    end
+                end
+                S_DROP: begin
+                    if (payload_fire && response_end) begin
+                        state <= S_IDLE;
+                    end
+                end
+                default: state <= S_IDLE;
+            endcase
         end
     end
-end
-
-reg m_axis_tx_data_tvalid_inst = 0;
-always @(*) begin
-    //metadata_rx_tdata = pkt_rx_tdata[512+16-1 + 1 : 512 + 1]; // Packet Size: 64 Byte
-    m_axis_tx_data_tvalid_inst = 1'b0;
-    payload_rx_tdata = pkt_rx_tdata[511 + 1:0]; //tlast + tdata
-    payload_rx_tvalid = pkt_rx_tready & pkt_rx_tvalid;
-    m_axis_tx_data_tkeep = {64{1'b1}};
-
-    if (tx_payload_active == 1'b1 && tx_status_consumed == 1'b0 && status_tx_tvalid == 1'b1 && payload_tx_tvalid == 1'b1 && status_tx_tdata == 1'b1) begin //Payload sent the same time as status
-        // exception handler: sent to closed connection
-        // discard payload and status
-        m_axis_tx_data_tvalid = 1'b0;
-        status_tx_tready = 1'b1;
-        payload_tx_tready = 1'b1;
-    end else begin
-        m_axis_tx_data_tvalid_inst = tx_payload_active & payload_tx_tvalid & (tx_status_consumed | status_tx_tvalid);
-        status_tx_tready = m_axis_tx_data_tvalid_inst & !tx_status_consumed & m_axis_tx_data_tready;
-        payload_tx_tready = m_axis_tx_data_tvalid_inst & m_axis_tx_data_tready;
-        m_axis_tx_data_tvalid = payload_tx_tvalid & payload_tx_tready;
-    end
-end
 
 endmodule
