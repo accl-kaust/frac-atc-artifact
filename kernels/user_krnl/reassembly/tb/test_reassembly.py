@@ -550,20 +550,13 @@ async def test_echo_requests_cut_at_toe_mss(dut):
             await run_segmented_echo_request(tb, total_bytes, mss, header_alone=True, conn_id=0x6211)
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_two_connections_interleaved_max_requests(dut):
     """
     Two connections, both 4096 bytes, their 512-byte segments arriving
-    alternately, back to back at the scheduler input.
-
-    KNOWN FAILURE on this branch.  The scheduler raises input_tvalid for the
-    queue a beat belongs to but never lowers the other queues', so while one
-    queue's segment streams in the other queue's FIFO re-writes its last beat
-    once per foreign beat: each response comes back with every segment's last
-    line repeated, longer than the 4096 its metadata announces.  0502074 fixed
-    this (clear every write strobe before matching) together with the output
-    FIFO backpressure; b9f6f1a reverted both with the rest of the PR path.
-    Drop expect_fail when that fix is re-applied.
+    alternately, back to back at the scheduler input.  A queue is written
+    only in the cycle a beat of its own connection is accepted, so neither
+    response picks up the other's beats or repeats its own.
     """
     tb = TB(dut)
     await tb.reset()

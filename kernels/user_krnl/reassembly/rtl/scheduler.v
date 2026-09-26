@@ -19,19 +19,45 @@
 //
 //////////////////////////////////////////////////////////////////////////////////
 
+// Reassembles requests from the TCP segments the dispatcher tags, and hands
+// them on one whole request at a time.
+//
+// Input.  The TOE delivers each segment contiguously, but segments of
+// different connections interleave.  Every beat is routed by its connection:
+//   - to the single-packet FIFO while it is taking a request that arrived
+//     whole in one segment (single_active / single_conn);
+//   - to the queue its connection holds, for a request spread over segments;
+//   - otherwise the beat starts a new request, and must carry the FIRST flag.
+//     One that is complete in this segment goes to the single-packet FIFO, as
+//     upstream offrac does; a longer one takes a free queue and holds it until
+//     its declared size has arrived.  A beat that starts nothing is dropped.
+// A beat is accepted only when the FIFO it belongs in can take it, and it is
+// written in the cycle it is accepted, so nothing is lost or written twice.
+//
+// A new multi-segment request waits while every queue holds an unfinished
+// one.  The segments that would finish those arrive behind it, so more
+// concurrent multi-segment requests than QUEUE_NUM stall the input for good.
+// Requests that fit one segment never take a queue.
+//
+// Output.  A grant is taken at a request boundary -- round robin over the
+// queues holding a finished request and the single-packet FIFO -- and held
+// until that request's last beat has been accepted downstream.  Backpressure
+// runs from tx_tready back to the FIFOs.  Finished and handed-on requests are
+// counted per queue by the input and output side respectively, one writer
+// each.
 
  module scheduler
- #(QUEUE_NUM = 2, TDATA_SIZE = 512 + 32 + WORKLOAD_SIZE + PACKET_SIZE + 16 + 1, CONN_ID = 16, WORKLOAD_SIZE = 16,PACKET_SIZE = 32, META_SIZE = 16,
+ #(QUEUE_NUM = 4, TDATA_SIZE = 512 + 32 + WORKLOAD_SIZE + PACKET_SIZE + 16 + 1, CONN_ID = 16, WORKLOAD_SIZE = 16,PACKET_SIZE = 32, META_SIZE = 16,
     ECHO  = 0, TOP_K = 1, MM = 2, LOG = 3, NORM = 5)
  (
      input wire clk,
      input wire rst,
-     // Input: {packet_size[31:0], workload_selection[15:0], dstPort[15:0], meta[31:0], tlast, payload[511:0]}
-     input wire [TDATA_SIZE - 1: 0] rx_tdata, // {packet_size, tx_selection, dstPort, rx_tdata}
+     // Input: {dstPort[15:0], packet_size[31:0], workload_selection[15:0], meta[31:0], tlast, payload[511:0]}
+     input wire [TDATA_SIZE - 1: 0] rx_tdata,
      input wire rx_tvalid,
      output reg rx_tready,
      // Output: {request_end, dstPort[15:0], workload_type[15:0], meta[31:0], tcp_tlast, payload[511:0]}
-     //   meta = {request_size[15:0], connID[15:0]} -- see rx_req_size below
+     //   meta = {request_size[15:0], connID[15:0]} -- the header's packet_size, not one segment's length
      output wire [512 + 16 + 32 + 16 + 1:0] tx_tdata,
      output wire tx_tvalid,
      input wire tx_tready
@@ -40,435 +66,329 @@
      wire [31:0] metadata;
      assign metadata =  tx_tdata[512+32: 512 + 1];
 
-     // Extract dstPort from input (now at MSB of dispatcher output)
-     // Input format: {dstPort[15:0], packet_size[31:0], workload_selection[15:0], meta[31:0], tlast, payload[511:0]}
-     // Bit positions: payload[511:0], tlast[512], meta[544:513], workload[560:545], packet_size[592:561], dstPort[608:593]
-     wire [15:0] rx_dstPort = rx_tdata[608:593];
-     wire        rx_is_header = rx_tdata[480];
+     localparam integer ENTRY_W = 512 + 16 + 32 + 16 + 2;  // {request_end, dstPort, workload, meta, tlast, payload}
+     localparam integer FIFO_W  = 584;
+     localparam integer SINGLE  = QUEUE_NUM;             // grant index of the single-packet FIFO
 
-     // What the slot receives as meta_TDATA.  The TCP stack's per-packet
-     // {length, connID} in rx_tdata[544:513] is what the queues are matched
-     // and released on below (counter_inst accumulates the packet lengths
-     // against the header's packet_size, as upstream does).  The slot gets
-     // the size of the whole request in the length field instead: the
-     // header's packet_size, which the dispatcher carries in rx_tdata[592:561]
-     // and which this module already keeps per queue in counter[].  A
-     // workload can then take the request's length straight from meta -- echo
-     // returns it as the response length, log/norm subtract the header line --
-     // rather than count beats, and a request that spans several TCP packets
-     // is no longer reported with the last packet's length.
-     wire [15:0] rx_connid   = rx_tdata[528:513];
-     wire [15:0] rx_req_size = rx_tdata[576:561];   // packet_size[15:0]
+     // Bit positions: payload[511:0], tlast[512], meta[544:513] = {length, connID},
+     // workload[560:545], packet_size[592:561], dstPort[608:593]
+     wire [512:0]         rx_beat      = rx_tdata[512:0];
+     wire                 rx_tlast     = rx_tdata[512];
+     wire [CONN_ID-1:0]   rx_connid    = rx_tdata[528:513];
+     wire [15:0]          rx_tcp_bytes = rx_tdata[544:529];
+     wire [15:0]          rx_workload  = rx_tdata[560:545];
+     wire [31:0]          rx_pkt_size  = rx_tdata[592:561];
+     wire [15:0]          rx_req_size  = rx_tdata[576:561];   // packet_size[15:0]
+     wire [15:0]          rx_dstPort   = rx_tdata[608:593];
+     wire                 rx_is_header = rx_tdata[480];       // FIRST request flag
+     wire                 rx_fire      = rx_tvalid && rx_tready;
 
-     //Normal queues input - widened by 16 bits for dstPort
-     reg  [1 + 512 + 32 + 16 + 16: 0] input_tdata [QUEUE_NUM - 1: 0]; //last of message + dstPort + workload + meta + tlast + payload
-     reg  [QUEUE_NUM - 1: 0] input_tvalid;
-     wire [QUEUE_NUM - 1: 0] input_tready;
-
-     //Single-packet queue input - widened by 16 bits for dstPort
-     reg  [1 + 512 + 32 + 16 + 16: 0] input_tdata_single;
-     reg  input_tvalid_single;
-     wire  input_tready_single;
-
-     //Normal queues output - widened by 16 bits for dstPort
-     wire [1 + 512 + 32 + 16 + 16: 0] output_tdata [QUEUE_NUM - 1: 0];
-     wire [QUEUE_NUM - 1: 0] output_tvalid;
-     reg [QUEUE_NUM - 1: 0] output_tready;
-     reg  [7:0] credits [QUEUE_NUM - 1: 0];
-     reg [7:0] output_deduct_credits [QUEUE_NUM - 1: 0];
-
-     //Single-packet queue output - widened by 16 bits for dstPort
-     wire [1 + 512 + 32 + 16 + 16: 0] output_tdata_single;
-     wire output_tvalid_single;
-     reg output_tready_single_FIFO;
-
-     //meta_reg - add dstPort storage
-     reg  [WORKLOAD_SIZE + CONN_ID + 16 - 1: 0] input_META [QUEUE_NUM - 1: 0]; // {dstPort, workload, connID}
-     reg  [WORKLOAD_SIZE + CONN_ID + 16 - 1: 0] input_META_single;
-
-     //input signals
-     reg [31:0] counter [QUEUE_NUM - 1: 0];
-     reg [31:0] counter_inst [QUEUE_NUM - 1: 0];
-
-     // output selection control
-     reg [QUEUE_NUM - 1: 0] output_tready_sel;
-     reg output_tready_single = 0;
-
-     // module-level loop temps (avoid declaring in blocks)
-     integer map_i;
-     integer initial_i;
-     integer queue;
-     integer m;
-     integer alloc_i;
-     integer clr_i;
-     integer output_queue;
-     integer active_idx;
-     integer idx;
+     integer i;
      integer step;
-     integer found_next;
-     integer next_idx;
-     integer keep_i;
-     integer hold_i;
-     integer choose_i;
-     integer chosen;
-     integer set_i;
-     integer reset_i;
-     reg matched_any;
-     reg allocated;
+     integer src;
 
+     // ------------------------------------------------------------ queues
 
+     reg  [ENTRY_W-1:0]   in_entry;
+     reg  [QUEUE_NUM-1:0] input_tvalid;
+     wire [QUEUE_NUM-1:0] input_tready;
+     wire [FIFO_W-1:0]    output_tdata  [QUEUE_NUM-1:0];
+     wire [QUEUE_NUM-1:0] output_tvalid;
+     reg  [QUEUE_NUM-1:0] output_tready;
 
-    // Per-queue input FIFOs
-    genvar gi;
-    generate
-        for (gi = 0; gi < QUEUE_NUM; gi = gi + 1) begin : GEN_INPUT_FIFO
-            axis_data_fifo_0 fifo_inst(
-              .rst(rst),
-              .clk(clk),
-              .s_axis_tvalid(input_tvalid[gi]),
-              .s_axis_tready(input_tready[gi]),
-              .s_axis_tdata(input_tdata[gi]),
-              .m_axis_tvalid(output_tvalid[gi]),
-              .m_axis_tready(output_tready[gi]),
-              .m_axis_tdata(output_tdata[gi])
-            );
-        end
-    endgenerate
+     reg                  input_tvalid_single;
+     wire                 input_tready_single;
+     wire [FIFO_W-1:0]    output_tdata_single;
+     wire                 output_tvalid_single;
+     reg                  output_tready_single;
 
-    // Single-packet FIFO
-    axis_data_fifo_1 fifo_inst_single(
-      .rst(rst),
-      .clk(clk),
-      .s_axis_tvalid(input_tvalid_single),
-      .s_axis_tready(input_tready_single),
-      .s_axis_tdata(input_tdata_single),
-      .m_axis_tvalid(output_tvalid_single),
-      .m_axis_tready(output_tready_single_FIFO),
-      .m_axis_tdata(output_tdata_single)
-    );
+     genvar gi;
+     generate
+         for (gi = 0; gi < QUEUE_NUM; gi = gi + 1) begin : GEN_INPUT_FIFO
+             axis_data_fifo_0 fifo_inst(
+               .rst(rst),
+               .clk(clk),
+               .s_axis_tvalid(input_tvalid[gi]),
+               .s_axis_tready(input_tready[gi]),
+               .s_axis_tdata({{(FIFO_W-ENTRY_W){1'b0}}, in_entry}),
+               .m_axis_tvalid(output_tvalid[gi]),
+               .m_axis_tready(output_tready[gi]),
+               .m_axis_tdata(output_tdata[gi])
+             );
+         end
+     endgenerate
 
-     //initialize all virtual queues and credits
-     initial begin
-        output_tready_sel = {QUEUE_NUM{1'b0}};
-        for (initial_i = 0; initial_i < QUEUE_NUM; initial_i = initial_i + 1) begin
-            credits[initial_i] = 8'b0;
-            output_deduct_credits[initial_i] = 8'b0;
-            input_META[initial_i] = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}}; // all ones (includes dstPort)
-            counter[initial_i] = 32'b0;
-            counter_inst[initial_i] = 32'b0;
-        end
-        input_META_single = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
-    end
+     axis_data_fifo_1 fifo_inst_single(
+       .rst(rst),
+       .clk(clk),
+       .s_axis_tvalid(input_tvalid_single),
+       .s_axis_tready(input_tready_single),
+       .s_axis_tdata({{(FIFO_W-ENTRY_W){1'b0}}, in_entry}),
+       .m_axis_tvalid(output_tvalid_single),
+       .m_axis_tready(output_tready_single),
+       .m_axis_tdata(output_tdata_single)
+     );
 
+     // A queue held by an unfinished request, and whose connection holds it.
+     reg                  q_busy     [QUEUE_NUM-1:0];
+     reg  [CONN_ID-1:0]   q_conn     [QUEUE_NUM-1:0];
+     reg  [15:0]          q_dstPort  [QUEUE_NUM-1:0];
+     reg  [15:0]          q_workload [QUEUE_NUM-1:0];
+     reg  [31:0]          q_size     [QUEUE_NUM-1:0];   // declared request size
+     reg  [31:0]          q_got      [QUEUE_NUM-1:0];   // bytes of its segments seen so far
+     reg  [15:0]          q_done     [QUEUE_NUM-1:0];   // requests finished (input side)
+     reg  [15:0]          q_sent     [QUEUE_NUM-1:0];   // requests handed on (output side)
+
+     // The request streaming into the single-packet FIFO, when its segment
+     // has more than one beat.
+     reg                  single_active;
+     reg  [CONN_ID-1:0]   single_conn;
+     reg  [15:0]          single_dstPort;
+     reg  [15:0]          single_workload;
+     reg  [15:0]          single_req_size;
+
+     // ------------------------------------------------------------ input
+
+     localparam [2:0] R_SINGLE     = 3'd0,  // rest of a whole-segment request
+                      R_QUEUE      = 3'd1,  // next part of a multi-segment request
+                      R_NEW_SINGLE = 3'd2,  // new request, whole in this segment
+                      R_NEW_QUEUE  = 3'd3,  // new request, spread over segments
+                      R_DROP       = 3'd4;  // starts nothing
+
+     reg        hit;
+     reg [7:0]  hit_idx;
+     reg        free_found;
+     reg [7:0]  free_idx;
+
+     always @* begin
+         hit = 1'b0;
+         hit_idx = 8'd0;
+         free_found = 1'b0;
+         free_idx = 8'd0;
+         for (i = 0; i < QUEUE_NUM; i = i + 1) begin
+             if (!hit && q_busy[i] && q_conn[i] == rx_connid) begin
+                 hit = 1'b1;
+                 hit_idx = i;
+             end
+             if (!free_found && !q_busy[i]) begin
+                 free_found = 1'b1;
+                 free_idx = i;
+             end
+         end
+     end
+
+     wire        in_single        = single_active && rx_connid == single_conn;
+     wire        whole_in_segment = {16'd0, rx_tcp_bytes} >= rx_pkt_size;
+     wire [31:0] hit_got_next     = q_got[hit_idx] + {16'd0, rx_tcp_bytes};
+     wire        hit_request_done = rx_tlast && hit_got_next >= q_size[hit_idx];
+
+     reg [2:0] route;
+     always @* begin
+         if (in_single)             route = R_SINGLE;
+         else if (hit)              route = R_QUEUE;
+         else if (!rx_is_header)    route = R_DROP;
+         else if (whole_in_segment) route = R_NEW_SINGLE;
+         else                       route = R_NEW_QUEUE;
+     end
+
+     always @* begin
+         case (route)
+             R_SINGLE:     rx_tready = input_tready_single;
+             R_NEW_SINGLE: rx_tready = input_tready_single && !single_active;
+             R_QUEUE:      rx_tready = input_tready[hit_idx];
+             R_NEW_QUEUE:  rx_tready = free_found && input_tready[free_idx];
+             default:      rx_tready = 1'b1;
+         endcase
+     end
+
+     // The beat as the slot sees it.  A multi-segment request keeps tlast only
+     // on its final beat, and every beat carries the request's size as meta.
+     always @* begin
+         case (route)
+             R_SINGLE:
+                 in_entry = {rx_tlast, single_dstPort, single_workload, single_req_size, rx_connid, rx_beat};
+             R_QUEUE:
+                 in_entry = {hit_request_done, q_dstPort[hit_idx], q_workload[hit_idx], q_size[hit_idx][15:0],
+                             rx_connid, hit_request_done, rx_beat[511:0]};
+             R_NEW_QUEUE:
+                 in_entry = {1'b0, rx_dstPort, rx_workload, rx_req_size, rx_connid, 1'b0, rx_beat[511:0]};
+             default:
+                 in_entry = {rx_tlast, rx_dstPort, rx_workload, rx_req_size, rx_connid, rx_beat};
+         endcase
+     end
+
+     always @* begin
+         for (i = 0; i < QUEUE_NUM; i = i + 1) begin
+             input_tvalid[i] = rx_fire && ((route == R_QUEUE && hit_idx == i) ||
+                                           (route == R_NEW_QUEUE && free_idx == i));
+         end
+         input_tvalid_single = rx_fire && (route == R_SINGLE || route == R_NEW_SINGLE);
+     end
 
      always @(posedge clk) begin
-        if (rst) begin
-            rx_tready = 1'b1;
-            input_tvalid_single = 1'b0;
-            input_META_single = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
-            for (reset_i = 0; reset_i < QUEUE_NUM; reset_i = reset_i + 1) begin
-                credits[reset_i] = 8'b0;
-                input_META[reset_i] = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
-                counter[reset_i] = 32'd0;
-                counter_inst[reset_i] = 32'd0;
-                input_tvalid[reset_i] = 1'b0;
-                input_tdata[reset_i] = 0;
-            end
-            input_tdata_single = 0;
-        end else begin
-         /*credits clear logic*/
-        for (queue = 0; queue < QUEUE_NUM; queue = queue + 1) begin
-            if (credits[queue] == output_deduct_credits[queue]) begin
-                credits[queue] = 8'b0000;
-            end
-       end
-       if(rx_tvalid == 1 && rx_tready == 1)begin
-            //matches the meta
+         if (rst) begin
+             single_active <= 1'b0;
+             single_conn <= {CONN_ID{1'b0}};
+             single_dstPort <= 16'd0;
+             single_workload <= 16'd0;
+             single_req_size <= 16'd0;
+             for (i = 0; i < QUEUE_NUM; i = i + 1) begin
+                 q_busy[i] <= 1'b0;
+                 q_conn[i] <= {CONN_ID{1'b0}};
+                 q_dstPort[i] <= 16'd0;
+                 q_workload[i] <= 16'd0;
+                 q_size[i] <= 32'd0;
+                 q_got[i] <= 32'd0;
+                 q_done[i] <= 16'd0;
+             end
+         end else if (rx_fire) begin
+             case (route)
+                 R_NEW_SINGLE: begin
+                     if (!rx_tlast) begin
+                         single_active <= 1'b1;
+                         single_conn <= rx_connid;
+                         single_dstPort <= rx_dstPort;
+                         single_workload <= rx_workload;
+                         single_req_size <= rx_req_size;
+                     end
+                 end
+                 R_SINGLE: begin
+                     if (rx_tlast) begin
+                         single_active <= 1'b0;
+                     end
+                 end
+                 R_NEW_QUEUE: begin
+                     q_busy[free_idx] <= 1'b1;
+                     q_conn[free_idx] <= rx_connid;
+                     q_dstPort[free_idx] <= rx_dstPort;
+                     q_workload[free_idx] <= rx_workload;
+                     q_size[free_idx] <= rx_pkt_size;
+                     q_got[free_idx] <= rx_tlast ? {16'd0, rx_tcp_bytes} : 32'd0;
+                 end
+                 R_QUEUE: begin
+                     if (hit_request_done) begin
+                         q_busy[hit_idx] <= 1'b0;
+                         q_got[hit_idx] <= 32'd0;
+                         q_done[hit_idx] <= q_done[hit_idx] + 16'd1;
+                     end else if (rx_tlast) begin
+                         q_got[hit_idx] <= hit_got_next;
+                     end
+                 end
+                 default: begin
+                 end
+             endcase
+         end
+     end
 
-            //The complete single-request situation, concatenating the first one
-            // connID is in the lower 16 bits of meta at rx_tdata[528:513]
-            // New input format: {dstPort[608:593], packet_size[592:561], workload[560:545], meta[544:513], tlast[512], payload[511:0]}
-            if(rx_tdata[528:513] == input_META_single[CONN_ID - 1:0] && input_tready_single == 1) begin
-                input_tvalid_single = rx_tvalid;
-                // Format: {message_end (1-bit), dstPort (16-bit), workload_type (16-bit), meta_data (32-bit), tlast(1-bit), payload (512_bit)}
-                // Use stored dstPort and workload from META, and current meta+payload from rx_tdata
-                input_tdata_single = {1'b0, input_META_single[47:32], input_META_single[31:16], rx_req_size, rx_connid, rx_tdata[512:0]};
-                rx_tready = 1'b1;
-                if(input_tdata_single[512] == 1) begin //the last of the packet
-                   input_tdata_single[512+32+16+16+1] = 1'b1; //the last of the message, always the last
-                   input_META_single = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
-                end
-            end
+     // ------------------------------------------------------------ output
 
-            //The multi-packet situations (match existing metas)
-            // connID is in the lower 16 bits of meta at rx_tdata[528:513]
-            else begin : MATCH_EXISTING
-                matched_any = 1'b0;
-                for (m = 0; m < QUEUE_NUM; m = m + 1) begin
-                    if (!matched_any && (rx_tdata[528:513] == input_META[m][CONN_ID - 1:0]) && (input_tready[m] == 1)) begin
-                        input_tvalid[m] = rx_tvalid;
-                        // Format: {message_end (1-bit), dstPort (16-bit), workload_type (16-bit), meta_data (32-bit), tlast(1-bit), payload (512_bit)}
-                        // Use stored dstPort and workload from META, and current meta+payload from rx_tdata
-                        // counter[m] is this request's packet_size, so the meta is right even
-                        // when another connection's header has since passed the dispatcher
-                        input_tdata[m] = {1'b0, input_META[m][47:32], input_META[m][31:16], counter[m][15:0], rx_connid, rx_tdata[512:0]};
-                        rx_tready = 1'b1;
-                        // Accumulate bytes only on TLAST; release the slot only when we have met/exceeded packet_size
-                        if(rx_tdata[512]) begin // TLAST indicates end of a TCP packet
-                            counter_inst[m] = counter_inst[m] + rx_tdata[544:529];
-                            if(counter_inst[m] >= counter[m]) begin
-                                credits[m] = credits[m] + 1;
-                                input_META[m] = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
-                                counter_inst[m] = 0;
-                                counter[m] = 0;
-                                input_tdata[m][512+32+16+16+1] = 1'b1; // the last of the message
-                                // keep TLAST from the stream (should already be 1 on the final beat)
-                            end
-                            else begin   // TLAST but not the last of multi-packet yet (more TCP packets expected)
-                                input_tdata[m][512+32+16+16+1] = 1'b0; // assemble these packets
-                                // Get the middle last removed, only have last signal when sending
-                                input_tdata[m][512] = 1'b0;
-                            end
-                        end
-                        else begin   // not TLAST, intermediate beat within a TCP packet
-                            input_tdata[m][512+32+16+16+1] = 1'b0;
-                            input_tdata[m][512] = 1'b0;
-                        end
-                        matched_any = 1'b1; // ensure only one queue is selected
-                    end
-                end
-                if (!matched_any) begin
-                    //does not match the meta, the first dataline of the session
-                    // New input format: {dstPort[608:593], packet_size[592:561], workload[560:545], meta[544:513], tlast[512], payload[511:0]}
-                    // packet_size is at [592:561], length (from meta upper 16 bits) is at [544:529]
-                    // Single-beat complete request: declared request size fits this TCP packet and this is its only beat.
-                    if (rx_is_header && (input_META_single == {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}}) && (rx_tdata[592:561] == {16'd0, rx_tdata[544:529]}) && rx_tdata[512] && (input_tready_single == 1)) begin
-                        input_tvalid_single = rx_tvalid;
-                        // Output format: {message_end, dstPort, workload_type, meta, tlast, payload}
-                        // rx_tdata[544:0] = {meta[31:0], tlast, payload[511:0]}
-                        // workload_selection is at rx_tdata[560:545]
-                        input_tdata_single = {1'b1, rx_dstPort, rx_tdata[560:545], rx_req_size, rx_connid, rx_tdata[512:0]};
-                        input_META_single = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
-                        rx_tready = 1'b1;
-                    end else begin
-                        // Multi-beat or multi-packet request: hold output until declared request size is complete.
-                        allocated = 1'b0;
-                        for (alloc_i = 0; alloc_i < QUEUE_NUM; alloc_i = alloc_i + 1) begin
-                            if (!allocated && rx_is_header && (input_META[alloc_i] == {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}})) begin
-                                input_tvalid[alloc_i] = rx_tvalid;
-                                // Output format: {message_end, dstPort, workload_type, meta, tlast, payload}
-                                input_tdata[alloc_i] = {1'b0, rx_dstPort, rx_tdata[560:545], rx_req_size, rx_connid, rx_tdata[512:0]};
-                                // Store {dstPort, workload_type, connID} in META
-                                input_META[alloc_i] = {rx_dstPort, rx_tdata[560:545], rx_tdata[528:513]};
-                                counter[alloc_i] = rx_tdata[592:561];  // packet_size
-                                // Accumulate length only on TLAST (end of TCP packet)
-                                if (rx_tdata[512]) begin // TLAST on first beat (single-beat TCP packet)
-                                    counter_inst[alloc_i] = rx_tdata[544:529];
-                                    // Release credit only when accumulated length meets/exceeds packet_size
-                                    if (counter_inst[alloc_i] >= counter[alloc_i]) begin
-                                        credits[alloc_i] = credits[alloc_i] + 1;
-                                        input_META[alloc_i] = {(WORKLOAD_SIZE + CONN_ID + 16){1'b1}};
-                                        counter_inst[alloc_i] = 0;
-                                        counter[alloc_i] = 0;
-                                        input_tdata[alloc_i][512+32+16+16+1] = 1'b1; // last of the message
-                                    end else begin
-                                        input_tdata[alloc_i][512+32+16+16+1] = 1'b0; // more TCP packets expected
-                                        input_tdata[alloc_i][512] = 1'b0; // clear TLAST for message assembly
-                                    end
-                                end else begin // No TLAST, multi-beat TCP packet
-                                    counter_inst[alloc_i] = 0; // Initialize to 0, will accumulate on TLAST
-                                    input_tdata[alloc_i][512+32+16+16+1] = 1'b0;
-                                    input_tdata[alloc_i][512] = 1'b0;
-                                end
-                                rx_tready = 1'b1;
-                                allocated = 1'b1;
-                            end
-                        end
-                        if (!allocated) begin
-                            //No queue is avaliable
-                            rx_tready = 1'b0;
-                        end
-                    end
-                end
-            end
-        end
-        //NO data input
-        else begin
-            rx_tready = 1'b1;
-            input_tvalid_single = 1'b0;
-            for (clr_i = 0; clr_i < QUEUE_NUM; clr_i = clr_i + 1) begin
-                input_tvalid[clr_i] = 1'b0;
-            end
-        end
-        end
-    end
+     reg        grant_valid;
+     reg [7:0]  grant_idx;
+     reg [7:0]  rr_ptr;
 
-// output queue
-        // Pipeline between scheduler output and output FIFO to improve timing
-        // Widened by 16 bits for dstPort: 7 + (512+32+16+16+1) = 584
-        wire [584-1:0] output_tdata_pip;
-        wire output_tvalid_pip;
-        wire output_tready_pip;
+     wire       grant_is_single = grant_valid && grant_idx == SINGLE;
+     wire [7:0] grant_q         = (grant_idx < QUEUE_NUM) ? grant_idx : 8'd0;
 
-        axis_pipeline_register #(
-          .DATA_WIDTH(584),  // {7'b0, output_queue_tdata} is 7 + (512+32+16+16+1) = 584
-          .USER_ENABLE(0),
-          .LENGTH(10),
-          .LAST_ENABLE(0)
-        ) axis_pipeline_sched_inst(
-          .clk(clk),
-          .rst(rst),
-          .s_axis_tdata(output_queue_tdata),
-          .s_axis_tvalid(output_queue_tvalid_FIFO),
-          .s_axis_tready(output_tready_pip),
-          .m_axis_tdata(output_tdata_pip),
-          .m_axis_tvalid(output_tvalid_pip),
-          .m_axis_tready(1'b1)
-        );
+     wire [ENTRY_W-1:0] output_queue_tdata = grant_is_single ? output_tdata_single[ENTRY_W-1:0]
+                                                              : output_tdata[grant_q][ENTRY_W-1:0];
+     wire               output_queue_tvalid = grant_valid &&
+                                              (grant_is_single ? output_tvalid_single : output_tvalid[grant_q]);
+     wire               output_tready_pip;
+     wire               output_queue_fire = output_queue_tvalid && output_tready_pip;
+     wire               output_queue_last = output_queue_tdata[ENTRY_W-1];
 
-        axis_data_fifo_0 fifo_inst_output(
-          .rst(rst),
-          .clk(clk),
-          .s_axis_tvalid(output_tvalid_pip),
-          .s_axis_tready(),
-          .s_axis_tdata(output_tdata_pip),
-          .m_axis_tvalid(tx_tvalid),
-          .m_axis_tready(tx_tready),
-          .m_axis_tdata(tx_tdata)
-        );
+     always @* begin
+         for (i = 0; i < QUEUE_NUM; i = i + 1) begin
+             output_tready[i] = grant_valid && !grant_is_single && grant_q == i && output_tready_pip;
+         end
+         output_tready_single = grant_is_single && output_tready_pip;
+     end
 
+     // A source is ready once it holds a whole request: a queue when a finished
+     // request is still in it, the single-packet FIFO as soon as a request
+     // starts to come out, since everything in it arrived in one segment.
+     function src_ready;
+         input integer s;
+         begin
+             if (s == SINGLE)
+                 src_ready = output_tvalid_single;
+             else
+                 src_ready = q_done[s] != q_sent[s];
+         end
+     endfunction
 
+     // Next source in round-robin order from rr_ptr.
+     reg       next_found;
+     reg [7:0] next_idx;
+     always @* begin
+         next_found = 1'b0;
+         next_idx = 8'd0;
+         for (step = 0; step <= QUEUE_NUM; step = step + 1) begin
+             src = rr_ptr + step;
+             if (src > QUEUE_NUM) src = src - (QUEUE_NUM + 1);
+             if (!next_found && src_ready(src)) begin
+                 next_found = 1'b1;
+                 next_idx = src;
+             end
+         end
+     end
 
-    //output signal - widened by 16 bits for dstPort
-    // Format: {request_end, dstPort[15:0], workload_type[15:0], meta[31:0], tcp_tlast, payload[511:0]}
-    reg [512 + 32 + 16 + 16 + 1:0] output_queue_tdata;
-    wire output_queue_tvalid_FIFO;
-    reg output_queue_tvalid;
-    reg [7:0] output_queue_number = 8'hFF;
+     always @(posedge clk) begin
+         if (rst) begin
+             grant_valid <= 1'b0;
+             grant_idx <= 8'd0;
+             rr_ptr <= 8'd0;
+             for (i = 0; i < QUEUE_NUM; i = i + 1) begin
+                 q_sent[i] <= 16'd0;
+             end
+         end else if (!grant_valid) begin
+             if (next_found) begin
+                 grant_valid <= 1'b1;
+                 grant_idx <= next_idx;
+             end
+         end else if (output_queue_fire && output_queue_last) begin
+             if (!grant_is_single) begin
+                 q_sent[grant_q] <= q_sent[grant_q] + 16'd1;
+             end
+             grant_valid <= 1'b0;
+             rr_ptr <= (grant_idx >= QUEUE_NUM) ? 8'd0 : grant_idx + 8'd1;
+         end
+     end
 
+     // Pipeline between scheduler output and output FIFO to improve timing
+     wire [FIFO_W-1:0] output_tdata_pip;
+     wire              output_tvalid_pip;
+     wire              output_fifo_s_tready;
 
+     axis_pipeline_register #(
+       .DATA_WIDTH(FIFO_W),
+       .USER_ENABLE(0),
+       .LENGTH(10),
+       .LAST_ENABLE(0)
+     ) axis_pipeline_sched_inst(
+       .clk(clk),
+       .rst(rst),
+       .s_axis_tdata({{(FIFO_W-ENTRY_W){1'b0}}, output_queue_tdata}),
+       .s_axis_tvalid(output_queue_tvalid),
+       .s_axis_tready(output_tready_pip),
+       .m_axis_tdata(output_tdata_pip),
+       .m_axis_tvalid(output_tvalid_pip),
+       .m_axis_tready(output_fifo_s_tready)
+     );
 
+     wire [FIFO_W-1:0] tx_tdata_fifo;
 
-    assign output_queue_tvalid_FIFO = output_queue_tvalid;
+     axis_data_fifo_0 fifo_inst_output(
+       .rst(rst),
+       .clk(clk),
+       .s_axis_tvalid(output_tvalid_pip),
+       .s_axis_tready(output_fifo_s_tready),
+       .s_axis_tdata(output_tdata_pip),
+       .m_axis_tvalid(tx_tvalid),
+       .m_axis_tready(tx_tready),
+       .m_axis_tdata(tx_tdata_fifo)
+     );
 
-    // A queue FIFO is read exactly when the output mux forwards it: pop enable
-    // and forward condition are the same expression, so a beat can never be
-    // popped without being forwarded, nor forwarded without being popped.
-    // (Previously output_tready was a one-cycle-delayed copy of
-    // output_tready_sel while the mux was gated by output_queue_number, which
-    // the arbiter updates a cycle later: the first beat popped after a source
-    // change was dropped, and one extra beat could be popped after the last.)
-    always @* begin
-        for (map_i = 0; map_i < QUEUE_NUM; map_i = map_i + 1) begin
-            output_tready[map_i] = output_tready_sel[map_i] && (output_queue_number == map_i);
-        end
-        output_tready_single_FIFO = output_tready_single && (output_queue_number == QUEUE_NUM);
-    end
-
-    always @* begin
-       if (output_queue_number < QUEUE_NUM) begin
-            output_queue_tvalid = output_tvalid[output_queue_number] && output_tready[output_queue_number];
-            output_queue_tdata = output_tdata[output_queue_number][512 + 32 + 16 + 16 + 1:0];
-       end else if (output_queue_number == QUEUE_NUM) begin
-            output_queue_tvalid = output_tvalid_single && output_tready_single_FIFO;
-            output_queue_tdata = output_tdata_single[512 + 32 + 16 + 16 + 1:0];
-       end else begin
-            output_queue_tvalid = 0;
-            output_queue_tdata = 0;
-       end
-    end
-
-    always @(posedge clk) begin
-        if (rst) begin
-            output_queue_number = 8'hFF;
-            output_tready_sel = {QUEUE_NUM{1'b0}};
-            output_tready_single = 1'b0;
-            for (reset_i = 0; reset_i < QUEUE_NUM; reset_i = reset_i + 1) begin
-                output_deduct_credits[reset_i] = 8'd0;
-            end
-        end else begin
-        //output credits clear and update
-       for (output_queue = 0; output_queue < QUEUE_NUM; output_queue = output_queue + 1) begin
-            if (credits[output_queue] == output_deduct_credits[output_queue]) begin
-                output_deduct_credits[output_queue] = 8'b0000;
-            end
-       end
-
-       //single-packet queue output has priority
-        if(output_tvalid_single == 1'b1) begin
-            output_queue_number = QUEUE_NUM;
-            output_tready_sel = {QUEUE_NUM{1'b0}};
-            output_tready_single = 1;
-        end
-
-       //Other normal queues situations
-       else begin
-            output_tready_single = 0; //clear the TREADY_single, since the single packet queue is not going to be output
-
-            // Determine active queue (one that currently has TREADY asserted and still has credits)
-            active_idx = -1;
-            for (idx = 0; idx < QUEUE_NUM; idx = idx + 1) begin
-                if (output_tready_sel[idx] == 1'b1 && (credits[idx] > output_deduct_credits[idx])) begin
-                    active_idx = idx;
-                end
-            end
-
-            if (active_idx != -1) begin
-                if (output_tvalid[active_idx]  == 1) begin
-                    output_queue_number = active_idx[7:0];
-                    if(output_tdata[active_idx][512+32+16+16+1] == 1 && output_tvalid[active_idx] == 1) begin //The last dataline in the last packet of the request
-                        output_tready_sel[active_idx] = 1'b0;     //This queue need to be shifted
-                        output_deduct_credits[active_idx] =  output_deduct_credits[active_idx] + 1; //decuct the credit
-                        // find next ready queue in round-robin order
-                        found_next = 0;
-                        for (step = 1; step <= QUEUE_NUM; step = step + 1) begin
-                            next_idx = active_idx + step;
-                            if (next_idx >= QUEUE_NUM) next_idx = next_idx - QUEUE_NUM;
-                            if (!found_next && (output_tvalid[next_idx] == 1) && (credits[next_idx] > output_deduct_credits[next_idx])) begin
-                                output_tready_sel[next_idx] = 1'b1;
-                                found_next = 1;
-                            end
-                        end
-                        if (!found_next) begin
-                            if(output_tvalid_single == 1'b1) begin  // single queue is ready to be output
-                               output_tready_single = 1'b1;
-                            end else if ((output_tvalid[active_idx] == 1) && (credits[active_idx] > output_deduct_credits[active_idx])) begin
-                               output_tready_sel[active_idx] = 1'b1;
-                            end
-                        end
-                    end else begin //Have packet to pull, but not fully pulled, keep pulling
-                        output_tready_single = 0;
-                        for (keep_i = 0; keep_i < QUEUE_NUM; keep_i = keep_i + 1) begin
-                            output_tready_sel[keep_i] = (keep_i == active_idx);
-                        end
-                    end
-                end else begin // active queue but not valid yet, keep pulling
-                    output_tready_single = 0;
-                    for (hold_i = 0; hold_i < QUEUE_NUM; hold_i = hold_i + 1) begin
-                        output_tready_sel[hold_i] = (hold_i == active_idx);
-                    end
-                end
-            end else begin  //shift TREADY when no queue is ready
-               chosen = -1;
-               for (choose_i = 0; choose_i < QUEUE_NUM; choose_i = choose_i + 1) begin
-                    if (chosen == -1 && (credits[choose_i] > output_deduct_credits[choose_i])) begin
-                        chosen = choose_i;
-                    end
-               end
-               if (chosen != -1) begin
-                    for (set_i = 0; set_i < QUEUE_NUM; set_i = set_i + 1) begin
-                        output_tready_sel[set_i] = (set_i == chosen);
-                    end
-               end else begin
-                    output_tready_sel = {QUEUE_NUM{1'b0}};
-               end
-            end
-        end
-        end
-    end
-
-
-
-
+     assign tx_tdata = tx_tdata_fifo[ENTRY_W-1:0];
 
 endmodule
