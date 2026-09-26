@@ -66,6 +66,20 @@ includes:
 The checked-in ``results.xml`` records 18 passing tests for the complete integration
 suite. It does not issue an integrated ``RECONF_ICAP`` or ``QUERY_STATUS`` request.
 
+The same run includes ``test_multiclient``, which drives several connections at
+once through a model of the TOE's shared RX FIFO and checks that every response
+comes back whole, exactly once, on its own connection, announced with its own
+length:
+
+-  One-segment requests from one, four, and sixteen clients, the last with two
+   requests in flight each, and single-line requests back to back with
+   multi-line ones.
+-  Requests framed as ``sw/app`` frames them, a header segment and then the
+   data, from two and four clients.
+-  A TX side that refuses requests for want of window or for a closed
+   connection.
+-  The concurrent-request limit below, as an expected failure.
+
 An additional direct SystemVerilog HBM-write test is available:
 
 .. code:: sh
@@ -138,6 +152,22 @@ Addressing and AXI
 -  The HBM staging region is a client convention, not a hardware-enforced
    allocation.
 -  Command and payload ``tkeep``/``tlast`` are ignored.
+
+Concurrent Requests
+~~~~~~~~~~~~~~~~~~~
+
+-  A request that spans several TCP segments holds one of the scheduler's four
+   queues (``QUEUE_NUM``) and one of the dispatcher's eight contexts
+   (``CTX_NUM``) until its last segment arrives. The TOE hands every
+   connection's segments over in one in-order stream, so one more multi-segment
+   request while all queues are held stalls the receive path for good: the
+   segments that would finish the others are behind it. A request written in
+   one piece and no longer than the TOE's MSS takes no queue, however many
+   clients send them.
+-  A request must start at a TCP segment boundary; two requests coalesced into
+   one segment are not separated.
+-  Responses are handed to the TCP stack one request at a time, each waiting
+   for the stack's status, which bounds the rate of small responses.
 
 DFX Build
 ~~~~~~~~~
