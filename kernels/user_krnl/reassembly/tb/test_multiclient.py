@@ -163,6 +163,22 @@ async def test_sixteen_clients_two_requests_in_flight(dut):
     check(await run_clients(dut, 16, [64, 512, 1024, 4096], "one_write", 10, window=2))
 
 
+@cocotb.test()
+async def test_two_clients_header_segment_then_data(dut):
+    """Two clients framing requests as sw/app does: a header segment, then the data."""
+    check(await run_clients(dut, 2, [1024, 4096], "header_alone", 8))
+
+
+@cocotb.test()
+async def test_four_clients_header_segment_then_data(dut):
+    """
+    Four clients framing requests as sw/app does.  A header segment that
+    arrives in the middle of another client's request starts a request of its
+    own, carrying its own size.
+    """
+    check(await run_clients(dut, 4, [1024, 4096], "header_alone", 8))
+
+
 @cocotb.test(expect_fail=True)
 async def test_more_multi_segment_requests_than_queues_stall(dut):
     """
