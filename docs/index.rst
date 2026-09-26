@@ -12,6 +12,7 @@ the FPGA to serve different workloads as requirements change.
    :hidden:
 
    quick-start
+   adding-an-accelerator
    reconfiguration-controller
    protocol
    build-and-deployment
