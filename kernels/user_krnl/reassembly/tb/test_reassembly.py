@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+from collections import deque
 from dataclasses import dataclass
 
 import cocotb
@@ -13,6 +14,13 @@ from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStrea
 
 BYTE_LANES = 64
 MAX_PACKET_BYTES = 4096     # pkt_receiver.v MAX_PACKET_BYTES: longest TCP segment accepted
+# The host never sends a segment longer than the MSS the TOE advertises.  Builds
+# up to 4585 advertised hls/toe's default of 1460, which is not a multiple of
+# BYTE_LANES; the Makefile now builds the TOE with TCP_STACK_MSS = 4096 (jumbo
+# frames), or 1408 for a network with a 1500-byte MTU.
+LEGACY_TOE_MSS = 1460
+TOE_MSS = 4096
+TOE_MSS_1500_MTU = 1408
 # A request may span several segments; the scheduler holds a multi-segment
 # request in a 512-beat queue FIFO until its declared size has arrived, and
 # pkt_sender holds the whole response in a 512-beat FIFO before announcing it.
@@ -65,12 +73,13 @@ def reconf_response_metadata(conn_id):
 class TcpNotification:
     length: int
     conn_id: int
+    closed: bool = False
 
     def pack(self) -> int:
         return ((self.length & 0xffff) << 16) | (self.conn_id & 0xffff)
 
     def to_bytes(self) -> bytes:
-        return int_to_le_bytes(self.pack(), 11)
+        return int_to_le_bytes(self.pack() | (int(self.closed) << 80), 11)
 
 
 @dataclass
@@ -188,13 +197,13 @@ class TB:
         read_cmd = await with_timeout(self.read_package_sink.recv(), 2, "us")
         return frame_to_int(read_cmd)
 
-    async def expect_notification_rejected(self, notification: TcpNotification):
+    async def expect_notification_unread(self, notification: TcpNotification):
         await self.notifications_source.send(AxiStreamFrame(notification.to_bytes()))
         try:
             await with_timeout(self.read_package_sink.recv(), 200, "ns")
         except SimTimeoutError:
             return
-        raise AssertionError("invalid notification produced a read command")
+        raise AssertionError("a notification without data produced a read command")
 
     async def send_rx_payload(self, payload: bytes):
         await with_timeout(self.rx_data_source.send(AxiStreamFrame(payload)), 2, "us")
@@ -213,6 +222,36 @@ class TB:
         except SimTimeoutError:
             return
         raise AssertionError(f"unexpected extra response metadata 0x{frame_to_int(metadata_frame):08x}")
+
+
+class ToeRxBuffer:
+    """
+    The TOE's RX path as built, with RX_DDR_BYPASS: every segment the TOE
+    accepts is queued in one FIFO shared by all sessions (rx_buffer_fifo in
+    tcp_stack.sv), and each read_package releases the segment at the head of
+    that FIFO, whatever session and length the read names.  The TB's other
+    helpers hand over a segment only once its own read has been seen, which
+    hides what an unanswered notification does on the board.
+
+    Owns read_package_sink; do not mix with TB.send_notification.
+    """
+
+    def __init__(self, tb):
+        self.tb = tb
+        self.queued = deque()
+        self.reads = []
+        cocotb.start_soon(self._serve_reads())
+
+    async def receive_segment(self, segment: bytes, conn_id: int):
+        self.queued.append(segment)
+        notification = TcpNotification(length=len(segment), conn_id=conn_id)
+        await with_timeout(self.tb.notifications_source.send(AxiStreamFrame(notification.to_bytes())), 2, "us")
+
+    async def _serve_reads(self):
+        while True:
+            read_cmd = await self.tb.read_package_sink.recv()
+            self.reads.append(frame_to_int(read_cmd))
+            await self.tb.rx_data_source.send(AxiStreamFrame(self.queued.popleft()))
 
 
 def echo_response(payloads) -> bytes:
@@ -492,6 +531,23 @@ async def test_echo_request_sizes_in_512B_segments(dut):
     for total_bytes in [128, 512, 576, 1024, 2048, 4032, 4096]:
         await run_segmented_echo_request(tb, total_bytes, 512, header_alone=True, conn_id=0x6200)
         await run_segmented_echo_request(tb, total_bytes, 512, header_alone=False, conn_id=0x6201)
+
+
+@cocotb.test()
+async def test_echo_requests_cut_at_toe_mss(dut):
+    """
+    Requests over 1408 bytes as the host sends them to a TOE advertising
+    TOE_MSS, and to one built with TOE_MSS_1500_MTU: every write cut into
+    MSS-byte segments plus a remainder, all whole lines.  Both shapes: the
+    request written in one piece, and sw/app's header segment followed by the
+    data in one write.
+    """
+    tb = TB(dut)
+    await tb.reset()
+    for mss in [TOE_MSS, TOE_MSS_1500_MTU]:
+        for total_bytes in [1472, 1536, 2880, 4096]:
+            await run_segmented_echo_request(tb, total_bytes, mss, header_alone=False, conn_id=0x6210)
+            await run_segmented_echo_request(tb, total_bytes, mss, header_alone=True, conn_id=0x6211)
 
 
 @cocotb.test(expect_fail=True)
@@ -804,15 +860,76 @@ async def test_reconf_read_hbm_ignores_extra_packet_data(dut):
 
 
 @cocotb.test()
-async def test_notification_length_limit(dut):
+async def test_refused_segments_are_read_and_discarded(dut):
+    """
+    Segments that are not whole lines, or longer than MAX_PACKET_BYTES, are
+    still read -- the TOE only releases a segment when it is read -- and none
+    of their data reaches a slot, even data shaped like a request header.
+    """
     tb = TB(dut)
     await tb.reset()
 
-    max_notification = TcpNotification(length=MAX_PACKET_BYTES, conn_id=0x4567)
-    read_cmd = await tb.send_notification(max_notification)
-    assert read_cmd == max_notification.pack()
+    conn_id = 0x4567
+    for length in [LEGACY_TOE_MSS, 1472 - LEGACY_TOE_MSS, 100, MAX_PACKET_BYTES + BYTE_LANES]:
+        notification = TcpNotification(length=length, conn_id=conn_id)
+        read_cmd = await tb.send_notification(notification)
+        assert read_cmd == notification.pack(), f"{length}-byte segment: read {read_cmd:#010x}"
+        header = RequestHeader(total_size=BYTE_LANES, workload_id=0x0000).to_bytes()
+        await tb.send_rx_payload((header * (length // BYTE_LANES + 1))[:length])
+    await tb.expect_no_response()
 
-    await tb.expect_notification_rejected(TcpNotification(length=MAX_PACKET_BYTES + BYTE_LANES, conn_id=0x4567))
+    await run_segmented_echo_request(tb, 2 * BYTE_LANES, 2 * BYTE_LANES, header_alone=False, conn_id=conn_id)
+
+
+@cocotb.test()
+async def test_close_notification_is_not_read(dut):
+    """A close carries no data, so there is no segment to release: no read."""
+    tb = TB(dut)
+    await tb.reset()
+
+    await tb.expect_notification_unread(TcpNotification(length=0, conn_id=0x4568, closed=True))
+    await run_segmented_echo_request(tb, 2 * BYTE_LANES, 2 * BYTE_LANES, header_alone=False, conn_id=0x4569)
+
+
+@cocotb.test()
+async def test_request_cut_at_legacy_mss_leaves_later_requests_intact(dut):
+    """
+    What the board saw from a TOE advertising MSS 1460: a 1472-byte request
+    written in one piece reaches it as segments of 1460 and 12 bytes, both
+    refused.  Before refused segments were read, both stayed in the TOE's RX
+    FIFO, the next request was answered with the 1460-byte segment, and every
+    later read on every connection was two segments behind.  Now the cut
+    request gets no response and leaves nothing behind.
+    """
+    tb = TB(dut)
+    await tb.reset()
+    toe = ToeRxBuffer(tb)
+
+    cut = build_echo_request(1472, 0x7100)
+    for offset in range(0, len(cut), LEGACY_TOE_MSS):
+        await toe.receive_segment(cut[offset:offset + LEGACY_TOE_MSS], conn_id=0x7100)
+    await tb.expect_no_response(timeout=2, units="us")
+
+    for idx, total_bytes in enumerate([BYTE_LANES, 2 * BYTE_LANES, TOE_MSS]):
+        conn_id = 0x7101 + idx
+        request = build_echo_request(total_bytes, conn_id)
+        await toe.receive_segment(request, conn_id=conn_id)
+        await tb.send_tx_status_ok()
+
+        metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+        assert frame_to_int(metadata_frame) == response_metadata(conn_id, total_bytes)
+        assert bytes(data_frame.tdata) == request, f"{total_bytes}B request: {len(data_frame.tdata)}B back"
+        assert_keep_all(data_frame, total_bytes)
+    await tb.expect_no_response()
+
+    assert toe.reads == [
+        TcpNotification(length=1460, conn_id=0x7100).pack(),
+        TcpNotification(length=12, conn_id=0x7100).pack(),
+        TcpNotification(length=BYTE_LANES, conn_id=0x7101).pack(),
+        TcpNotification(length=2 * BYTE_LANES, conn_id=0x7102).pack(),
+        TcpNotification(length=TOE_MSS, conn_id=0x7103).pack(),
+    ]
+    assert not toe.queued
 
 
 tests_dir = os.path.dirname(__file__)
