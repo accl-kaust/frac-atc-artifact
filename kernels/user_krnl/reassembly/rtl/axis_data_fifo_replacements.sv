@@ -33,12 +33,15 @@ module axis_data_fifo_1 (
     output wire [583:0] m_axis_tdata
 );
     // scheduler.v's fifo_inst_single, the single-packet FIFO, and the only
-    // instance of this module. Back to the upstream gen_ip.tcl depth of 16384
-    // beats: a multi-segment request sits here until its declared size has
-    // arrived, so 512 beats also capped a request at 512 beats (32 KB) -- a
-    // cap the jumbo MSS on this branch makes far easier to reach. 584 x 16384
-    // is about 9.6 Mbit, so expect URAM/BRAM inside the static pblock.
-    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(16384)) fifo_inst (
+    // instance of this module.
+    //
+    // Back to 512. At 16384 this one FIFO is 584 x 16384 = 9.57 Mbit, which is
+    // 79 % of all FIFO memory in this kernel -- everything else together is
+    // 2.6 Mbit -- and it sits in scheduler.v alongside the queue and output
+    // FIFOs, competing with the reworked scheduler for placement. 512 beats
+    // does cap a request at 512 beats (32 KB), which is the tradeoff being
+    // measured here.
+    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(512)) fifo_inst (
         .clk(clk),
         .rst(rst),
         .s_axis_tvalid(s_axis_tvalid),
