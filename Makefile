@@ -24,20 +24,22 @@ UDP_STACK_EN                 ?= 1
 # The TOE advertises its MSS in the SYN-ACK, so the host never sends a longer
 # segment, and it is the TOE's own TX segment size (it ignores the host's).
 # pkt_receiver.v takes only segments that are whole 64-byte lines, at most
-# its MAX_PACKET_BYTES of 4096: with 1460 the host cut every write over 1408
+# its MAX_PACKET_BYTES of 8192: with 1460 the host cut every write over 1408
 # bytes at a non-line boundary and the request got no reply.
 #
-# 4096 needs jumbo frames (MTU >= 4136) on every link to the host. On a
-# 1500-byte MTU the host still cuts at 1460 for its own MTU, and the TOE's
-# 4096-byte segments never reach it; build with TCP_STACK_MSS=1408 there,
-# the largest multiple of 64 that fits.
-TCP_STACK_MSS                ?= 4096
+# 8192 is the payload of an 8232-byte jumbo frame, and needs MTU >= 8232 on
+# every link to the host. On a 1500-byte MTU the host still cuts at 1460 for
+# its own MTU and the TOE's 8192-byte segments never reach it; build with
+# TCP_STACK_MSS=1408 there, the largest multiple of 64 that fits. The cap
+# below is MAX_PACKET_BYTES in pkt_receiver.v -- raise both together or the
+# receiver refuses every segment the host cuts at the advertised MSS.
+TCP_STACK_MSS                ?= 8192
 TCP_STACK_RX_DDR_BYPASS_EN   ?= 1
 TCP_STACK_WINDOW_SCALING_EN  ?= 1
 TCP_STACK_MAX_SESSIONS       ?= 1000
 
-ifneq ($(shell expr $(TCP_STACK_MSS) % 64 = 0 \& $(TCP_STACK_MSS) \<= 4096),1)
-    $(error TCP_STACK_MSS=$(TCP_STACK_MSS) must be a multiple of 64 and at most 4096, or pkt_receiver.v refuses the segments the host cuts at it)
+ifneq ($(shell expr $(TCP_STACK_MSS) % 64 = 0 \& $(TCP_STACK_MSS) \<= 8192),1)
+    $(error TCP_STACK_MSS=$(TCP_STACK_MSS) must be a multiple of 64 and at most 8192, or pkt_receiver.v refuses the segments the host cuts at it)
 endif
 
 CMAKE_ARGS += \

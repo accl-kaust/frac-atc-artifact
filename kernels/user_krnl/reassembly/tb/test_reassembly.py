@@ -13,13 +13,13 @@ from cocotbext.axi import AxiBus, AxiRam, AxiStreamBus, AxiStreamFrame, AxiStrea
 
 
 BYTE_LANES = 64
-MAX_PACKET_BYTES = 4096     # pkt_receiver.v MAX_PACKET_BYTES: longest TCP segment accepted
+MAX_PACKET_BYTES = 8192     # pkt_receiver.v MAX_PACKET_BYTES: longest TCP segment accepted
 # The host never sends a segment longer than the MSS the TOE advertises.  Builds
 # up to 4585 advertised hls/toe's default of 1460, which is not a multiple of
-# BYTE_LANES; the Makefile now builds the TOE with TCP_STACK_MSS = 4096 (jumbo
+# BYTE_LANES; the Makefile now builds the TOE with TCP_STACK_MSS = 8192 (jumbo
 # frames), or 1408 for a network with a 1500-byte MTU.
 LEGACY_TOE_MSS = 1460
-TOE_MSS = 4096
+TOE_MSS = 8192
 TOE_MSS_1500_MTU = 1408
 # A request may span several segments; the scheduler holds a multi-segment
 # request in a 512-beat queue FIFO until its declared size has arrived, and

@@ -291,10 +291,16 @@ async def test_closed_connection_responses_are_dropped(dut):
 async def test_more_multi_segment_requests_than_queues_stall(dut):
     """
     KNOWN LIMIT.  A request spread over several segments holds a scheduler
-    queue until its last segment is in.  Eight clients each opening an 8 or
-    16 KB request at MSS 4096 need eight queues at once; the fifth request
+    queue until its last segment is in.  Eight clients each opening a 16 or
+    24 KB request at MSS 8192 need eight queues at once; the fifth request
     waits for one, and since the TOE hands every connection's segments over
     in order, the segments that would finish the first four are behind it.
     Nothing more comes out.
+
+    The sizes track the MSS.  At MSS 4096 this read [8192, 16384]; raising the
+    MSS to 8192 makes an 8 KB request a single segment, which never holds a
+    queue across segments, so the limit stops reproducing at that size.  That
+    is a real if narrow win from the larger MSS, not a fix for the limit --
+    scaled up, it still deadlocks.
     """
-    check(await run_clients(dut, 8, [8192, 16384], "one_write", 4))
+    check(await run_clients(dut, 8, [16384, 24576], "one_write", 4))

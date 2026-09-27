@@ -45,8 +45,14 @@ module pkt_receiver (
     // Longest TCP segment accepted; longer ones are refused like any other
     // bad length, see below.  A request may be larger than this: the
     // scheduler reassembles it across segments up to the header's declared
-    // size.  A 4096-byte segment is 64 beats; every FIFO on the path holds 512.
-    localparam [15:0] MAX_PACKET_BYTES = 16'd4096;
+    // size.  An 8192-byte segment is 128 beats; every FIFO on the path holds
+    // 512, so a whole segment still fits with room to spare.
+    //
+    // This must be at least the MSS the TOE advertises (Makefile
+    // TCP_STACK_MSS), or the host cuts its writes at a length this refuses and
+    // the request gets no reply.  The Makefile checks the pair, so the two
+    // move together.
+    localparam [15:0] MAX_PACKET_BYTES = 16'd8192;
 
     wire [87:0] notif_tx_tdata;
     wire        notif_tx_tvalid;
