@@ -141,6 +141,7 @@ IP_TCL_FILES += frac/ip/hbm_0.tcl
 IP_TCL_FILES += frac/ip/ila_icap.tcl
 IP_TCL_FILES += frac/ip/axi_prot_conv.tcl
 IP_TCL_FILES += frac/ip/axi_data_width_conv.tcl
+IP_TCL_FILES += frac/ip/axi_clock_conv.tcl
 
 include hls.mk
 include vivado.mk

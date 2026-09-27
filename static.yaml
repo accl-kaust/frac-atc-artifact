@@ -92,3 +92,4 @@ ip:
   - frac/ip/ila_icap.tcl
   - frac/ip/axi_prot_conv.tcl
   - frac/ip/axi_data_width_conv.tcl
+  - frac/ip/axi_clock_conv.tcl

@@ -27,9 +27,13 @@ wire rstn;
 wire rst;
 wire hbm_apb_rstn;
 wire hbm_apb_rst;
+wire hbm_axi_clk;   // HBM AXI ports, 400 MHz: see frac_hbm.v
+wire hbm_axi_rstn;
+wire hbm_axi_rst;
 
 assign rstn = ~rst;
 assign hbm_apb_rstn = ~hbm_apb_rst;
+assign hbm_axi_rstn = ~hbm_axi_rst;
 
 wire cmac_axis_rx_tvalid;
 wire cmac_axis_rx_tready;
@@ -234,7 +238,8 @@ MMCME4_BASE #(
     .CLKOUT1_DIVIDE(24),
     .CLKOUT1_DUTY_CYCLE(0.5),
     .CLKOUT1_PHASE(0),
-    .CLKOUT2_DIVIDE(1),
+    // 1200 MHz VCO / 3 = 400 MHz for the HBM AXI ports
+    .CLKOUT2_DIVIDE(3),
     .CLKOUT2_DUTY_CYCLE(0.5),
     .CLKOUT2_PHASE(0),
     .CLKOUT3_DIVIDE(1),
@@ -266,7 +271,7 @@ main_clk_mmcm_inst (
     .CLKOUT0B(),
     .CLKOUT1(hbm_apb_clk),
     .CLKOUT1B(),
-    .CLKOUT2(),
+    .CLKOUT2(hbm_axi_clk),
     .CLKOUT2B(),
     .CLKOUT3(),
     .CLKOUT3B(),
@@ -304,6 +309,15 @@ sync_reset_hbmapb_inst (
     .clk(hbm_apb_clk),
     .rst(~mmcm_locked),
     .out(hbm_apb_rst)
+);
+
+sync_reset #(
+    .N(4)
+)
+sync_reset_hbmaxi_inst (
+    .clk(hbm_axi_clk),
+    .rst(~mmcm_locked),
+    .out(hbm_axi_rst)
 );
 
 cmac_krnl #(
@@ -681,8 +695,10 @@ axis_tcp_stat_width_conv tcp_open_status_width_conv_inst (
 
 frac_hbm frac_hbm_inst (
     .hbm_ref_clk(hbm_ref_clk),
-    .hbm_clk(clk),
-    .hbm_rstn(rstn),
+    .s_axi_clk(clk),
+    .s_axi_rstn(rstn),
+    .hbm_clk(hbm_axi_clk),
+    .hbm_rstn(hbm_axi_rstn),
     .apb_0_clk(hbm_apb_clk),
     .apb_rstn(hbm_apb_rstn),
     .hbm_cattrip(hbm_cattrip),
