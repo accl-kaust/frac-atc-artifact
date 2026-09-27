@@ -38,8 +38,17 @@
 // the peer acknowledges.  So a response longer than a fresh session's
 // congestion window (10 x 1460 bytes), or than the peer's receive window, still
 // gets through, and one that fits goes out as a single request as before.
-// One request is outstanding at a time, keeping acceptance in the order of the
-// data.
+//
+// While the final piece of a response goes out, the next response's request is
+// issued, so the stack's answer -- 21 cycles away through network_krnl's FIFOs
+// and the TOE's lookups -- comes back under that data instead of idling the
+// bus after it: with one request at a time a 4 KB response took 87 cycles for
+// its 64 beats.  Only a final piece has a request issued behind it, and only
+// one, so a refusal of that request still finds nothing else issued, and
+// acceptance stays in the order of the data.  What happens next is decided as
+// the piece ends: an acceptance already waiting sends the next response at
+// once; anything else -- no answer yet, a refusal -- goes through S_WAIT as
+// before.
 
 module pkt_sender #(
         parameter integer BACKOFF_CYCLES = 64
@@ -159,21 +168,51 @@ module pkt_sender #(
     reg [15:0] beats_left;       // beats of the accepted piece still to send
     reg [15:0] backoff_cnt;
 
+    // The next response's request, issued ahead of the end of this one.
+    localparam [1:0] NX_NONE = 2'd0,  // none
+                     NX_REQ  = 2'd1,  // being offered to the stack
+                     NX_WAIT = 2'd2;  // taken; its status is to come
+
+    reg [1:0]  nx_state;
+    reg [15:0] nx_session;
+    reg [15:0] nx_len;
+
     wire [15:0] chunk_ask  = (cur_remaining > chunk_limit) ? chunk_limit : cur_remaining;
     // whole lines of the usable window the stack reported
     wire [15:0] space_lines = (status_space > 30'd65535) ? 16'hffc0 : {status_space[15:6], 6'd0};
 
-    assign m_axis_tx_metadata_tdata  = {chunk_ask, cur_session};
-    assign m_axis_tx_metadata_tvalid = (state == S_REQ);
+    // S_REQ and a request issued ahead never overlap: one is only issued from
+    // S_SEND, and S_REQ is only entered with none outstanding, or from the
+    // hand-over below, which clears it.
+    assign m_axis_tx_metadata_tdata  = (nx_state == NX_REQ) ? {nx_len, nx_session} : {chunk_ask, cur_session};
+    assign m_axis_tx_metadata_tvalid = (state == S_REQ) || (nx_state == NX_REQ);
 
     wire response_end = output_tx[512];
     wire piece_end    = beats_left == 16'd1 || response_end;
     assign m_axis_tx_data_tlast = (state == S_SEND) && piece_end && m_axis_tx_data_tvalid;
 
+    wire payload_fire = payload_tx_tvalid && payload_tx_tready;
+
+    // The last beat of the response goes this cycle.  (In S_SEND the payload
+    // FIFO's ready is the stack's; naming it directly keeps this out of the
+    // always block below, which also drives metadata_tx_tready from it.)
+    wire resp_done = (state == S_SEND) && payload_tx_tvalid && m_axis_tx_data_tready &&
+                     (response_end || (beats_left == 16'd1 && cur_remaining == 16'd0));
+    // Issue the next response's request: while the final piece of this one is
+    // being sent, and not in its last cycle, which hands over to S_IDLE.  An
+    // empty response is left to S_IDLE, which only clears it out.
+    wire nx_pop = (state == S_SEND) && cur_remaining == 16'd0 && nx_state == NX_NONE &&
+                  metadata_tx_tvalid && metadata_tx_tdata[31:16] != 16'd0 && !resp_done;
+    wire nx_req_fire = (nx_state == NX_REQ) && m_axis_tx_metadata_tready;
+    // While a request is outstanding ahead, the status at the head of the FIFO
+    // is its own: every earlier one was taken in S_WAIT.  It is only taken
+    // here, as the response ends, and only if it accepts.
+    wire nx_ok_now = resp_done && nx_state == NX_WAIT && status_tx_tvalid && status_error == TX_OK;
+
     always @(*) begin
         m_axis_tx_data_tkeep = {64{1'b1}};
-        metadata_tx_tready = (state == S_IDLE);
-        status_tx_tready = (state == S_WAIT);
+        metadata_tx_tready = (state == S_IDLE) || nx_pop;
+        status_tx_tready = (state == S_WAIT) || nx_ok_now;
         case (state)
             S_SEND: begin
                 m_axis_tx_data_tvalid = payload_tx_tvalid;
@@ -190,8 +229,6 @@ module pkt_sender #(
         endcase
     end
 
-    wire payload_fire = payload_tx_tvalid && payload_tx_tready;
-
     always @(posedge clk) begin
         if (rst) begin
             state <= S_IDLE;
@@ -201,7 +238,18 @@ module pkt_sender #(
             chunk_len <= 16'd0;
             beats_left <= 16'd0;
             backoff_cnt <= 16'd0;
+            nx_state <= NX_NONE;
+            nx_session <= 16'd0;
+            nx_len <= 16'd0;
         end else begin
+            if (nx_pop) begin
+                nx_state <= NX_REQ;
+                nx_session <= metadata_tx_tdata[15:0];
+                nx_len <= metadata_tx_tdata[31:16];
+            end else if (nx_req_fire) begin
+                nx_state <= NX_WAIT;
+            end
+
             case (state)
                 S_IDLE: begin
                     if (metadata_tx_tvalid) begin
@@ -249,6 +297,27 @@ module pkt_sender #(
                             state <= S_IDLE;
                         end else if (beats_left == 16'd1) begin
                             state <= (cur_remaining == 16'd0) ? S_IDLE : S_REQ;
+                        end
+                    end
+                    // Hand over to the response whose request went ahead.
+                    if (resp_done && nx_state != NX_NONE) begin
+                        nx_state <= NX_NONE;
+                        cur_session <= nx_session;
+                        chunk_limit <= 16'hffff;
+                        chunk_len <= nx_len;
+                        if (nx_ok_now) begin
+                            // accepted whole: its data follows straight on
+                            cur_remaining <= 16'd0;
+                            beats_left <= (nx_len + 16'd63) >> 6;
+                            state <= S_SEND;
+                        end else if (nx_state == NX_REQ && !nx_req_fire) begin
+                            // still on offer: S_REQ offers the same request
+                            cur_remaining <= nx_len;
+                            state <= S_REQ;
+                        end else begin
+                            // taken: its status, when it comes, decides
+                            cur_remaining <= nx_len;
+                            state <= S_WAIT;
                         end
                     end
                 end

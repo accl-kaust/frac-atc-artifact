@@ -78,7 +78,18 @@ length:
    data, from two and four clients.
 -  A TX side that refuses requests for want of window or for a closed
    connection.
+-  The same with the stack's answers delayed 0 to 40 cycles and the TX
+   metadata stalled a third of the time, so the answer to a request issued
+   ahead lands at every point of the response before it, its last beat
+   included; each way of going on from a response must occur.
 -  The concurrent-request limit below, as an expected failure.
+
+And ``test_throughput``: back-to-back 4 KB echoes from 16 connections against a
+cycle-level TOE whose status comes 18 cycles after the request and at most one
+per 8 cycles, as measured in xsim on the TOE's HLS RTL and the network
+kernel's FIFOs. It requires every response intact and at least 0.97 beats of
+TX data a cycle; ``pkt_sender`` reaches 0.985 (the scheduler's re-grant is the
+cycle left), where waiting out the round trip for each response gave 0.736.
 
 An additional direct SystemVerilog HBM-write test is available:
 
@@ -166,8 +177,9 @@ Concurrent Requests
    clients send them.
 -  A request must start at a TCP segment boundary; two requests coalesced into
    one segment are not separated.
--  Responses are handed to the TCP stack one request at a time, each waiting
-   for the stack's status, which bounds the rate of small responses.
+-  At most one request is issued ahead of the response being sent, and only
+   behind its final piece, so the stack's round trip is hidden for responses of
+   about 1.4 KB and up; shorter ones still wait out part of it.
 
 DFX Build
 ~~~~~~~~~

@@ -10,10 +10,10 @@ own length.
 """
 
 import random
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 
 import cocotb
-from cocotb.triggers import ClockCycles
+from cocotb.triggers import ClockCycles, RisingEdge
 from cocotbext.axi import AxiStreamFrame
 
 from test_reassembly import (
@@ -88,7 +88,7 @@ class ToeTxWindows:
         self.tb = tb
         self.window_of = window_of      # (session, attempt) -> usable window in bytes
         self.closed = set(closed)
-        self.status_delay = status_delay
+        self.status_delay = status_delay    # cycles, or a callable giving them per request
         self.attempts = defaultdict(int)
         self.refused = defaultdict(int)
         self.accepted = deque()         # (session, length) whose data is due
@@ -102,7 +102,9 @@ class ToeTxWindows:
             meta = frame_to_int(await self.tb.tx_metadata_sink.recv())
             session, length = meta & 0xffff, meta >> 16
             self.attempts[session] += 1
-            await ClockCycles(self.tb.dut.clk, self.status_delay)
+            delay = self.status_delay() if callable(self.status_delay) else self.status_delay
+            if delay:
+                await ClockCycles(self.tb.dut.clk, delay)
             if session in self.closed:
                 error, window = 1, 0
             else:
@@ -189,16 +191,21 @@ def check(result):
     assert result == (0, 0, 0), "wrong={} missing={} length mismatch={}".format(*result)
 
 
-async def run_refusing_stack(dut, n_clients, sizes, window_of, closed=(), requests_per_client=6, seed=3):
+async def run_refusing_stack(dut, n_clients, sizes, window_of, closed=(), requests_per_client=6, seed=3,
+                             status_delay=8, meta_pause=None):
     """
     One-segment requests from n_clients connections, all sent up front, against
     a TX side that refuses requests as ToeTxWindows describes.  Every open
     connection's byte stream must come out exactly as its requests went in.
+    status_delay and meta_pause (a pause generator for the tx metadata the
+    stack takes) move the stack's answers around the responses' data.
     """
     tb = TB(dut)
     await tb.reset()
     toe = ToeRxBuffer(tb)
-    tx = ToeTxWindows(tb, window_of, closed)
+    tx = ToeTxWindows(tb, window_of, closed, status_delay)
+    if meta_pause is not None:
+        tb.tx_metadata_sink.set_pause_generator(meta_pause)
     rng = random.Random(seed)
 
     conns = [0x200 + c for c in range(n_clients)]
@@ -285,6 +292,50 @@ async def test_no_send_window_at_first(dut):
 async def test_closed_connection_responses_are_dropped(dut):
     """One client has gone: its responses are dropped, everyone else's arrive intact."""
     await run_refusing_stack(dut, 3, [256, 1024], lambda session, attempt: 1 << 20, closed={0x201})
+
+
+async def count_hand_overs(dut, counts):
+    """
+    How pkt_sender went on from each response whose successor's request it had
+    issued ahead: sending straight on, re-offering a request the stack had not
+    taken yet, or waiting in S_WAIT for the answer.
+    """
+    sender = dut.pkt_sender_inst
+    while True:
+        await RisingEdge(dut.clk)
+        if int(sender.resp_done.value) and int(sender.nx_state.value) != 0:
+            if int(sender.nx_ok_now.value):
+                counts["sent_straight_on"] += 1
+            elif int(sender.nx_state.value) == 1 and not int(sender.nx_req_fire.value):
+                counts["still_on_offer"] += 1
+            else:
+                counts["answer_decides"] += 1
+
+
+@cocotb.test()
+async def test_stack_answers_race_the_last_beat(dut):
+    """
+    pkt_sender issues a response's request while the one before it is still
+    going out.  Stack answers delayed 0 to 40 cycles, a stack that stalls the
+    tx metadata a third of the time, windows that often refuse, and one closed
+    connection put that request's acceptance, refusal or silence at every point
+    of the response ahead of it -- its last beat included.  Every stream must
+    still come out whole and in order, and all three ways of going on from a
+    response must have happened.
+    """
+    rng = random.Random(7)
+    counts = Counter()
+    cocotb.start_soon(count_hand_overs(dut, counts))
+    windows = [1 << 20] * 5 + [1000, 300, 0]
+    await run_refusing_stack(
+        dut, 4, [128, 256, 1024, 2048, 4096],
+        lambda session, attempt: rng.choice(windows),
+        closed={0x203}, requests_per_client=12, seed=8,
+        status_delay=lambda: rng.randrange(41),
+        meta_pause=iter(lambda: rng.random() < 0.33, None))
+    dut._log.info(f"hand-overs: {dict(counts)}")
+    for way in ("sent_straight_on", "still_on_offer", "answer_decides"):
+        assert counts[way], f"never {way.replace('_', ' ')}: {dict(counts)}"
 
 
 @cocotb.test(expect_fail=True)

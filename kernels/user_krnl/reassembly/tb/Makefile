@@ -11,7 +11,7 @@ RTL_DIR = ../rtl
 RECONF_RTL_DIR = ../../reconfctrl/rtl
 TAXI_RTL_DIR = ../../../../lib/taxi/axis/rtl
 
-MODULE = test_reassembly,test_multiclient
+MODULE = test_reassembly,test_multiclient,test_throughput
 TOPLEVEL = tcp_top_loopback
 
 VERILOG_SOURCES += $(TAXI_RTL_DIR)/taxi_axis_if.sv
