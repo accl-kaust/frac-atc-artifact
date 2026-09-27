@@ -89,7 +89,6 @@ ip:
   - frac/ip/axis_data_width_conv.tcl
   - kernels/cmac_krnl/ip/cmac.tcl
   - frac/ip/hbm_0.tcl
-  - frac/ip/ila_icap.tcl
   - frac/ip/axi_prot_conv.tcl
   - frac/ip/axi_data_width_conv.tcl
   - frac/ip/axi_clock_conv.tcl

@@ -582,22 +582,6 @@ hash_table_ip hash_table_inst (
 );
 
 
-// ila_hash_table inst_ila_hash_table (
-//   .clk(net_clk),
-//   .probe0(axis_ht_lup_req.valid), // 1
-//   .probe1(axis_ht_lup_req.ready), // 1
-//   .probe2(axis_ht_lup_req.data), // 96
-//   .probe3(axis_ht_lup_rsp.valid), // 1
-//   .probe4(axis_ht_lup_rsp.ready), // 1
-//   .probe5(axis_ht_lup_rsp.data), // 120
-//   .probe6(axis_ht_upd_req.valid), // 1
-//   .probe7(axis_ht_upd_req.ready), // 1
-//   .probe8(axis_ht_upd_req.data), // 144
-//   .probe9(axis_ht_upd_rsp.valid), // 1
-//   .probe10(axis_ht_upd_rsp.ready), // 1
-//   .probe11(axis_ht_upd_rsp.data) //152
-// );
-
 if (WIDTH==64) begin
 //TCP Data Path
 if (RX_DDR_BYPASS_EN == 0) begin

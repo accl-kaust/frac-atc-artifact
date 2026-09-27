@@ -324,27 +324,6 @@ module pkt_logic #(
         .avail(icap_avail)
     );
 
-`ifndef SIMULATION
-    ila_icap ila_icap_inst (
-        .clk(clk),
-        .probe0(reconf_axis_icap_tvalid),
-        .probe1(reconf_axis_icap_tready),
-        .probe2(reconf_axis_icap_tdata),
-        .probe3(reconf_axis_icap_tlast),
-        .probe4(icap_pr_done),
-        .probe5(icap_pr_err),
-        .probe6(icap_avail),
-        .probe7(slot_decouple),
-        .probe8(reconf_active),
-        .probe9(reconf_active_slot_id),
-        .probe10(reconf_last_slot_id),
-        .probe11(reconf_cycles),
-        .probe12(reconf_last_cycles),
-        .probe13(reconf_state),
-        .probe14(reconf_last_error)
-    );
-`endif
-
     always @(posedge clk) begin
         if (rst) begin
             reconf_seen_header <= 1'b0;

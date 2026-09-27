@@ -713,17 +713,6 @@ axi_prot_conv m01_axi_prot_conv_inst(
 );
 
 
-// ila_11 debg_rst_hbm_apb(
-//    .clk(apb_0_clk),
-//    .probe0(apb_rstn)
-// );
-
-
-// ila_11 debg_rst_hbm_main(
-//    .clk(hbm_clk),
-//    .probe0(hbm_rstn)
-// );
-
 // Register slices between each protocol converter and its HBM port. The
 // HBM's AXI outputs arrive late -- about 0.6 ns clock-to-out on RVALID, a
 // route out of the hard block and 0.2 ns of clock skew -- and at 400 MHz

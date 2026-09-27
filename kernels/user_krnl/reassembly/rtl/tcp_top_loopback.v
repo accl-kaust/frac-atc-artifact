@@ -100,9 +100,9 @@ module tcp_top_loopback #(parameter IS_SIM = 0)
     assign s_axis_open_status_tready     = 1;
 
 
-    (* mark_debug = "true" *) reg 					    port_opened;
-    (* mark_debug = "true" *) reg 					    axis_listen_port_valid;
-    (* mark_debug = "true" *) reg [15:0] 				    axis_listen_port_data;
+    reg 					    port_opened;
+    reg 					    axis_listen_port_valid;
+    reg [15:0] 				    axis_listen_port_data;
     //(* mark_debug = "true" *) wire[511:0] maxis_tx_data;
     //(* mark_debug = "true" *) wire maxis_tx_last;
     //(* mark_debug = "true" *) wire maxis_tx_ready;c

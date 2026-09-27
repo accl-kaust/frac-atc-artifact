@@ -192,52 +192,6 @@ set_property -dict [list CONFIG.TDATA_NUM_BYTES {1} CONFIG.FIFO_DEPTH {256} CONF
 update_compile_order -fileset sources_1
 
 
-##ila
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_mem_inf
-set_property -dict [list CONFIG.C_NUM_OF_PROBES {8} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1} ] [get_ips ila_mem_inf]
-update_compile_order -fileset sources_1
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_network_top
-set_property -dict [list CONFIG.C_NUM_OF_PROBES {15} CONFIG.C_PROBE14_WIDTH {32} CONFIG.C_PROBE13_WIDTH {32} CONFIG.C_PROBE12_WIDTH {32} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_network_top]
-update_compile_order -fileset sources_1
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_network_top2
-set_property -dict [list CONFIG.C_PROBE13_WIDTH {512} CONFIG.C_PROBE12_WIDTH {512} CONFIG.C_NUM_OF_PROBES {14} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_network_top2]
-update_compile_order -fileset sources_1
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_network_controller
-set_property -dict [list CONFIG.C_PROBE7_WIDTH {32} CONFIG.C_PROBE6_WIDTH {32} CONFIG.C_PROBE5_WIDTH {32} CONFIG.C_PROBE2_WIDTH {32} CONFIG.C_PROBE0_WIDTH {32} CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {15} CONFIG.Component_Name {ila_network_controller} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_network_controller]
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_tasi
-set_property -dict [list CONFIG.C_PROBE17_WIDTH {32} CONFIG.C_PROBE16_WIDTH {32} CONFIG.C_PROBE18_WIDTH {32} CONFIG.C_PROBE19_WIDTH {32} CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {23} CONFIG.Component_Name {ila_tasi} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_tasi]
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_eventMerger
-set_property -dict [list CONFIG.C_PROBE9_WIDTH {32} CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {10} CONFIG.Component_Name {ila_eventMerger} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_eventMerger]
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_eventEngine
-set_property -dict [list CONFIG.C_PROBE19_WIDTH {32} CONFIG.C_PROBE18_WIDTH {8} CONFIG.C_PROBE17_WIDTH {8} CONFIG.C_PROBE16_WIDTH {8} CONFIG.C_PROBE15_WIDTH {8} CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {20} CONFIG.Component_Name {ila_eventEngine} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_eventEngine]
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_handler
-set_property -dict [list CONFIG.C_PROBE12_WIDTH {16} CONFIG.C_PROBE11_WIDTH {18} CONFIG.C_PROBE10_WIDTH {16} CONFIG.C_PROBE9_WIDTH {32} CONFIG.C_PROBE8_WIDTH {32} CONFIG.C_PROBE7_WIDTH {2}  CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {13} CONFIG.Component_Name {ila_handler} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_handler]
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_network_top_perf
-set_property -dict [list CONFIG.C_PROBE31_WIDTH {64} CONFIG.C_PROBE30_WIDTH {32} CONFIG.C_PROBE29_WIDTH {32} CONFIG.C_PROBE27_WIDTH {64} CONFIG.C_PROBE26_WIDTH {64} CONFIG.C_PROBE25_WIDTH {64} CONFIG.C_PROBE24_WIDTH {64}  CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {32} CONFIG.Component_Name {ila_network_top_perf} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1} CONFIG.C_PROBE31_MU_CNT {2} CONFIG.C_PROBE30_MU_CNT {8} CONFIG.C_PROBE29_MU_CNT {8} CONFIG.C_PROBE28_MU_CNT {2} CONFIG.C_PROBE27_MU_CNT {2} CONFIG.C_PROBE26_MU_CNT {2} CONFIG.C_PROBE25_MU_CNT {8} CONFIG.C_PROBE24_MU_CNT {8} CONFIG.C_PROBE23_MU_CNT {2} CONFIG.C_PROBE22_MU_CNT {2} CONFIG.C_PROBE21_MU_CNT {2} CONFIG.C_PROBE20_MU_CNT {2} CONFIG.C_PROBE19_MU_CNT {2} CONFIG.C_PROBE18_MU_CNT {2} CONFIG.C_PROBE17_MU_CNT {2} CONFIG.C_PROBE16_MU_CNT {2} CONFIG.C_PROBE15_MU_CNT {2} CONFIG.C_PROBE14_MU_CNT {2} CONFIG.C_PROBE13_MU_CNT {2} CONFIG.C_PROBE12_MU_CNT {2} CONFIG.C_PROBE11_MU_CNT {2} CONFIG.C_PROBE10_MU_CNT {2} CONFIG.C_PROBE9_MU_CNT {2} CONFIG.C_PROBE8_MU_CNT {2} CONFIG.C_PROBE7_MU_CNT {2} CONFIG.C_PROBE6_MU_CNT {2} CONFIG.C_PROBE5_MU_CNT {2} CONFIG.C_PROBE4_MU_CNT {2} CONFIG.C_PROBE3_MU_CNT {2} CONFIG.C_PROBE2_MU_CNT {2} CONFIG.C_PROBE1_MU_CNT {2} CONFIG.C_PROBE0_MU_CNT {2} CONFIG.ALL_PROBE_SAME_MU {false} CONFIG.ALL_PROBE_SAME_MU_CNT {2}] [get_ips ila_network_top_perf]
-
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_listen_port_table
-set_property -dict [list CONFIG.C_PROBE0_WIDTH {16} CONFIG.C_PROBE3_WIDTH {15}  CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {12} CONFIG.Component_Name {ila_listen_port_table} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_listen_port_table]
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_rx_app_if
-set_property -dict [list CONFIG.C_PROBE4_WIDTH {16} CONFIG.C_PROBE8_WIDTH {16} CONFIG.C_PROBE10_WIDTH {8} CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {13} CONFIG.Component_Name {ila_rx_app_if} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_rx_app_if]
-
-create_ip -name ila -vendor xilinx.com -library ip -version 6.2 -module_name ila_hash_table
-set_property -dict [list CONFIG.C_PROBE11_WIDTH {152} CONFIG.C_PROBE8_WIDTH {144} CONFIG.C_PROBE5_WIDTH {120} CONFIG.C_PROBE2_WIDTH {96} CONFIG.C_DATA_DEPTH {1024} CONFIG.C_NUM_OF_PROBES {12} CONFIG.Component_Name {ila_hash_table} CONFIG.C_EN_STRG_QUAL {1} CONFIG.C_ADV_TRIGGER {true} CONFIG.C_INPUT_PIPE_STAGES {1}] [get_ips ila_hash_table]
-
-
-create_ip -name vio -vendor xilinx.com -library ip -version 3.0 -module_name vio_network
-set_property -dict [list CONFIG.C_PROBE_IN18_WIDTH {32} CONFIG.C_PROBE_IN17_WIDTH {32} CONFIG.C_PROBE_IN16_WIDTH {32} CONFIG.C_PROBE_IN15_WIDTH {32} CONFIG.C_PROBE_IN14_WIDTH {32} CONFIG.C_PROBE_IN13_WIDTH {32} CONFIG.C_PROBE_IN12_WIDTH {32} CONFIG.C_PROBE_IN11_WIDTH {32} CONFIG.C_PROBE_IN10_WIDTH {32} CONFIG.C_PROBE_IN9_WIDTH {32} CONFIG.C_PROBE_IN8_WIDTH {32} CONFIG.C_PROBE_IN7_WIDTH {32} CONFIG.C_PROBE_IN6_WIDTH {32} CONFIG.C_PROBE_IN5_WIDTH {32} CONFIG.C_PROBE_IN4_WIDTH {32} CONFIG.C_PROBE_IN3_WIDTH {32} CONFIG.C_PROBE_IN2_WIDTH {32} CONFIG.C_PROBE_IN1_WIDTH {32} CONFIG.C_PROBE_IN0_WIDTH {32} CONFIG.C_NUM_PROBE_OUT {0} CONFIG.C_NUM_PROBE_IN {19} CONFIG.Component_Name {vio_network}] [get_ips vio_network]
-
 #DDR
 create_ip -name axi_datamover -vendor xilinx.com -library ip -version 5.1 -module_name axi_datamover_mem 
 set_property -dict [list CONFIG.Component_Name {axi_datamover_mem} CONFIG.c_mm2s_stscmd_is_async {true} CONFIG.c_m_axi_mm2s_data_width {512} CONFIG.c_m_axis_mm2s_tdata_width {512} CONFIG.c_mm2s_burst_size {64} CONFIG.c_mm2s_btt_used {23} CONFIG.c_s2mm_stscmd_is_async {true} CONFIG.c_m_axi_s2mm_data_width {512} CONFIG.c_s_axis_s2mm_tdata_width {512} CONFIG.c_s2mm_burst_size {64} CONFIG.c_s2mm_btt_used {23} CONFIG.c_s2mm_include_sf {false} CONFIG.c_m_axi_mm2s_id_width {1} CONFIG.c_m_axi_s2mm_id_width {1} CONFIG.c_addr_width {64}] [get_ips axi_datamover_mem]

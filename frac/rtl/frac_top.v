@@ -215,11 +215,6 @@ reset_gen(
     .rstn_out(rstn)
 );
 
-// ila_11 debg_rst(
-//    .clk(clk_100mhz_0_ibufg),
-//    .probe0(rst)
-// );
-
 frac frac_inst
     (
     .free_run_clk(clk_50mhz_int),
