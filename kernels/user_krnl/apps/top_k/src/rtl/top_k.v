@@ -2,20 +2,29 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-// Top-k selection as a reconfigurable-slot module.
+// top_k, the reconfigurable module: top_k_core behind a register stage on each
+// side of the slot boundary, so that every partition pin meets a flop.
 //
-// Slot boundary, the same as pattern_slot.v / or_slot.v (the upstream offrac
-// workload ports flattened onto one AXI-Stream), in both directions:
-//   tdata[544:513] = meta      request: {request_bytes, session}  (meta_TDATA)
-//                              response: {resp_bytes, session} (meta_TDATA_out)
-//   tdata[512]     = tlast, in-band (the tlast line duplicates it)
-//   tdata[511:0]   = payload
-// pkt_sender takes the meta of the response beat that carries tlast as the
-// TCP tx metadata, so resp_bytes must be the number of bytes in the response.
-// The response is always one 64-byte beat, so the meta is {64, session} --
-// the constant upstream pkt_logic.v applied to top_k ("All top-k workload has
-// 64B content in the packet").  The session is taken from the request's first
-// beat; the request size in meta_TDATA[31:16] is not needed here.
+// Without these stages each boundary signal passed through the core's logic
+// before it reached a register -- the 448-bit header compare and the line
+// register's enables on the request side, the kmask select and the ready
+// fanning out to the top-k registers' clears on the response side -- so every
+// crossing was one path from a static flop through the decoupler and the
+// partition pin into that logic, and those paths are what the abstract-shell
+// placement of a cell stretches.
+//
+// Each stage is a skid buffer (axis_register, REG_TYPE 2): a beat every
+// cycle, two beats of buffering and one cycle of latency, so a request and
+// its response each take a cycle longer and nothing else changes.  The core
+// ignores tkeep and tstrb and drives them high, so they are not carried.
+//
+// The reset gets the same treatment: it comes from a static synchroniser,
+// and rst_q takes it at the partition pin, so its fan-out to every register
+// here starts inside the cell.  The module leaves reset a cycle after the
+// slot does, and the request stage takes nothing while it is in reset.
+// rst_q starts high, so a freshly configured module begins in reset too.
+//
+// Same interface as the core; see top_k_core.v for the slot boundary format.
 
 (* DONT_TOUCH = "yes" *)
 module top_k #(
@@ -27,158 +36,146 @@ module top_k #(
     parameter integer VALUE_W     = 32,
     parameter integer TOP_K_NUM   = 16                // <= 16: the mask field is 16 bits
 ) (
-    input wire clk,
-    input wire rst,
+    input  wire                   clk,
+    input  wire                   rst,
 
     input  wire [AXIS_DATA_W-1:0] s_axis_tdata,
-    input  wire [     KEEP_W-1:0] s_axis_tkeep,
-    input  wire [     KEEP_W-1:0] s_axis_tstrb,
+    input  wire [KEEP_W-1:0]      s_axis_tkeep,
+    input  wire [KEEP_W-1:0]      s_axis_tstrb,
     input  wire                   s_axis_tvalid,
     output wire                   s_axis_tready,
     input  wire                   s_axis_tlast,
-    input  wire [    TDEST_W-1:0] s_axis_tdest,
-    input  wire [      TID_W-1:0] s_axis_tid,
-    input  wire [     USER_W-1:0] s_axis_tuser,
+    input  wire [TDEST_W-1:0]     s_axis_tdest,
+    input  wire [TID_W-1:0]       s_axis_tid,
+    input  wire [USER_W-1:0]      s_axis_tuser,
 
     output wire [AXIS_DATA_W-1:0] m_axis_tdata,
-    output wire [     KEEP_W-1:0] m_axis_tkeep,
-    output wire [     KEEP_W-1:0] m_axis_tstrb,
+    output wire [KEEP_W-1:0]      m_axis_tkeep,
+    output wire [KEEP_W-1:0]      m_axis_tstrb,
     output wire                   m_axis_tvalid,
     input  wire                   m_axis_tready,
     output wire                   m_axis_tlast,
-    output wire [    TDEST_W-1:0] m_axis_tdest,
-    output wire [      TID_W-1:0] m_axis_tid,
-    output wire [     USER_W-1:0] m_axis_tuser
+    output wire [TDEST_W-1:0]     m_axis_tdest,
+    output wire [TID_W-1:0]       m_axis_tid,
+    output wire [USER_W-1:0]      m_axis_tuser
 );
 
-  localparam integer PAYLOAD_W  = 512;
-  localparam integer LINE_BYTES = PAYLOAD_W / 8;  // 64
-  localparam integer WORDS_PER_LINE = PAYLOAD_W / VALUE_W;  // 16
-  localparam integer IDX_W = $clog2(WORDS_PER_LINE);  // 4
-  localparam integer MASK_W = 16;
+    reg rst_q = 1'b1;
+    always @(posedge clk) rst_q <= rst;
 
-  // ---------------------------------------------------------------- state
+    // request: boundary -> req_reg_inst -> core
+    wire [AXIS_DATA_W-1:0] req_tdata;
+    wire                   req_tvalid, req_tready, req_tlast;
+    wire [TDEST_W-1:0]     req_tdest;
+    wire [TID_W-1:0]       req_tid;
+    wire [USER_W-1:0]      req_tuser;
 
-  reg [PAYLOAD_W-1:0] line;  // line being unpacked
-  reg [IDX_W-1:0] widx;  // word index within `line`
-  reg unpacking;
-  reg line_last;  // `line` was the last of the request
-  reg frame_active;  // a request is in progress
-  reg resp_valid;
+    // response: core -> resp_reg_inst -> boundary
+    wire [AXIS_DATA_W-1:0] resp_tdata;
+    wire                   resp_tvalid, resp_tready, resp_tlast;
+    wire [TDEST_W-1:0]     resp_tdest;
+    wire [TID_W-1:0]       resp_tid;
+    wire [USER_W-1:0]      resp_tuser;
 
-  reg [VALUE_W-1:0] topk[0:TOP_K_NUM-1];  // descending
-  reg [MASK_W-1:0] kmask;
+    axis_register #(
+        .DATA_WIDTH (AXIS_DATA_W),
+        .KEEP_ENABLE(0),
+        .KEEP_WIDTH (1),
+        .LAST_ENABLE(1),
+        .ID_ENABLE  (1),
+        .ID_WIDTH   (TID_W),
+        .DEST_ENABLE(1),
+        .DEST_WIDTH (TDEST_W),
+        .USER_ENABLE(1),
+        .USER_WIDTH (USER_W),
+        .REG_TYPE   (2)
+    ) req_reg_inst (
+        .clk          (clk),
+        .rst          (rst_q),
+        .s_axis_tdata (s_axis_tdata),
+        .s_axis_tkeep (1'b1),
+        .s_axis_tvalid(s_axis_tvalid),
+        .s_axis_tready(s_axis_tready),
+        .s_axis_tlast (s_axis_tlast),
+        .s_axis_tid   (s_axis_tid),
+        .s_axis_tdest (s_axis_tdest),
+        .s_axis_tuser (s_axis_tuser),
+        .m_axis_tdata (req_tdata),
+        .m_axis_tkeep (),
+        .m_axis_tvalid(req_tvalid),
+        .m_axis_tready(req_tready),
+        .m_axis_tlast (req_tlast),
+        .m_axis_tid   (req_tid),
+        .m_axis_tdest (req_tdest),
+        .m_axis_tuser (req_tuser)
+    );
 
-  reg [TDEST_W-1:0] resp_tdest;
-  reg [TID_W-1:0] resp_tid;
-  reg [USER_W-1:0] resp_tuser;
-  reg [15:0] resp_session;  // meta_TDATA[15:0] of the request's first beat
+    top_k_core #(
+        .AXIS_DATA_W(AXIS_DATA_W),
+        .KEEP_W     (KEEP_W),
+        .TDEST_W    (TDEST_W),
+        .TID_W      (TID_W),
+        .USER_W     (USER_W),
+        .VALUE_W    (VALUE_W),
+        .TOP_K_NUM  (TOP_K_NUM)
+    ) core_inst (
+        .clk          (clk),
+        .rst          (rst_q),
+        .s_axis_tdata (req_tdata),
+        .s_axis_tkeep ({KEEP_W{1'b1}}),
+        .s_axis_tstrb ({KEEP_W{1'b1}}),
+        .s_axis_tvalid(req_tvalid),
+        .s_axis_tready(req_tready),
+        .s_axis_tlast (req_tlast),
+        .s_axis_tdest (req_tdest),
+        .s_axis_tid   (req_tid),
+        .s_axis_tuser (req_tuser),
+        .m_axis_tdata (resp_tdata),
+        .m_axis_tkeep (),
+        .m_axis_tstrb (),
+        .m_axis_tvalid(resp_tvalid),
+        .m_axis_tready(resp_tready),
+        .m_axis_tlast (resp_tlast),
+        .m_axis_tdest (resp_tdest),
+        .m_axis_tid   (resp_tid),
+        .m_axis_tuser (resp_tuser)
+    );
 
-  // Slot boundary fields (see the header comment).
-  wire [PAYLOAD_W-1:0] rx_payload = s_axis_tdata[PAYLOAD_W-1:0];
-  wire                 rx_last    = s_axis_tdata[PAYLOAD_W];
-  wire [         15:0] rx_session = s_axis_tdata[PAYLOAD_W+1 +: 16];
+    axis_register #(
+        .DATA_WIDTH (AXIS_DATA_W),
+        .KEEP_ENABLE(0),
+        .KEEP_WIDTH (1),
+        .LAST_ENABLE(1),
+        .ID_ENABLE  (1),
+        .ID_WIDTH   (TID_W),
+        .DEST_ENABLE(1),
+        .DEST_WIDTH (TDEST_W),
+        .USER_ENABLE(1),
+        .USER_WIDTH (USER_W),
+        .REG_TYPE   (2)
+    ) resp_reg_inst (
+        .clk          (clk),
+        .rst          (rst_q),
+        .s_axis_tdata (resp_tdata),
+        .s_axis_tkeep (1'b1),
+        .s_axis_tvalid(resp_tvalid),
+        .s_axis_tready(resp_tready),
+        .s_axis_tlast (resp_tlast),
+        .s_axis_tid   (resp_tid),
+        .s_axis_tdest (resp_tdest),
+        .s_axis_tuser (resp_tuser),
+        .m_axis_tdata (m_axis_tdata),
+        .m_axis_tkeep (),
+        .m_axis_tvalid(m_axis_tvalid),
+        .m_axis_tready(m_axis_tready),
+        .m_axis_tlast (m_axis_tlast),
+        .m_axis_tid   (m_axis_tid),
+        .m_axis_tdest (m_axis_tdest),
+        .m_axis_tuser (m_axis_tuser)
+    );
 
-  // Header line: the fRAC request header writes 0xff over bytes 0-55.
-  // Delete this and the `is_header` branch below if the scheduler ever
-  // strips the header before the slot sees it.
-  wire is_header = (rx_payload[447:0] == {448{1'b1}});
-
-  wire rx_fire = s_axis_tvalid && s_axis_tready;
-
-  // Value presented to the array this cycle.
-  wire [VALUE_W-1:0] ins_val = line[widx*VALUE_W+:VALUE_W];
-  wire ins_en = unpacking;
-  wire last_word = (widx == {IDX_W{1'b1}});  // WORDS_PER_LINE is 2**IDX_W
-
-  assign s_axis_tready = !unpacking && !resp_valid;
-
-  // ------------------------------------------------------------- datapath
-
-  integer i;
-  always @(posedge clk) begin
-    if (rst) begin
-      for (i = 0; i < TOP_K_NUM; i = i + 1) topk[i] <= {VALUE_W{1'b0}};
-      kmask        <= {MASK_W{1'b1}};
-      line         <= {PAYLOAD_W{1'b0}};
-      widx         <= {IDX_W{1'b0}};
-      unpacking    <= 1'b0;
-      line_last    <= 1'b0;
-      frame_active <= 1'b0;
-      resp_valid   <= 1'b0;
-      resp_tdest   <= {TDEST_W{1'b0}};
-      resp_tid     <= {TID_W{1'b0}};
-      resp_tuser   <= {USER_W{1'b0}};
-      resp_session <= 16'd0;
-    end else begin
-
-      // Sorted-array insertion. Cell i compares only against its own
-      // register and its neighbour's, so the combinational path is one
-      // comparator plus a mux regardless of TOP_K_NUM.
-      if (ins_en) begin
-        if (ins_val > topk[0]) topk[0] <= ins_val;
-        for (i = 1; i < TOP_K_NUM; i = i + 1) begin
-          if (ins_val > topk[i]) topk[i] <= (ins_val > topk[i-1]) ? topk[i-1] : ins_val;
-        end
-      end
-
-      if (ins_en) begin
-        widx <= widx + 1'b1;
-        if (last_word) begin
-          unpacking  <= 1'b0;
-          resp_valid <= line_last;
-        end
-      end
-
-      if (rx_fire) begin
-        if (!frame_active) begin
-          resp_tdest   <= s_axis_tdest;
-          resp_tid     <= s_axis_tid;
-          resp_tuser   <= s_axis_tuser;
-          resp_session <= rx_session;
-        end
-        frame_active <= 1'b1;
-
-        if (!frame_active && is_header) begin
-          kmask      <= rx_payload[495:480];
-          resp_valid <= rx_last;  // header-only request
-        end else begin
-          line      <= rx_payload;
-          line_last <= rx_last;
-          widx      <= {IDX_W{1'b0}};
-          unpacking <= 1'b1;
-        end
-      end
-
-      // Response accepted: clear down for the next request.
-      if (resp_valid && m_axis_tready) begin
-        resp_valid   <= 1'b0;
-        frame_active <= 1'b0;
-        kmask        <= {MASK_W{1'b1}};
-        for (i = 0; i < TOP_K_NUM; i = i + 1) topk[i] <= {VALUE_W{1'b0}};
-      end
-    end
-  end
-
-  // --------------------------------------------------------------- output
-
-  reg [PAYLOAD_W-1:0] resp_data;
-  integer j;
-  always @* begin
-    resp_data = {PAYLOAD_W{1'b0}};
-    for (j = 0; j < TOP_K_NUM; j = j + 1)
-    resp_data[j*VALUE_W+:VALUE_W] = kmask[j] ? topk[j] : {VALUE_W{1'b0}};
-  end
-
-  // {meta_TDATA_out = {64, session}, tlast, payload}: one beat per request
-  assign m_axis_tdata  = {LINE_BYTES[15:0], resp_session, 1'b1, resp_data};
-  assign m_axis_tvalid = resp_valid;
-  assign m_axis_tlast  = 1'b1;
-  assign m_axis_tkeep  = {KEEP_W{1'b1}};
-  assign m_axis_tstrb  = {KEEP_W{1'b1}};
-  assign m_axis_tdest  = resp_tdest;
-  assign m_axis_tid    = resp_tid;
-  assign m_axis_tuser  = resp_tuser;
+    assign m_axis_tkeep = {KEEP_W{1'b1}};
+    assign m_axis_tstrb = {KEEP_W{1'b1}};
 
 endmodule
 

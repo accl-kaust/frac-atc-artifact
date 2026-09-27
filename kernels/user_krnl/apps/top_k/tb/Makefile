@@ -16,6 +16,9 @@ COCOTB_TEST_MODULES = $(MODULE)
 COCOTB_TOPLEVEL     = $(TOPLEVEL)
 
 VERILOG_SOURCES += $(RTL_DIR)/$(DUT).v
+VERILOG_SOURCES += $(RTL_DIR)/$(DUT)_core.v
+# the skid buffers either side of the core, from the static tree
+VERILOG_SOURCES += ../../../reassembly/rtl/axis_register.v
 
 # module parameters
 TOP_K_NUM ?= 16

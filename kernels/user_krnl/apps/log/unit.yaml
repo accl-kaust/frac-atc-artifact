@@ -11,6 +11,8 @@ rtl:
   dir: "src/rtl"
   files:
     - log.v
+    - log_core.v
+    - ../../../../reassembly/rtl/axis_register.v
 
 xdc:
   dir: "src/xdc"

@@ -308,6 +308,15 @@ class TB:
         return frame
 
 
+def core(dut):
+    """The core inside the reconfigurable module.  The top level puts a skid
+    buffer on each side of it, which takes up to two beats the core has not
+    and delays every beat a cycle; the checks about the core's own handshake
+    -- when it accepts, when it answers, when it refuses -- read its ports.
+    Everything else goes through the top level, as the slot sees it."""
+    return dut.core_inst
+
+
 async def wait_cycles(dut, count):
     for _ in range(count):
         await RisingEdge(dut.clk)
@@ -493,8 +502,11 @@ async def run_test_response_meta(dut):
 
 async def run_test_response_held(dut):
     """
-    A response beat is held stable until it is accepted, and the slot refuses
-    new input while one is outstanding.
+    A response is held stable until it is accepted, and the core refuses new
+    input while a response of its own is waiting.  The response-side skid
+    buffer takes the core's first two responses, so with the sink stalled it
+    is the third request whose response waits in the core, and a fourth must
+    then stay out of it.  Released, all four come back in order and intact.
     """
     tb = TB(dut)
 
@@ -505,26 +517,32 @@ async def run_test_response_held(dut):
     tb.sink.pause = True
     await tb.reset()
 
-    sent = await tb.send_request(random_values(WORDS_PER_LINE), header=True)
+    requests = [await tb.send_request(random_values(WORDS_PER_LINE), header=True)
+                for _ in range(4)]
+    hs = core(dut)
 
-    for _ in range(4 * LINE_CYCLES):
-        if int(dut.m_axis_tvalid.value):
+    for _ in range(8 * LINE_CYCLES):
+        if int(hs.m_axis_tvalid.value) and not int(hs.m_axis_tready.value):
             break
         await RisingEdge(dut.clk)
     else:
-        raise AssertionError("no response within four line times")
+        raise AssertionError("the core never had to hold a response")
 
     held = int(dut.m_axis_tdata.value)
+    core_held = int(hs.m_axis_tdata.value)
     for _ in range(32):
         await RisingEdge(dut.clk)
         assert int(dut.m_axis_tvalid.value) == 1, "tvalid dropped before tready"
         assert int(dut.m_axis_tdata.value) == held, "tdata moved before tready"
-        assert int(dut.s_axis_tready.value) == 0, "input accepted with a response pending"
+        assert int(hs.m_axis_tvalid.value) == 1, "the core dropped its waiting response"
+        assert int(hs.m_axis_tdata.value) == core_held, "the core's waiting response moved"
+        assert int(hs.s_axis_tready.value) == 0, "input accepted with a response pending"
 
     tb.sink.pause = False
 
-    frame = await tb.recv_response(1)
-    tb.check(frame, sent)
+    for sent in requests:
+        frame = await tb.recv_response(1)
+        tb.check(frame, sent)
 
     assert tb.sink.empty()
     await wait_cycles(dut, 2)
@@ -542,15 +560,16 @@ async def run_test_timing(dut):
     accepts = []
     resp_cycle = None
     cycle = 0
+    hs = core(dut)
 
     async def watch():
         nonlocal resp_cycle, cycle
         while True:
             await RisingEdge(dut.clk)
             cycle += 1
-            if int(dut.s_axis_tvalid.value) and int(dut.s_axis_tready.value):
+            if int(hs.s_axis_tvalid.value) and int(hs.s_axis_tready.value):
                 accepts.append(cycle)
-            if resp_cycle is None and int(dut.m_axis_tvalid.value):
+            if resp_cycle is None and int(hs.m_axis_tvalid.value):
                 resp_cycle = cycle
 
     watcher = cocotb.start_soon(watch())
@@ -777,6 +796,8 @@ def test_log(request, align_depth):
     verilog_sources = [
         os.path.join(tests_dir, "fp_stubs.v"),
         os.path.join(rtl_dir, f"{dut}.v"),
+        os.path.join(rtl_dir, f"{dut}_core.v"),
+        os.path.join(tests_dir, "..", "..", "..", "reassembly", "rtl", "axis_register.v"),
     ]
 
     parameters = {'ALIGN_DEPTH': align_depth}

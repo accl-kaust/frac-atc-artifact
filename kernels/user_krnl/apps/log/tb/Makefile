@@ -19,6 +19,9 @@ COCOTB_TOPLEVEL     = $(TOPLEVEL)
 # src/ip/gen_ip.tcl); fp_stubs.v stands in for them.
 VERILOG_SOURCES += fp_stubs.v
 VERILOG_SOURCES += $(RTL_DIR)/$(DUT).v
+VERILOG_SOURCES += $(RTL_DIR)/$(DUT)_core.v
+# the skid buffers either side of the core, from the static tree
+VERILOG_SOURCES += ../../../reassembly/rtl/axis_register.v
 
 # module parameters
 ALIGN_DEPTH ?= 32
