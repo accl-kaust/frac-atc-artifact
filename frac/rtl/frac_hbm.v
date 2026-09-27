@@ -724,6 +724,209 @@ axi_prot_conv m01_axi_prot_conv_inst(
 //    .probe0(hbm_rstn)
 // );
 
+// Register slices between each protocol converter and its HBM port. The
+// HBM's AXI outputs arrive late -- about 0.6 ns clock-to-out on RVALID, a
+// route out of the hard block and 0.2 ns of clock skew -- and at 400 MHz
+// that left no room for the protocol and width converters' logic between
+// the port and the clock converter's FIFO. Every channel is fully
+// registered, ready included, so the port only ever sees a flop.
+wire [32:0]    m00_hbm_awaddr;
+wire [3:0]     m00_hbm_awlen;
+wire [2:0]     m00_hbm_awsize;
+wire [1:0]     m00_hbm_awburst;
+wire           m00_hbm_awvalid;
+wire           m00_hbm_awready;
+wire [255:0]   m00_hbm_wdata;
+wire [31:0]    m00_hbm_wstrb;
+wire           m00_hbm_wlast;
+wire           m00_hbm_wvalid;
+wire           m00_hbm_wready;
+wire [1:0]     m00_hbm_bresp;
+wire           m00_hbm_bvalid;
+wire           m00_hbm_bready;
+wire [32:0]    m00_hbm_araddr;
+wire [3:0]     m00_hbm_arlen;
+wire [2:0]     m00_hbm_arsize;
+wire [1:0]     m00_hbm_arburst;
+wire           m00_hbm_arvalid;
+wire           m00_hbm_arready;
+wire [255:0]   m00_hbm_rdata;
+wire [1:0]     m00_hbm_rresp;
+wire           m00_hbm_rlast;
+wire           m00_hbm_rvalid;
+wire           m00_hbm_rready;
+wire [32:0]    m01_hbm_awaddr;
+wire [3:0]     m01_hbm_awlen;
+wire [2:0]     m01_hbm_awsize;
+wire [1:0]     m01_hbm_awburst;
+wire           m01_hbm_awvalid;
+wire           m01_hbm_awready;
+wire [255:0]   m01_hbm_wdata;
+wire [31:0]    m01_hbm_wstrb;
+wire           m01_hbm_wlast;
+wire           m01_hbm_wvalid;
+wire           m01_hbm_wready;
+wire [1:0]     m01_hbm_bresp;
+wire           m01_hbm_bvalid;
+wire           m01_hbm_bready;
+wire [32:0]    m01_hbm_araddr;
+wire [3:0]     m01_hbm_arlen;
+wire [2:0]     m01_hbm_arsize;
+wire [1:0]     m01_hbm_arburst;
+wire           m01_hbm_arvalid;
+wire           m01_hbm_arready;
+wire [255:0]   m01_hbm_rdata;
+wire [1:0]     m01_hbm_rresp;
+wire           m01_hbm_rlast;
+wire           m01_hbm_rvalid;
+wire           m01_hbm_rready;
+
+axi_reg_slice_hbm m00_axi_reg_slice_hbm_inst (
+    .aclk(hbm_clk),
+    .aresetn(hbm_rstn),
+
+    .s_axi_awaddr(axi_protocol_convert_0_m_axi_awaddr[32:0]),
+    .s_axi_awlen(axi_protocol_convert_0_m_axi_awlen),
+    .s_axi_awsize(axi_protocol_convert_0_m_axi_awsize),
+    .s_axi_awburst(axi_protocol_convert_0_m_axi_awburst),
+    .s_axi_awlock(2'b00),
+    .s_axi_awcache(4'b0011),
+    .s_axi_awprot(3'b000),
+    .s_axi_awqos(4'b0000),
+    .s_axi_awvalid(axi_protocol_convert_0_m_axi_awvalid),
+    .s_axi_awready(axi_protocol_convert_0_m_axi_awready),
+    .s_axi_wdata(axi_protocol_convert_0_m_axi_wdata),
+    .s_axi_wstrb(axi_protocol_convert_0_m_axi_wstrb),
+    .s_axi_wlast(axi_protocol_convert_0_m_axi_wlast),
+    .s_axi_wvalid(axi_protocol_convert_0_m_axi_wvalid),
+    .s_axi_wready(axi_protocol_convert_0_m_axi_wready),
+    .s_axi_bresp(axi_protocol_convert_0_m_axi_bresp),
+    .s_axi_bvalid(axi_protocol_convert_0_m_axi_bvalid),
+    .s_axi_bready(axi_protocol_convert_0_m_axi_bready),
+    .s_axi_araddr(axi_protocol_convert_0_m_axi_araddr[32:0]),
+    .s_axi_arlen(axi_protocol_convert_0_m_axi_arlen),
+    .s_axi_arsize(axi_protocol_convert_0_m_axi_arsize),
+    .s_axi_arburst(axi_protocol_convert_0_m_axi_arburst),
+    .s_axi_arlock(2'b00),
+    .s_axi_arcache(4'b0011),
+    .s_axi_arprot(3'b000),
+    .s_axi_arqos(4'b0000),
+    .s_axi_arvalid(axi_protocol_convert_0_m_axi_arvalid),
+    .s_axi_arready(axi_protocol_convert_0_m_axi_arready),
+    .s_axi_rdata(axi_protocol_convert_0_m_axi_rdata),
+    .s_axi_rresp(axi_protocol_convert_0_m_axi_rresp),
+    .s_axi_rlast(axi_protocol_convert_0_m_axi_rlast),
+    .s_axi_rvalid(axi_protocol_convert_0_m_axi_rvalid),
+    .s_axi_rready(axi_protocol_convert_0_m_axi_rready),
+
+    .m_axi_awaddr(m00_hbm_awaddr),
+    .m_axi_awlen(m00_hbm_awlen),
+    .m_axi_awsize(m00_hbm_awsize),
+    .m_axi_awburst(m00_hbm_awburst),
+    .m_axi_awlock(),
+    .m_axi_awcache(),
+    .m_axi_awprot(),
+    .m_axi_awqos(),
+    .m_axi_awvalid(m00_hbm_awvalid),
+    .m_axi_awready(m00_hbm_awready),
+    .m_axi_wdata(m00_hbm_wdata),
+    .m_axi_wstrb(m00_hbm_wstrb),
+    .m_axi_wlast(m00_hbm_wlast),
+    .m_axi_wvalid(m00_hbm_wvalid),
+    .m_axi_wready(m00_hbm_wready),
+    .m_axi_bresp(m00_hbm_bresp),
+    .m_axi_bvalid(m00_hbm_bvalid),
+    .m_axi_bready(m00_hbm_bready),
+    .m_axi_araddr(m00_hbm_araddr),
+    .m_axi_arlen(m00_hbm_arlen),
+    .m_axi_arsize(m00_hbm_arsize),
+    .m_axi_arburst(m00_hbm_arburst),
+    .m_axi_arlock(),
+    .m_axi_arcache(),
+    .m_axi_arprot(),
+    .m_axi_arqos(),
+    .m_axi_arvalid(m00_hbm_arvalid),
+    .m_axi_arready(m00_hbm_arready),
+    .m_axi_rdata(m00_hbm_rdata),
+    .m_axi_rresp(m00_hbm_rresp),
+    .m_axi_rlast(m00_hbm_rlast),
+    .m_axi_rvalid(m00_hbm_rvalid),
+    .m_axi_rready(m00_hbm_rready)
+);
+
+axi_reg_slice_hbm m01_axi_reg_slice_hbm_inst (
+    .aclk(hbm_clk),
+    .aresetn(hbm_rstn),
+
+    .s_axi_awaddr(axi_protocol_convert_1_m_axi_awaddr[32:0]),
+    .s_axi_awlen(axi_protocol_convert_1_m_axi_awlen),
+    .s_axi_awsize(axi_protocol_convert_1_m_axi_awsize),
+    .s_axi_awburst(axi_protocol_convert_1_m_axi_awburst),
+    .s_axi_awlock(2'b00),
+    .s_axi_awcache(4'b0011),
+    .s_axi_awprot(3'b000),
+    .s_axi_awqos(4'b0000),
+    .s_axi_awvalid(axi_protocol_convert_1_m_axi_awvalid),
+    .s_axi_awready(axi_protocol_convert_1_m_axi_awready),
+    .s_axi_wdata(axi_protocol_convert_1_m_axi_wdata),
+    .s_axi_wstrb(axi_protocol_convert_1_m_axi_wstrb),
+    .s_axi_wlast(axi_protocol_convert_1_m_axi_wlast),
+    .s_axi_wvalid(axi_protocol_convert_1_m_axi_wvalid),
+    .s_axi_wready(axi_protocol_convert_1_m_axi_wready),
+    .s_axi_bresp(axi_protocol_convert_1_m_axi_bresp),
+    .s_axi_bvalid(axi_protocol_convert_1_m_axi_bvalid),
+    .s_axi_bready(axi_protocol_convert_1_m_axi_bready),
+    .s_axi_araddr(axi_protocol_convert_1_m_axi_araddr[32:0]),
+    .s_axi_arlen(axi_protocol_convert_1_m_axi_arlen),
+    .s_axi_arsize(axi_protocol_convert_1_m_axi_arsize),
+    .s_axi_arburst(axi_protocol_convert_1_m_axi_arburst),
+    .s_axi_arlock(2'b00),
+    .s_axi_arcache(4'b0011),
+    .s_axi_arprot(3'b000),
+    .s_axi_arqos(4'b0000),
+    .s_axi_arvalid(axi_protocol_convert_1_m_axi_arvalid),
+    .s_axi_arready(axi_protocol_convert_1_m_axi_arready),
+    .s_axi_rdata(axi_protocol_convert_1_m_axi_rdata),
+    .s_axi_rresp(axi_protocol_convert_1_m_axi_rresp),
+    .s_axi_rlast(axi_protocol_convert_1_m_axi_rlast),
+    .s_axi_rvalid(axi_protocol_convert_1_m_axi_rvalid),
+    .s_axi_rready(axi_protocol_convert_1_m_axi_rready),
+
+    .m_axi_awaddr(m01_hbm_awaddr),
+    .m_axi_awlen(m01_hbm_awlen),
+    .m_axi_awsize(m01_hbm_awsize),
+    .m_axi_awburst(m01_hbm_awburst),
+    .m_axi_awlock(),
+    .m_axi_awcache(),
+    .m_axi_awprot(),
+    .m_axi_awqos(),
+    .m_axi_awvalid(m01_hbm_awvalid),
+    .m_axi_awready(m01_hbm_awready),
+    .m_axi_wdata(m01_hbm_wdata),
+    .m_axi_wstrb(m01_hbm_wstrb),
+    .m_axi_wlast(m01_hbm_wlast),
+    .m_axi_wvalid(m01_hbm_wvalid),
+    .m_axi_wready(m01_hbm_wready),
+    .m_axi_bresp(m01_hbm_bresp),
+    .m_axi_bvalid(m01_hbm_bvalid),
+    .m_axi_bready(m01_hbm_bready),
+    .m_axi_araddr(m01_hbm_araddr),
+    .m_axi_arlen(m01_hbm_arlen),
+    .m_axi_arsize(m01_hbm_arsize),
+    .m_axi_arburst(m01_hbm_arburst),
+    .m_axi_arlock(),
+    .m_axi_arcache(),
+    .m_axi_arprot(),
+    .m_axi_arqos(),
+    .m_axi_arvalid(m01_hbm_arvalid),
+    .m_axi_arready(m01_hbm_arready),
+    .m_axi_rdata(m01_hbm_rdata),
+    .m_axi_rresp(m01_hbm_rresp),
+    .m_axi_rlast(m01_hbm_rlast),
+    .m_axi_rvalid(m01_hbm_rvalid),
+    .m_axi_rready(m01_hbm_rready)
+);
+
 // reconfctrl's master on hbm_clk
 wire [5:0]   reconf_cc_awid;
 wire [32:0]  reconf_cc_awaddr;
@@ -863,34 +1066,34 @@ hbm_0 hbm_0_inst(
 
     .HBM_REF_CLK_0(hbm_ref_clk),
 
-    .AXI_00_ARADDR(axi_protocol_convert_1_m_axi_araddr[32:0]),
-    .AXI_00_ARBURST(axi_protocol_convert_1_m_axi_arburst),
+    .AXI_00_ARADDR(m01_hbm_araddr),
+    .AXI_00_ARBURST(m01_hbm_arburst),
     .AXI_00_ARID({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-    .AXI_00_ARLEN(axi_protocol_convert_1_m_axi_arlen),
-    .AXI_00_ARREADY(axi_protocol_convert_1_m_axi_arready),
-    .AXI_00_ARSIZE(axi_protocol_convert_1_m_axi_arsize),
-    .AXI_00_ARVALID(axi_protocol_convert_1_m_axi_arvalid),
-    .AXI_00_AWADDR(axi_protocol_convert_1_m_axi_awaddr[32:0]),
-    .AXI_00_AWBURST(axi_protocol_convert_1_m_axi_awburst),
+    .AXI_00_ARLEN(m01_hbm_arlen),
+    .AXI_00_ARREADY(m01_hbm_arready),
+    .AXI_00_ARSIZE(m01_hbm_arsize),
+    .AXI_00_ARVALID(m01_hbm_arvalid),
+    .AXI_00_AWADDR(m01_hbm_awaddr),
+    .AXI_00_AWBURST(m01_hbm_awburst),
     .AXI_00_AWID({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-    .AXI_00_AWLEN(axi_protocol_convert_1_m_axi_awlen),
-    .AXI_00_AWREADY(axi_protocol_convert_1_m_axi_awready),
-    .AXI_00_AWSIZE(axi_protocol_convert_1_m_axi_awsize),
-    .AXI_00_AWVALID(axi_protocol_convert_1_m_axi_awvalid),
-    .AXI_00_BREADY(axi_protocol_convert_1_m_axi_bready),
-    .AXI_00_BRESP(axi_protocol_convert_1_m_axi_bresp),
-    .AXI_00_BVALID(axi_protocol_convert_1_m_axi_bvalid),
-    .AXI_00_RDATA(axi_protocol_convert_1_m_axi_rdata),
-    .AXI_00_RLAST(axi_protocol_convert_1_m_axi_rlast),
-    .AXI_00_RREADY(axi_protocol_convert_1_m_axi_rready),
-    .AXI_00_RRESP(axi_protocol_convert_1_m_axi_rresp),
-    .AXI_00_RVALID(axi_protocol_convert_1_m_axi_rvalid),
-    .AXI_00_WDATA(axi_protocol_convert_1_m_axi_wdata),
+    .AXI_00_AWLEN(m01_hbm_awlen),
+    .AXI_00_AWREADY(m01_hbm_awready),
+    .AXI_00_AWSIZE(m01_hbm_awsize),
+    .AXI_00_AWVALID(m01_hbm_awvalid),
+    .AXI_00_BREADY(m01_hbm_bready),
+    .AXI_00_BRESP(m01_hbm_bresp),
+    .AXI_00_BVALID(m01_hbm_bvalid),
+    .AXI_00_RDATA(m01_hbm_rdata),
+    .AXI_00_RLAST(m01_hbm_rlast),
+    .AXI_00_RREADY(m01_hbm_rready),
+    .AXI_00_RRESP(m01_hbm_rresp),
+    .AXI_00_RVALID(m01_hbm_rvalid),
+    .AXI_00_WDATA(m01_hbm_wdata),
     .AXI_00_WDATA_PARITY({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-    .AXI_00_WLAST(axi_protocol_convert_1_m_axi_wlast),
-    .AXI_00_WREADY(axi_protocol_convert_1_m_axi_wready),
-    .AXI_00_WSTRB(axi_protocol_convert_1_m_axi_wstrb),
-    .AXI_00_WVALID(axi_protocol_convert_1_m_axi_wvalid),
+    .AXI_00_WLAST(m01_hbm_wlast),
+    .AXI_00_WREADY(m01_hbm_wready),
+    .AXI_00_WSTRB(m01_hbm_wstrb),
+    .AXI_00_WVALID(m01_hbm_wvalid),
 
     .AXI_01_ARADDR(reconf_cc_araddr),
     .AXI_01_ARBURST(reconf_cc_arburst),
@@ -924,34 +1127,34 @@ hbm_0 hbm_0_inst(
     .AXI_01_WSTRB(reconf_cc_wstrb),
     .AXI_01_WVALID(reconf_cc_wvalid),
 
-    .AXI_02_ARADDR(axi_protocol_convert_0_m_axi_araddr[32:0]),
-    .AXI_02_ARBURST(axi_protocol_convert_0_m_axi_arburst),
+    .AXI_02_ARADDR(m00_hbm_araddr),
+    .AXI_02_ARBURST(m00_hbm_arburst),
     .AXI_02_ARID({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-    .AXI_02_ARLEN(axi_protocol_convert_0_m_axi_arlen),
-    .AXI_02_ARREADY(axi_protocol_convert_0_m_axi_arready),
-    .AXI_02_ARSIZE(axi_protocol_convert_0_m_axi_arsize),
-    .AXI_02_ARVALID(axi_protocol_convert_0_m_axi_arvalid),
-    .AXI_02_AWADDR(axi_protocol_convert_0_m_axi_awaddr[32:0]),
-    .AXI_02_AWBURST(axi_protocol_convert_0_m_axi_awburst),
+    .AXI_02_ARLEN(m00_hbm_arlen),
+    .AXI_02_ARREADY(m00_hbm_arready),
+    .AXI_02_ARSIZE(m00_hbm_arsize),
+    .AXI_02_ARVALID(m00_hbm_arvalid),
+    .AXI_02_AWADDR(m00_hbm_awaddr),
+    .AXI_02_AWBURST(m00_hbm_awburst),
     .AXI_02_AWID({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-    .AXI_02_AWLEN(axi_protocol_convert_0_m_axi_awlen),
-    .AXI_02_AWREADY(axi_protocol_convert_0_m_axi_awready),
-    .AXI_02_AWSIZE(axi_protocol_convert_0_m_axi_awsize),
-    .AXI_02_AWVALID(axi_protocol_convert_0_m_axi_awvalid),
-    .AXI_02_BREADY(axi_protocol_convert_0_m_axi_bready),
-    .AXI_02_BRESP(axi_protocol_convert_0_m_axi_bresp),
-    .AXI_02_BVALID(axi_protocol_convert_0_m_axi_bvalid),
-    .AXI_02_RDATA(axi_protocol_convert_0_m_axi_rdata),
-    .AXI_02_RLAST(axi_protocol_convert_0_m_axi_rlast),
-    .AXI_02_RREADY(axi_protocol_convert_0_m_axi_rready),
-    .AXI_02_RRESP(axi_protocol_convert_0_m_axi_rresp),
-    .AXI_02_RVALID(axi_protocol_convert_0_m_axi_rvalid),
-    .AXI_02_WDATA(axi_protocol_convert_0_m_axi_wdata),
+    .AXI_02_AWLEN(m00_hbm_awlen),
+    .AXI_02_AWREADY(m00_hbm_awready),
+    .AXI_02_AWSIZE(m00_hbm_awsize),
+    .AXI_02_AWVALID(m00_hbm_awvalid),
+    .AXI_02_BREADY(m00_hbm_bready),
+    .AXI_02_BRESP(m00_hbm_bresp),
+    .AXI_02_BVALID(m00_hbm_bvalid),
+    .AXI_02_RDATA(m00_hbm_rdata),
+    .AXI_02_RLAST(m00_hbm_rlast),
+    .AXI_02_RREADY(m00_hbm_rready),
+    .AXI_02_RRESP(m00_hbm_rresp),
+    .AXI_02_RVALID(m00_hbm_rvalid),
+    .AXI_02_WDATA(m00_hbm_wdata),
     .AXI_02_WDATA_PARITY({1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0,1'b0}),
-    .AXI_02_WLAST(axi_protocol_convert_0_m_axi_wlast),
-    .AXI_02_WREADY(axi_protocol_convert_0_m_axi_wready),
-    .AXI_02_WSTRB(axi_protocol_convert_0_m_axi_wstrb),
-    .AXI_02_WVALID(axi_protocol_convert_0_m_axi_wvalid),
+    .AXI_02_WLAST(m00_hbm_wlast),
+    .AXI_02_WREADY(m00_hbm_wready),
+    .AXI_02_WSTRB(m00_hbm_wstrb),
+    .AXI_02_WVALID(m00_hbm_wvalid),
 
     .apb_complete_0(),
 
