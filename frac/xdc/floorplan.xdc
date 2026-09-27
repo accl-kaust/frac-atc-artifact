@@ -13,3 +13,13 @@ resize_pblock [get_pblocks pblock_cmac_krnl_inst] -add {CLOCKREGION_X0Y8:CLOCKRE
 create_pblock pblock_1
 add_cells_to_pblock [get_pblocks pblock_1] [get_cells -quiet [list frac_inst/network_krnl_inst frac_inst/sys_rst_inst frac_inst/tcp_open_status_width_conv_inst frac_inst/user_krnl_inst]]
 resize_pblock [get_pblocks pblock_1] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3Y3 CLOCKREGION_X4Y1:CLOCKREGION_X7Y1 CLOCKREGION_X0Y4:CLOCKREGION_X4Y4 CLOCKREGION_X0Y5:CLOCKREGION_X7Y5 CLOCKREGION_X0Y6:CLOCKREGION_X5Y7}
+
+# The debug hub stays although no ILA or VIO is left: the HBM IP carries a
+# debug core of its own (hbm_0_inst, for the Hardware Manager's HBM monitor),
+# so Vivado still inserts dbg_hub, and without a clock on it opt_design fails
+# with [Chipscope 16-213] "The debug port 'dbg_hub/clk' has 1 unconnected
+# channels".
+set_property C_CLK_INPUT_FREQ_HZ 200000000 [get_debug_cores dbg_hub]
+set_property C_ENABLE_CLK_DIVIDER false [get_debug_cores dbg_hub]
+set_property C_USER_SCAN_CHAIN 1 [get_debug_cores dbg_hub]
+connect_debug_port dbg_hub/clk [get_nets clk]
