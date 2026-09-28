@@ -1,9 +1,10 @@
 Quick Start
 ===========
 
-This guide connects a host to fRAC and runs a request-response test using
-`libtpa <https://github.com/krish-iyer/libtpa/>`_. The example assumes a full FPGA
-image with the ``pattern_slot`` accelerator loaded in slot 0 (C00).
+fRAC includes an Ethernet and TCP stack and few accelerators, all implemented on the FPGA.
+A TCP client can send application requests over TCP and receive responses with low latency.
+Accelerators are placed in a slot which are reconfigurable through partial reconfiguration.
+We use libtpa, a DPDK based TCP stack to measure latency and throughput.
 
 Requirements
 ------------
@@ -12,7 +13,7 @@ Hardware
 ~~~~~~~~
 
 1. Alveo U280.
-2. ConnectX-6 Dx 100GbE adapter.
+2. ConnectX-6 Dx 100GbE NIC.
 3. USB cable for JTAG.
 4. 100G QSFP cable.
 
@@ -22,189 +23,229 @@ Software
 1. Ubuntu 22.04 LTS.
 2. Vivado 2022.2.
 3. `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/>`_.
+4. `Go <https://go.dev/doc/install>`_ compiler
 
-Get the Software
+If you don't have access to hardware, you can request access to our infrastructure by contacting us.
+
+Generating bitstream
+--------------------
+.. code-block:: sh
+
+   $ git clone --branch main \
+                --single-branch https://github.com/accl-kaust/frac-atc-artifact.git
+   $ cd frac-atc-artifact
+   $ make ip
+   $ ./bin/spinhdl --parallel 8 weave spinhdl.yaml \
+                    --units spin.yaml \
+                    --static static.yaml \
+                    --run all
+   $ cd ~
+
+.. note::
+   You can skip this section and use our bitstreams instead under ``example/``
+
+
+Setting up the NIC
 ----------------
 
-On the host connected to the ConnectX-6 Dx, install Git and the C build tools,
-then clone fRAC and libtpa into a common working directory:
+Make sure you have a ConnectX-6 Dx, other NICs might also work but we haven't tested anything else yet.
+
+Download `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/>`_.
 
 .. code-block:: sh
 
-   sudo apt update
-   sudo apt install -y git build-essential
+   $ tar -xvf MLNX_OFED_LINUX-24.07-0.6.1.0-ubuntu22.04-x86_64.tgz
+   $ cd MLNX_OFED_LINUX-24.07-0.6.1.0-ubuntu22.04-x86_64
+   $ sudo ./mlnxofedinstall --dpdk --upstream-libs
+   $ cd ~
 
-   mkdir -p frac-workspace
-   cd frac-workspace
-   export FRAC_WORKSPACE="$PWD"
-
-   git clone https://github.com/krish-iyer/offrac.git
-   git clone --branch tcp_bench --single-branch https://github.com/krish-iyer/libtpa.git
-
-Use libtpa's ``tcp_bench`` branch for this example. It adds FPGA request framing
-and the function, request-size, and response-size options used below.
-
-Build libtpa
-------------
-
-Install the dependencies and build the library and its applications:
+Building libtpa
+---------------
 
 .. code-block:: sh
 
-   cd "$FRAC_WORKSPACE/libtpa"
-   sudo ./buildtools/install-dep.deb.sh --with-meson
-   make
-   sudo make install
+   # export or add to ~/.bashrc or ~/.zshrc
+   $ export DPDK_VERSION=v22.11
+   $ git clone --branch frac_hdr_fmt
+                --single-branch https://github.com/krish-iyer/libtpa.git
+   $ cd libtpa
+   $ sudo ./buildtools/install-dep.deb.sh --with-meson
+   $ make
+   $ make install
 
-The installation provides the ``tpa`` launcher, the ``swing`` connection tool,
-and the ``tperf`` benchmark. MLNX_OFED must include the DPDK and userspace verbs
-support described in the
-`libtpa installation guide <https://github.com/krish-iyer/libtpa/blob/tcp_bench/doc/quick_start.rst>`_.
-
-Allocate hugepages for libtpa's DPDK memory pools:
+Allocate hugepages for libtpa's DPDK memory pools. Please adjust the number of pages according to available DRAM
 
 .. code-block:: sh
 
-   sudo ./tools/scripts/hugepage-setup.sh
-   sudo mkdir -p /dev/hugepages
-   mountpoint -q /dev/hugepages || sudo mount -t hugetlbfs -o pagesize=2M none /dev/hugepages
-   grep -E 'HugePages|Hugepagesize' /proc/meminfo
-
-The helper reserves 1024 pages of 2 MiB each, or 2 GiB. Check that the allocation
-succeeded before running a client; this setup may need to be repeated after a
-reboot.
+   # allocating 2000 hugepages each 2MB
+   # please allocate more if required
+   $ sudo sed -i.bak 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="default_hugepagesz=2M hugepagesz=2M hugepages=2000"|' \
+              /etc/default/grub
+   $ sudo update-grub
+   $ sudo reboot
 
 Connect the Hardware
 --------------------
 
-1. Install and power the Alveo U280 and the ConnectX-6 Dx in their host systems.
-2. Connect the U280 port used by the design (``qsfp0``) to the ConnectX-6 Dx using
-   the 100G QSFP cable.
-3. Connect the U280's JTAG USB interface to the machine running Vivado.
-
-The network client and Vivado can run on the same machine or on separate
-machines.
+1. Connect (``qsfp0``) (port 0) of U280 to the ConnectX-6 Dx with 100G QSFP cable.
+2. Connect the U280's JTAG USB interface to the machine.
 
 Program the FPGA
 ----------------
 
-Use a full U280 bitstream containing the fRAC network infrastructure and
-``pattern_slot`` in C00. This example uses workload ID ``0`` to reach that slot.
-See :doc:`build-and-deployment` for the FPGA build flow.
+Program the Alveo U280 FPGA with the generated bitstream. We have a shell script to this. The full bitstreams come with default accelerators with ID:0 in ``spinhdl.yaml``.
+
+.. code-block:: sh
+
+   $ ./scripts/programfpga.sh example/jtag/fpga.bit
 
 .. note::
 
-   The Quick Start image's download location and release filename are still to
-   be specified. ``<initial-frac-image.bit>`` below denotes that full image.
-
-In Vivado 2022.2:
-
-1. Open **Hardware Manager**.
-2. Select **Open Target → Auto Connect** and locate the U280 FPGA.
-3. Select **Program Device**.
-4. Choose ``<initial-frac-image.bit>`` as the bitstream file. If using debug
-   probes, select the ``.ltx`` file from the same build.
-5. Program the device and wait for completion.
+   Wait a few seconds after flashing the FPGA before sending it any packets
+   or requests.
 
 Configure the Host Network
 --------------------------
 
 The checked-in fRAC design uses FPGA address ``172.24.1.52`` and TCP port
 ``2888``. Configure the connected host interface with a different address in
-the same subnet. The example uses ``172.24.1.10/24``.
+the same subnet. The example uses ``172.24.1.2/24``.
 
-Identify the ConnectX-6 Dx interface:
-
-.. code-block:: sh
-
-   ip -br link
-
-Replace ``enp1s0f0`` below with the interface connected to the FPGA. Start with a
-1500-byte MTU for the small request used in this guide:
+You will need the ConnectX-6 Dx interface connected to the Alveo U280 by a QSFP cable. We prefer configuring network interface through netplan.
 
 .. code-block:: sh
 
-   export FRAC_NETDEV=enp1s0f0
-   sudo ip addr add 172.24.1.10/24 dev "$FRAC_NETDEV"
-   sudo ip link set dev "$FRAC_NETDEV" mtu 1500 up
-   ip -br addr show dev "$FRAC_NETDEV"
-   ethtool "$FRAC_NETDEV"
+   $ sudo vim /etc/netplan/01-network-manager-all.yaml
 
-Confirm that ``ethtool`` reports ``Link detected: yes`` and a speed of
-``100000Mb/s``. These network settings apply to the current boot. If your FPGA
-image uses another IP address, adjust the host subnet and client destination
-accordingly.
+.. code-block:: yaml
+
+    network:
+      version: 2
+      renderer: NetworkManager
+      ethernets:
+        enp33s0f0np0: # ConnectX-6 Dx Intf to U280
+        dhcp4: no
+        addresses: [172.24.1.2/24]
+        mtu: 9000
+
+Now apply network settings
+
+.. code-block:: sh
+
+   $ sudo netplan apply
+
 
 Check the TCP Connection
 ------------------------
 
-Use libtpa's ``swing`` application to check that the FPGA accepts a TCP
-connection:
+Just try ping-ing FPGA.
 
 .. code-block:: sh
 
-   sudo env TPA_ETH_DEV="$FRAC_NETDEV" TPA_ID=frac-connect \
-       tpa run swing 172.24.1.52 2888
+   $ ping 172.24.1.52
 
-The launcher derives libtpa's network configuration from ``FRAC_NETDEV`` through
-``TPA_ETH_DEV``. Keep the interface attached to its ``mlx5_core`` driver;
-libtpa uses the Mellanox driver alongside the host network stack.
+If ping is sucessfull then your machine can reach FPGA and possibly fRAC.
 
-Wait for ``[connected]``, then press **Ctrl+C**. This checks the TCP connection;
-the next step sends a framed fRAC request.
-
-Run a Request-Response Test
---------------------------------
-
-With ``pattern_slot`` in C00, run a five-second test with one connection and one
-worker:
+You can also send some test packets to fRAC accelerators and see if they are live.
 
 .. code-block:: sh
 
-   sudo env TPA_ETH_DEV="$FRAC_NETDEV" TPA_ID=frac-test \
-       tpa run tperf -c 172.24.1.52 -p 2888 -t rr \
-       -Z 1 -F 0 -m 64 -X 64 -R 64 -n 1 -C 1 -d 5
+   $ go run ./scripts/testfuncs.go -slots 0,1 -counter
 
-The FPGA-specific options are implemented in the fork's
-`tperf client <https://github.com/krish-iyer/libtpa/tree/tcp_bench/app/tperf>`_:
+You will get a response something like this.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 25 75
+.. code-block:: output
 
-   * - Option
-     - Meaning
-   * - ``-t rr``
-     - Send a request and wait for its response before sending the next.
-   * - ``-Z 1``
-     - Encode the request for the FPGA.
-   * - ``-F 0``
-     - Select workload ID 0, routed to C00 in the current design.
-   * - ``-m 64 -X 64``
-     - Send one 64-byte message per request, including the fRAC request header.
-   * - ``-R 64``
-     - Wait for a 64-byte response.
-   * - ``-n 1 -C 1 -d 5``
-     - Use one worker and one connection for five seconds.
+  workload 0x0000 (slot 0):
+  unrecognised; closest is echo_slot (data returned unchanged) (15/16 words)   64B in 301.701235ms
+  00000000  aa aa aa aa 00 00 00 00  aa aa aa aa aa aa aa aa  |................|
+  00000010  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000020  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000030  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
 
-This minimal request consists of the header alone. The ``pattern_slot``
-accelerator is an echo workload: it returns the 64-byte header unchanged, with
-the request's size and session ID as response metadata. A working exchange produces nonzero request
-``count`` values and ``min``, ``avg``, and ``max`` latency statistics in the
-``tperf`` output. This benchmark measures request completion and latency; its
-current client does not verify the response payload.
+  workload 0x0001 (slot 1):
+  unrecognised; closest is echo_slot (data returned unchanged) (15/16 words)   64B in 301.598234ms
+  00000000  aa aa aa aa 00 00 00 00  aa aa aa aa aa aa aa aa  |................|
+  00000010  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000020  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000030  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
 
-If the connection succeeds but requests do not complete, check that C00 contains
-``pattern_slot`` and that the expected response size is 64 bytes. Other
-accelerators require their own request payload and response-size settings.
+Reconfigure with an Accelerator
+-------------------------------
 
-Replace an Accelerator
-----------------------
+Try reconfiguring with any acclerator
 
-After completing the initial test, stop the benchmark and follow
-:ref:`Runtime deployment <build-and-deployment:Runtime Deployment>` to load a
-replacement accelerator. Use an ICAP-compatible partial image built for the
-selected slot and the same static design as the running full image.
+.. code-block:: sh
 
-When rerunning the libtpa client, select the workload ID routed to that slot and
-set the request and response sizes for the replacement accelerator.
+   $ cd frac
+   $ go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
+            -hbm-addr 0x10004000 -query-status example/icap/c01_f03.bin
+
+Then try sending packets and it should change the response.
+
+Finally, program with echo for the next step
+
+.. code-block:: sh
+
+   $ cd frac
+   $ go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
+            -hbm-addr 0x10004000 -query-status example/icap/c01_f09.bin
+
+
+.. code-block:: sh
+
+   $ go run patprobe.go -slots 0,1
+
+.. code-block:: output
+
+  workload 0x0000 (slot 0):
+  echo_slot (data returned unchanged)  16/16 words   128B in 1.143403ms
+  00000000  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000010  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000020  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000030  ff ff ff ff ff ff ff ff  80 00 00 00 fd ff 00 00  |................|
+  00000040  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000050  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000060  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000070  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+
+  workload 0x0001 (slot 1):
+  unrecognised; closest is echo_slot (data returned unchanged) (15/16 words)   64B in 301.595283ms
+  00000000  aa aa aa aa 00 00 00 00  aa aa aa aa aa aa aa aa  |................|
+  00000010  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000020  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000030  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+
+Performance Measurements
+------------------------
+
+.. note::
+
+   Before proceeding, make sure the ``pattern`` function is loaded into at
+   least one slot. It echoes requests back to the client.
+
+
+We measure performance with our libtpa based perf tool.
+
+.. note::
+   Change ``-n`` according to number of cores your machine has. fperf allocates each client to an individual core, if you need more client per core use ``-C``
+
+.. code-block:: sh
+
+   # set TPA_ETH_DEV to ConnectX-6 Dx interface connected to Alveo U280
+   $ cd libtpa
+   $ sudo TPA_ID=client TPA_ETH_DEV=<> \
+          TPA_CFG="tcp {tso = 0; } \
+          dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }" \
+          ~/.local/bin/tpa run build/bin/app/fperf -c 171.24.1.52 -p 2888 \
+          -t rr -d 5 -n 28 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 0
+
+.. code-block:: output
+
+    2 RR .0 min=6.91us avg=7.83us max=842.24us read(Gbits/sec)=4.130 write(Gbits/sec)=4.130 count=126025
+    ...
+    2 RR Total-Throughput read(Gbits/sec)=90.868 write(Gbits/sec)=90.868
+
+    3 RR .0 min=6.66us avg=7.82us max=46.85us read(Gbits/sec)=4.132 write(Gbits/sec)=4.132 count=126109
+    ...
+    3 RR Total-Throughput read(Gbits/sec)=90.872 write(Gbits/sec)=90.872
