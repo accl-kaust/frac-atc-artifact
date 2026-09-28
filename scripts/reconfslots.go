@@ -158,16 +158,13 @@ func sleepGap(gap time.Duration) {
 
 func probeWorkload(conn net.Conn, timeout time.Duration, workloadID uint16, label string, gap time.Duration) error {
 	req := buildWorkloadRequest(workloadID)
-	writeLatency, err := sendOnly(conn, timeout, label, req)
-	if err != nil {
+	if _, err := sendOnly(conn, timeout, label, req); err != nil {
 		return err
 	}
 
-	response, readLatency, err := readFrame(conn, timeout, label)
-	if err != nil {
+	if _, _, err := readFrame(conn, timeout, label); err != nil {
 		return err
 	}
-	fmt.Printf("%s: workload=0x%04x sent=%dB write_latency=%s response_read_latency=%s response[0]=0x%02x\n", label, workloadID, len(req), writeLatency, readLatency, response[0])
 	sleepGap(gap)
 	return nil
 }
@@ -195,7 +192,7 @@ func uploadBitstream(conn net.Conn, timeout time.Duration, hbmAddr uint64, prDat
 		if writeIndex < dumpRequests {
 			fmt.Printf("WRITE_HBM[%d] request (%dB):\n%s", writeIndex, len(req), hex.Dump(req))
 		}
-		writeLatency, readLatency, response, err := sendAndReadStatus(conn, timeout, fmt.Sprintf("WRITE_HBM[%d]", writeIndex), req)
+		_, _, response, err := sendAndReadStatus(conn, timeout, fmt.Sprintf("WRITE_HBM[%d]", writeIndex), req)
 		if err != nil {
 			return totalWritten, err
 		}
@@ -203,7 +200,6 @@ func uploadBitstream(conn net.Conn, timeout time.Duration, hbmAddr uint64, prDat
 			return totalWritten, fmt.Errorf("WRITE_HBM status not OK at offset=%d hbm_addr=0x%x:\n%s", offset, addr, hex.Dump(response))
 		}
 
-		fmt.Printf("WRITE_HBM: offset=%d hbm_addr=0x%x cmd_size=%dB payload=%dB request=%dB write_latency=%s status_read_latency=%s\n", offset, addr, len(chunk), len(writePayload), len(req), writeLatency, readLatency)
 		totalWritten += len(chunk)
 		offset = end
 	}
@@ -212,14 +208,13 @@ func uploadBitstream(conn net.Conn, timeout time.Duration, hbmAddr uint64, prDat
 
 func runReconfig(conn net.Conn, timeout time.Duration, hbmAddr uint64, prSize int, slotID byte, gap time.Duration) error {
 	req := buildReconfRequest(opReconfICAP, slotID, hbmAddr, uint64(prSize), nil)
-	writeLatency, readLatency, response, err := sendAndReadStatus(conn, timeout, "RECONF_ICAP", req)
+	_, _, response, err := sendAndReadStatus(conn, timeout, "RECONF_ICAP", req)
 	if err != nil {
 		return err
 	}
 	if !statusOK(response) {
 		return fmt.Errorf("RECONF_ICAP status not OK:\n%s", hex.Dump(response))
 	}
-	fmt.Printf("RECONF_ICAP: slot=%d hbm_addr=0x%x size=%dB request=%dB write_latency=%s status_read_latency=%s\n", slotID, hbmAddr, prSize, len(req), writeLatency, readLatency)
 	sleepGap(gap)
 	return nil
 }
@@ -266,32 +261,33 @@ func errorName(code byte) string {
 	return fmt.Sprintf("unknown(0x%02x)", code)
 }
 
-// printQueryStatus decodes the structured QUERY_STATUS response. Byte 0 only
+// queryStatusText decodes the structured QUERY_STATUS response. Byte 0 only
 // reports whether the query itself was accepted; the result of the preceding
 // operation is byte 3, and the two must not be confused.
-func printQueryStatus(response []byte) {
-	fmt.Printf("  query_result   %s\n", errorName(response[0]))
-	fmt.Printf("  reconf_active  %d\n", response[1])
-	fmt.Printf("  last_slot_id   %d\n", response[2])
-	fmt.Printf("  last_error     %s\n", errorName(response[3]))
-	fmt.Printf("  icap_avail     %d\n", response[4])
-	fmt.Printf("  prdone_seen    %d\n", response[5])
-	fmt.Printf("  prerror_seen   %d\n", response[6])
-	fmt.Printf("  last_cycles    %d\n", binary.LittleEndian.Uint64(response[8:16]))
-	fmt.Printf("  active_cycles  %d\n", binary.LittleEndian.Uint64(response[16:24]))
+func queryStatusText(response []byte) string {
+	return fmt.Sprintf("  query_result   %s\n", errorName(response[0])) +
+		fmt.Sprintf("  reconf_active  %d\n", response[1]) +
+		fmt.Sprintf("  last_slot_id   %d\n", response[2]) +
+		fmt.Sprintf("  last_error     %s\n", errorName(response[3])) +
+		fmt.Sprintf("  icap_avail     %d\n", response[4]) +
+		fmt.Sprintf("  prdone_seen    %d\n", response[5]) +
+		fmt.Sprintf("  prerror_seen   %d\n", response[6]) +
+		fmt.Sprintf("  last_cycles    %d\n", binary.LittleEndian.Uint64(response[8:16])) +
+		fmt.Sprintf("  active_cycles  %d\n", binary.LittleEndian.Uint64(response[16:24]))
 }
 
 func queryStatus(conn net.Conn, timeout time.Duration, slotID byte, gap time.Duration) error {
 	req := buildReconfRequest(opQueryICAP, slotID, 0, 0, nil)
-	writeLatency, readLatency, response, err := sendAndReadStatus(conn, timeout, "QUERY_ICAP_STATUS", req)
+	_, _, response, err := sendAndReadStatus(conn, timeout, "QUERY_ICAP_STATUS", req)
 	if err != nil {
 		return err
 	}
 	if !responseCodeOK(response) {
 		return fmt.Errorf("QUERY_ICAP_STATUS status not OK:\n%s", hex.Dump(response))
 	}
-	fmt.Printf("QUERY_ICAP_STATUS: request=%dB write_latency=%s status_read_latency=%s\n", len(req), writeLatency, readLatency)
-	printQueryStatus(response)
+	if response[3] != errOK {
+		return fmt.Errorf("QUERY_ICAP_STATUS reports an error:\n%s", queryStatusText(response))
+	}
 	sleepGap(gap)
 	return nil
 }
@@ -367,8 +363,6 @@ func main() {
 		}
 		prSize = roundUp(len(bitstream), 4)
 		prData = padCopy(bitstream, prSize)
-		fmt.Printf("bitstream: file=%s original=%dB pr_size=%dB hbm_addr=0x%x slot=%d\n",
-			bitstreamPath, len(bitstream), prSize, *hbmAddr, *slot)
 	}
 	conn, err := net.DialTimeout("tcp", *addr, *timeout)
 	if err != nil {
@@ -388,8 +382,6 @@ func main() {
 		}
 	}
 
-	startedAt := time.Now()
-
 	// pkt_logic.v routes workload id N to cell C0N, so the slot number is the
 	// workload id to probe it with.
 	slotID := byte(*slot)
@@ -400,6 +392,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		fmt.Println("query-status is OK")
 		return
 	}
 
@@ -433,15 +426,12 @@ func main() {
 		}
 	}
 
-	written, err := uploadBitstream(conn, *timeout, *hbmAddr, prData, *chunkSize, slotID, *dumpRequests)
-	if err != nil {
+	if _, err := uploadBitstream(conn, *timeout, *hbmAddr, prData, *chunkSize, slotID, *dumpRequests); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("upload complete: pr_size=%dB hbm_written=%dB\n", prSize, written)
 
 	if *noReconf {
-		fmt.Println("-no-reconf: stopping before RECONF_ICAP")
 		return
 	}
 
@@ -468,5 +458,8 @@ func main() {
 		}
 	}
 
-	fmt.Printf("completed PR board test in %s\n", time.Since(startedAt))
+	fmt.Println("Successfully reconfigured")
+	if *queryAfterReconfig {
+		fmt.Println("query-status is OK")
+	}
 }

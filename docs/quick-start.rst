@@ -6,6 +6,11 @@ A TCP client can send application requests over TCP and receive responses with l
 Accelerators are placed in a slot which are reconfigurable through partial reconfiguration.
 We use libtpa, a DPDK based TCP stack to measure latency and throughput.
 
+.. note:: Artifact evaluators using the provided testbed
+
+   The FPGA, host network, and required software are already configured.
+   Skip the Setting up the NIC, Setup Hugepages, Connect the hardware, Configure the Host Network, and Software Installation sections.
+
 Requirements
 ------------
 
@@ -47,7 +52,7 @@ Generating bitstream
 
 
 Setting up the NIC
-----------------
+------------------
 
 Make sure you have a ConnectX-6 Dx, other NICs might also work but we haven't tested anything else yet.
 
@@ -60,6 +65,11 @@ Download `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linu
    $ cd MLNX_OFED_LINUX-24.07-0.6.1.0-ubuntu22.04-x86_64
    $ sudo ./mlnxofedinstall --dpdk --upstream-libs
 
+Install libtpa build dependencies
+
+   $ cd ~/libtpa
+   $ sudo ./buildtools/install-dep.deb.sh --with-meson
+
 Building libtpa
 ---------------
 
@@ -68,12 +78,14 @@ Building libtpa
    # export or add to ~/.bashrc or ~/.zshrc
    $ cd ~
    $ export DPDK_VERSION=v22.11
-   $ git clone --branch frac_hdr_fmt
+   $ git clone --branch frac_hdr_fmt \
                 --single-branch https://github.com/krish-iyer/libtpa.git
    $ cd libtpa
-   $ sudo ./buildtools/install-dep.deb.sh --with-meson
    $ make
    $ make install
+
+Setup Hugepages
+---------------
 
 Allocate hugepages for libtpa's DPDK memory pools. Please adjust the number of pages according to available DRAM
 
@@ -202,7 +214,7 @@ Finally, program with echo for the next step
 
 .. code-block:: sh
 
-   $ go run patprobe.go -slots 0,1
+   $ go run ./script/testfuncs.go -slots 0,1
 
 .. code-block:: output
 
@@ -242,11 +254,8 @@ We measure performance with our libtpa based perf tool.
 
    # set TPA_ETH_DEV to ConnectX-6 Dx interface connected to Alveo U280
    $ cd ~/libtpa
-   $ sudo TPA_ID=client TPA_ETH_DEV=enp33s0f0np0 \
-          TPA_CFG="tcp {tso = 0; } \
-          dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }" \
-          ~/.local/bin/tpa run build/bin/app/fperf -c 171.24.1.52 -p 2888 \
-          -t rr -d 5 -n 28 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 1
+
+   $ sudo TPA_ID=client TPA_ETH_DEV=enp33s0f0np0 TPA_CFG="tcp {tso = 0; } dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }" /home/hpcadmin/.local/bin/tpa run build/bin/app/fperf -c 172.24.1.52 -p 2888 -t rr -d 5 -n 22 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 1
 
 .. code-block:: output
 
