@@ -32,15 +32,14 @@ Generating bitstream
 --------------------
 .. code-block:: sh
 
+   $ cd ~
    $ git clone --branch main \
                 --single-branch https://github.com/accl-kaust/frac-atc-artifact.git
    $ cd frac-atc-artifact
    $ make ip CMAKE=/usr/bin/cmake
    $ ./bin/spinhdl --parallel 8 weave spinhdl.yaml \
                     --units spin.yaml \
-                    --static static.yaml \
-                    --run all
-   $ cd ~
+                    --static static.yaml
 
 .. note::
    You can skip this section and use our bitstreams instead under ``example/``
@@ -55,10 +54,10 @@ Download `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linu
 
 .. code-block:: sh
 
+   $ cd ~
    $ tar -xvf MLNX_OFED_LINUX-24.07-0.6.1.0-ubuntu22.04-x86_64.tgz
    $ cd MLNX_OFED_LINUX-24.07-0.6.1.0-ubuntu22.04-x86_64
    $ sudo ./mlnxofedinstall --dpdk --upstream-libs
-   $ cd ~
 
 Building libtpa
 ---------------
@@ -66,6 +65,7 @@ Building libtpa
 .. code-block:: sh
 
    # export or add to ~/.bashrc or ~/.zshrc
+   $ cd ~
    $ export DPDK_VERSION=v22.11
    $ git clone --branch frac_hdr_fmt
                 --single-branch https://github.com/krish-iyer/libtpa.git
@@ -98,7 +98,7 @@ Program the Alveo U280 FPGA with the generated bitstream. We have a shell script
 
 .. code-block:: sh
 
-   $ cd frac-atc-artifact
+   $ cd ~/frac-atc-artifact
    $ ./scripts/programfpga.sh example/jtag/frac.bit
 
 .. code-block:: output
@@ -157,7 +157,7 @@ You can also send some test packets to fRAC accelerators and see if they are liv
 
 .. code-block:: sh
 
-   $ cd frac-atc-artifact
+   $ cd ~/frac-atc-artifact
    $ go run ./scripts/testfuncs.go -slots 0,1 -counter
 
 You will get a response something like this.
@@ -185,6 +185,7 @@ Try reconfiguring with any acclerator
 
 .. code-block:: sh
 
+   $ cd ~/frac-atc-artifact
    $ go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
             -hbm-addr 0x10004000 -query-status example/icap/c01_f03.bin
 
@@ -205,22 +206,22 @@ Finally, program with echo for the next step
 .. code-block:: output
 
   workload 0x0000 (slot 0):
-  echo_slot (data returned unchanged)  16/16 words   128B in 1.143403ms
+  unrecognised; closest is or_slot (ff 00 00 .., 8-bit line) (1/16 words)   64B in 302.053461ms
+  00000000  b9 aa aa aa 00 00 00 00  b7 aa aa aa b6 aa aa aa  |................|
+  00000010  b5 aa aa aa b4 aa aa aa  b3 aa aa aa b2 aa aa aa  |................|
+  00000020  b1 aa aa aa b0 aa aa aa  af aa aa aa ae aa aa aa  |................|
+  00000030  ad aa aa aa ac aa aa aa  ab aa aa aa aa aa aa aa  |................|
+
+  workload 0x0001 (slot 1):
+  echo_slot (data returned unchanged)  16/16 words   128B in 1.17679ms
   00000000  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
   00000010  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
   00000020  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
-  00000030  ff ff ff ff ff ff ff ff  80 00 00 00 fd ff 00 00  |................|
-  00000040  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000050  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000060  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000070  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-
-  workload 0x0001 (slot 1):
-  unrecognised; closest is echo_slot (data returned unchanged) (15/16 words)   64B in 301.595283ms
-  00000000  aa aa aa aa 00 00 00 00  aa aa aa aa aa aa aa aa  |................|
-  00000010  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000020  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000030  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  00000030  ff ff ff ff ff ff ff ff  80 00 00 00 fd ff 01 00  |................|
+  00000040  aa aa aa aa ab aa aa aa  ac aa aa aa ad aa aa aa  |................|
+  00000050  ae aa aa aa af aa aa aa  b0 aa aa aa b1 aa aa aa  |................|
+  00000060  b2 aa aa aa b3 aa aa aa  b4 aa aa aa b5 aa aa aa  |................|
+  00000070  b6 aa aa aa b7 aa aa aa  b8 aa aa aa b9 aa aa aa  |................|
 
 Performance Measurements
 ------------------------
@@ -239,12 +240,12 @@ We measure performance with our libtpa based perf tool.
 .. code-block:: sh
 
    # set TPA_ETH_DEV to ConnectX-6 Dx interface connected to Alveo U280
-   $ cd libtpa
-   $ sudo TPA_ID=client TPA_ETH_DEV=<> \
+   $ cd ~/libtpa
+   $ sudo TPA_ID=client TPA_ETH_DEV=enp33s0f0np0 \
           TPA_CFG="tcp {tso = 0; } \
           dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }" \
           ~/.local/bin/tpa run build/bin/app/fperf -c 171.24.1.52 -p 2888 \
-          -t rr -d 5 -n 28 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 0
+          -t rr -d 5 -n 28 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 1
 
 .. code-block:: output
 
