@@ -67,6 +67,8 @@ Download `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linu
 
 Install libtpa build dependencies
 
+.. code-block:: sh
+
    $ cd ~/libtpa
    $ sudo ./buildtools/install-dep.deb.sh --with-meson
 
@@ -214,7 +216,7 @@ Finally, program with echo for the next step
 
 .. code-block:: sh
 
-   $ go run ./script/testfuncs.go -slots 0,1
+   $ go run ./scripts/testfuncs.go -slots 0,1
 
 .. code-block:: output
 
