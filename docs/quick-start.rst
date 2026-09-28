@@ -24,6 +24,7 @@ Software
 2. Vivado 2022.2.
 3. `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/>`_.
 4. `Go <https://go.dev/doc/install>`_ compiler
+5. Cmake >= 3.5
 
 If you don't have access to hardware, you can request access to our infrastructure by contacting us.
 
@@ -34,7 +35,7 @@ Generating bitstream
    $ git clone --branch main \
                 --single-branch https://github.com/accl-kaust/frac-atc-artifact.git
    $ cd frac-atc-artifact
-   $ make ip
+   $ make ip CMAKE=/usr/bin/cmake
    $ ./bin/spinhdl --parallel 8 weave spinhdl.yaml \
                     --units spin.yaml \
                     --static static.yaml \
@@ -97,7 +98,13 @@ Program the Alveo U280 FPGA with the generated bitstream. We have a shell script
 
 .. code-block:: sh
 
-   $ ./scripts/programfpga.sh example/jtag/fpga.bit
+   $ cd frac-atc-artifact
+   $ ./scripts/programfpga.sh example/jtag/frac.bit
+
+.. code-block:: output
+
+   programming ~/frac-atc-artifact/example/jtag/frac.bit
+   PROGRAM_OK: xcu280_u55c_0
 
 .. note::
 
@@ -150,6 +157,7 @@ You can also send some test packets to fRAC accelerators and see if they are liv
 
 .. code-block:: sh
 
+   $ cd frac-atc-artifact
    $ go run ./scripts/testfuncs.go -slots 0,1 -counter
 
 You will get a response something like this.
@@ -157,18 +165,18 @@ You will get a response something like this.
 .. code-block:: output
 
   workload 0x0000 (slot 0):
-  unrecognised; closest is echo_slot (data returned unchanged) (15/16 words)   64B in 301.701235ms
-  00000000  aa aa aa aa 00 00 00 00  aa aa aa aa aa aa aa aa  |................|
-  00000010  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000020  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000030  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  unrecognised; closest is or_slot (ff 00 00 .., 8-bit line) (1/16 words)   64B in 301.58273ms
+  00000000  b9 aa aa aa 00 00 00 00  b7 aa aa aa b6 aa aa aa  |................|
+  00000010  b5 aa aa aa b4 aa aa aa  b3 aa aa aa b2 aa aa aa  |................|
+  00000020  b1 aa aa aa b0 aa aa aa  af aa aa aa ae aa aa aa  |................|
+  00000030  ad aa aa aa ac aa aa aa  ab aa aa aa aa aa aa aa  |................|
 
   workload 0x0001 (slot 1):
-  unrecognised; closest is echo_slot (data returned unchanged) (15/16 words)   64B in 301.598234ms
-  00000000  aa aa aa aa 00 00 00 00  aa aa aa aa aa aa aa aa  |................|
-  00000010  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000020  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
-  00000030  aa aa aa aa aa aa aa aa  aa aa aa aa aa aa aa aa  |................|
+  unrecognised; closest is or_slot (ff 00 00 .., 8-bit line) (1/16 words)   64B in 301.57862ms
+  00000000  b9 aa aa aa 00 00 00 00  b7 aa aa aa b6 aa aa aa  |................|
+  00000010  b5 aa aa aa b4 aa aa aa  b3 aa aa aa b2 aa aa aa  |................|
+  00000020  b1 aa aa aa b0 aa aa aa  af aa aa aa ae aa aa aa  |................|
+  00000030  ad aa aa aa ac aa aa aa  ab aa aa aa aa aa aa aa  |................|
 
 Reconfigure with an Accelerator
 -------------------------------
@@ -177,7 +185,6 @@ Try reconfiguring with any acclerator
 
 .. code-block:: sh
 
-   $ cd frac
    $ go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
             -hbm-addr 0x10004000 -query-status example/icap/c01_f03.bin
 
@@ -187,7 +194,6 @@ Finally, program with echo for the next step
 
 .. code-block:: sh
 
-   $ cd frac
    $ go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
             -hbm-addr 0x10004000 -query-status example/icap/c01_f09.bin
 
