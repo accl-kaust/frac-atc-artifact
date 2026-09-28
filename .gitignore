@@ -11,3 +11,4 @@ __pycache__/
 docs/_build/
 dump.fst
 dump.vcd
+accl
