@@ -2,31 +2,30 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-// OR accelerator for one PR cell: payload is OR-ed with all ones, metadata and
-// tlast are echoed unchanged.
+// or_slot, the reconfigurable module: or_slot_core behind a register stage on
+// each side of the slot boundary, so that every partition pin meets a flop.
 //
-// Same behaviour and the same data / metadata paths as the upstream offrac
-// kernel (kernel/user_krnl/offrac_krnl/src/hdl/offrac), with the workload
-// ports flattened onto the PR cell's single AXI-Stream boundary:
+// The core, the payload OR-ed with all ones, is a pure wire: tready, tvalid
+// and tdata cross it combinationally.  Without these stages the slot's whole
+// round trip -- a static flop, the input decoupler, the partition pin,
+// straight across the cell, the other partition pin, the output decoupler, a
+// static flop -- was one path, the ready running the other way along the same
+// route, and implementing the cell against an abstract shell stretched it past
+// a cycle.
 //
-//   upstream echo_workload.v          this module
-//   -------------------------------   --------------------------------------
-//   rx_TDATA[511:0]   payload         s_axis_tdata[511:0]
-//   rx_TDATA[512]     tlast           s_axis_tdata[512]   (s_axis_tlast too)
-//   meta_TDATA[31:0]  {len, session}  s_axis_tdata[544:513]
-//   rx_TVALID / rx_TREADY             s_axis_tvalid / s_axis_tready
-//   pkt_tx_TDATA_payload[512:0]       m_axis_tdata[512:0]
-//   meta_TDATA_out[31:0]              m_axis_tdata[544:513]
-//   tx_data_TVALID / tx_data_TREADY   m_axis_tvalid / m_axis_tready
-//   meta_TVALID_out                   implied: meta is read on the tlast beat
+// Each stage is a skid buffer (axis_register, REG_TYPE 2): a beat every
+// cycle, two beats of buffering and one cycle of latency, so a request and
+// its response each take a cycle longer and nothing else changes.  tkeep and
+// tstrb are not carried: pkt_logic drives them high into the cell and never
+// reads them back, and this drives them high.
 //
-// meta_TDATA[31:16] is the size of the whole request in bytes (see
-// pattern_slot.v).  One response beat per request beat, so the meta goes out
-// unchanged and names the response length.
+// The reset gets the same treatment: it comes from a static synchroniser,
+// and rst_q takes it at the partition pin, so its fan-out to every register
+// here starts inside the cell.  The module leaves reset a cycle after the
+// slot does, and the request stage takes nothing while it is in reset.
+// rst_q starts high, so a freshly configured module begins in reset too.
 //
-// workload_selection is not needed: pkt_logic.v only steers this slot's own
-// requests onto s_axis.  The parameter defaults must match the cell_bbx
-// instantiation in pkt_logic.v (c00_bbx_inst / c01_bbx_inst).
+// Same interface as the core; see or_slot_core.v for the slot boundary format.
 
 (* DONT_TOUCH = "yes" *)
 module or_slot #(
@@ -60,16 +59,120 @@ module or_slot #(
     output wire [USER_W-1:0]      m_axis_tuser
 );
 
-    assign s_axis_tready = m_axis_tready;
-    assign m_axis_tvalid = s_axis_tvalid;
-    // {meta_TDATA_out, tlast} pass through; payload OR all ones.
-    assign m_axis_tdata  = {s_axis_tdata[AXIS_DATA_W-1:512], s_axis_tdata[511:0] | {512{1'b1}}};
-    assign m_axis_tkeep  = s_axis_tkeep;
-    assign m_axis_tstrb  = s_axis_tstrb;
-    assign m_axis_tlast  = s_axis_tlast;
-    assign m_axis_tdest  = s_axis_tdest;
-    assign m_axis_tid    = s_axis_tid;
-    assign m_axis_tuser  = s_axis_tuser;
+    reg rst_q = 1'b1;
+    always @(posedge clk) rst_q <= rst;
+
+    // request: boundary -> req_reg_inst -> core
+    wire [AXIS_DATA_W-1:0] req_tdata;
+    wire                   req_tvalid, req_tready, req_tlast;
+    wire [TDEST_W-1:0]     req_tdest;
+    wire [TID_W-1:0]       req_tid;
+    wire [USER_W-1:0]      req_tuser;
+
+    // response: core -> resp_reg_inst -> boundary
+    wire [AXIS_DATA_W-1:0] resp_tdata;
+    wire                   resp_tvalid, resp_tready, resp_tlast;
+    wire [TDEST_W-1:0]     resp_tdest;
+    wire [TID_W-1:0]       resp_tid;
+    wire [USER_W-1:0]      resp_tuser;
+
+    axis_register #(
+        .DATA_WIDTH (AXIS_DATA_W),
+        .KEEP_ENABLE(0),
+        .KEEP_WIDTH (1),
+        .LAST_ENABLE(1),
+        .ID_ENABLE  (1),
+        .ID_WIDTH   (TID_W),
+        .DEST_ENABLE(1),
+        .DEST_WIDTH (TDEST_W),
+        .USER_ENABLE(1),
+        .USER_WIDTH (USER_W),
+        .REG_TYPE   (2)
+    ) req_reg_inst (
+        .clk          (clk),
+        .rst          (rst_q),
+        .s_axis_tdata (s_axis_tdata),
+        .s_axis_tkeep (1'b1),
+        .s_axis_tvalid(s_axis_tvalid),
+        .s_axis_tready(s_axis_tready),
+        .s_axis_tlast (s_axis_tlast),
+        .s_axis_tid   (s_axis_tid),
+        .s_axis_tdest (s_axis_tdest),
+        .s_axis_tuser (s_axis_tuser),
+        .m_axis_tdata (req_tdata),
+        .m_axis_tkeep (),
+        .m_axis_tvalid(req_tvalid),
+        .m_axis_tready(req_tready),
+        .m_axis_tlast (req_tlast),
+        .m_axis_tid   (req_tid),
+        .m_axis_tdest (req_tdest),
+        .m_axis_tuser (req_tuser)
+    );
+
+    or_slot_core #(
+        .AXIS_DATA_W(AXIS_DATA_W),
+        .KEEP_W     (KEEP_W),
+        .TDEST_W    (TDEST_W),
+        .TID_W      (TID_W),
+        .USER_W     (USER_W)
+    ) core_inst (
+        .clk          (clk),
+        .rst          (rst_q),
+        .s_axis_tdata (req_tdata),
+        .s_axis_tkeep ({KEEP_W{1'b1}}),
+        .s_axis_tstrb ({KEEP_W{1'b1}}),
+        .s_axis_tvalid(req_tvalid),
+        .s_axis_tready(req_tready),
+        .s_axis_tlast (req_tlast),
+        .s_axis_tdest (req_tdest),
+        .s_axis_tid   (req_tid),
+        .s_axis_tuser (req_tuser),
+        .m_axis_tdata (resp_tdata),
+        .m_axis_tkeep (),
+        .m_axis_tstrb (),
+        .m_axis_tvalid(resp_tvalid),
+        .m_axis_tready(resp_tready),
+        .m_axis_tlast (resp_tlast),
+        .m_axis_tdest (resp_tdest),
+        .m_axis_tid   (resp_tid),
+        .m_axis_tuser (resp_tuser)
+    );
+
+    axis_register #(
+        .DATA_WIDTH (AXIS_DATA_W),
+        .KEEP_ENABLE(0),
+        .KEEP_WIDTH (1),
+        .LAST_ENABLE(1),
+        .ID_ENABLE  (1),
+        .ID_WIDTH   (TID_W),
+        .DEST_ENABLE(1),
+        .DEST_WIDTH (TDEST_W),
+        .USER_ENABLE(1),
+        .USER_WIDTH (USER_W),
+        .REG_TYPE   (2)
+    ) resp_reg_inst (
+        .clk          (clk),
+        .rst          (rst_q),
+        .s_axis_tdata (resp_tdata),
+        .s_axis_tkeep (1'b1),
+        .s_axis_tvalid(resp_tvalid),
+        .s_axis_tready(resp_tready),
+        .s_axis_tlast (resp_tlast),
+        .s_axis_tid   (resp_tid),
+        .s_axis_tdest (resp_tdest),
+        .s_axis_tuser (resp_tuser),
+        .m_axis_tdata (m_axis_tdata),
+        .m_axis_tkeep (),
+        .m_axis_tvalid(m_axis_tvalid),
+        .m_axis_tready(m_axis_tready),
+        .m_axis_tlast (m_axis_tlast),
+        .m_axis_tid   (m_axis_tid),
+        .m_axis_tdest (m_axis_tdest),
+        .m_axis_tuser (m_axis_tuser)
+    );
+
+    assign m_axis_tkeep = {KEEP_W{1'b1}};
+    assign m_axis_tstrb = {KEEP_W{1'b1}};
 
 endmodule
 

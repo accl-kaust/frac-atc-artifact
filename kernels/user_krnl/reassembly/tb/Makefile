@@ -31,7 +31,9 @@ VERILOG_SOURCES += $(RECONF_RTL_DIR)/axis_dfx_decoupler.sv
 # The PR cells resolve to the real RM tops from apps/ (see cell_bbx_pattern_sim.sv)
 APPS_DIR = ../../apps
 VERILOG_SOURCES += $(APPS_DIR)/pattern_slot/src/rtl/pattern_slot.v
+VERILOG_SOURCES += $(APPS_DIR)/pattern_slot/src/rtl/pattern_slot_core.v
 VERILOG_SOURCES += $(APPS_DIR)/or_slot/src/rtl/or_slot.v
+VERILOG_SOURCES += $(APPS_DIR)/or_slot/src/rtl/or_slot_core.v
 VERILOG_SOURCES += cell_bbx_pattern_sim.sv
 VERILOG_SOURCES += $(RECONF_RTL_DIR)/reconfctrl.v
 VERILOG_SOURCES += $(RECONF_RTL_DIR)/icap_ctrl.v

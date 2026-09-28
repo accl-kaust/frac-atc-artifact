@@ -9,6 +9,9 @@ units:
     dir: src/rtl
     files:
     - pattern_slot.v
+    - pattern_slot_core.v
+    # the boundary skid buffers; the static side uses the same file
+    - ../../../../reassembly/rtl/axis_register.v
   xdc:
     dir: src/xdc
     files: null
@@ -18,8 +21,9 @@ units:
   ip:
     dir: src/ip
     files: null
+  # out-of-context synthesis, Vivado 2022.2: 1130 LUT, 2227 FF, 0 BRAM, 0 DSP
   utilization:
-    slices: 1
+    slices: 142
     ramb36: 0
     dsp: 0
 - name: or_slot
@@ -32,6 +36,9 @@ units:
     dir: src/rtl
     files:
     - or_slot.v
+    - or_slot_core.v
+    # the boundary skid buffers; the static side uses the same file
+    - ../../../../reassembly/rtl/axis_register.v
   xdc:
     dir: src/xdc
     files: null
@@ -41,8 +48,9 @@ units:
   ip:
     dir: src/ip
     files: null
+  # out-of-context synthesis, Vivado 2022.2: 83 LUT, 157 FF, 0 BRAM, 0 DSP
   utilization:
-    slices: 1
+    slices: 11
     ramb36: 0
     dsp: 0
 - name: top_k
