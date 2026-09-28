@@ -9,7 +9,7 @@ We use libtpa, a DPDK based TCP stack to measure latency and throughput.
 .. note:: Artifact evaluators using the provided testbed
 
    The FPGA, host network, and required software are already configured.
-   Skip the Setting up the NIC, Setup Hugepages, Connect the hardware, Configure the Host Network, and Software Installation sections.
+   Skip the **Setting up the NIC**, **Setup Hugepages**, **Connect the hardware**, **Configure the Host Network**, and **Software Installation** sections.
 
 Requirements
 ------------
