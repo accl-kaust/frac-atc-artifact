@@ -81,7 +81,7 @@ Building libtpa
    $ cd ~
    $ export DPDK_VERSION=v22.11
    $ git clone --branch frac_hdr_fmt \
-                --single-branch https://github.com/krish-iyer/libtpa.git
+                --single-branch https://github.com/accl-kaust/libtpa.git
    $ cd libtpa
    $ make
    $ make install
