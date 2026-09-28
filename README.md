@@ -3,8 +3,10 @@
 fRAC enables request-level, in-network invocation of FPGA accelerators. It
 reassembles incoming request data, schedules requests to accelerators, and
 supports swapping accelerators at runtime through partial reconfiguration.
+By eliminating PCIe round trips and software overhead from the request path,
+fRAC achieves low latency at 100G. fRAC is currently built on top of EasyNet, a TCP stack for FPGAs, but its design is transport agnostic.
 
-## Directory
+## Directory Structure
 
 ``` sh
 ├── kernels
@@ -25,38 +27,14 @@ supports swapping accelerators at runtime through partial reconfiguration.
 └── README.md
 ```
 
-## Documentation
+Follow the [documentation](https://accl-kaust.github.io/frac-atc-artifact/) to set up and run fRAC.
 
-Start with the [fRAC overview](docs/index.rst) for the network architecture,
-request processing, runtime accelerator replacement, and design philosophy.
-The detailed guides cover the reconfiguration controller, network command ABI,
-ICAP bitstream format, build and deployment flow, verification coverage, and
-current implementation limitations.
-
-## Build Instructions
-
-### Building from scratch ?
-
-``` sh
-$ make all
-```
-
-### Seperating Builds
-
-#### fRAC uses [ETH's TCP stack](https://github.com/fpgasystems/Vitis_with_100Gbps_TCP-IP/tree/vitis_2020_1) and uses it as a library as well as few kernels. To build the library
-``` sh
-$ make ip
-```
-
-#### Finally to build fRAC
-``` sh
-$ make frac
-```
 
 ## Prerequisites
 
-Currently, the project is only tested with Xilinx 2021.2 tools.
+fRAC has been tested with Vitis and Vivado 2022.2 on an Alveo U280 connected to a Mellanox ConnectX-6 Dx 100 Gb/s NIC. We use [libtpa](https://github.com/krish-iyer/libtpa/tree/frac_hdr_fmt) for performance measurements and have extended it to support FPGA measurements.
 
-### Libraries and Borrowed Code
+## Third-Party Code
 
-Some code is borrowed from [Corundum](https://github.com/corundum/corundum) project.
+Some code is borrowed from the [Corundum project](https://github.com/corundum/corundum).
+
