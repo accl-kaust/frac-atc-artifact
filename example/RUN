@@ -1,0 +1,13 @@
+# generated on accl -- do not edit
+node        kw60994
+job         1734
+payload     dc0b61a71c71
+vivado      Vivado v2022.2 (64-bit)
+cpus        16
+parallel    6
+resume      0
+started     2026-09-27T19:02:38+03:00
+elapsed_s   7295
+rc          0
+artifacts   35
+work        /tmp/balasuk-frac-dc0b61a71c71
