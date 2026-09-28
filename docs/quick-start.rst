@@ -51,7 +51,7 @@ Generating bitstream
    From this point on, we use the provided bitstreams. If you built fRAC yourself, you can find the bitstreams under ``~/frac-atc-artifact/build/frac/bitstreams``.
 
 
-Setting up the NIC
+Setting up the NIC (Skip to the next section)
 ------------------
 
 Make sure you have a ConnectX-6 Dx, other NICs might also work but we haven't tested anything else yet.
@@ -86,8 +86,8 @@ Building libtpa
    $ make
    $ make install
 
-Setup Hugepages
----------------
+Setup Hugepages  (Skip to the next section)
+-------------------------------------------
 
 Allocate hugepages for libtpa's DPDK memory pools. Please adjust the number of pages according to available DRAM
 
@@ -100,8 +100,8 @@ Allocate hugepages for libtpa's DPDK memory pools. Please adjust the number of p
    $ sudo update-grub
    $ sudo reboot
 
-Connect the Hardware
---------------------
+Connect the Hardware  (Skip to the next section)
+-----------------------------------------------
 
 1. Connect (``qsfp0``) (port 0) of U280 to the ConnectX-6 Dx with 100G QSFP cable.
 2. Connect the U280's JTAG USB interface to the machine.
@@ -126,8 +126,8 @@ Program the Alveo U280 FPGA with the generated bitstream. We have a shell script
    Wait a few seconds after flashing the FPGA before sending it any packets
    or requests.
 
-Configure the Host Network
---------------------------
+Configure the Host Network  (Skip to the next section)
+------------------------------------------------------
 
 The checked-in fRAC design uses FPGA address ``172.24.1.52`` and TCP port
 ``2888``. Configure the connected host interface with a different address in

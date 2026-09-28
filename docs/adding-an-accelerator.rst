@@ -332,57 +332,57 @@ Now, unit.yaml
 
 Add your accelerator to database.
 
+
 .. code-block:: yaml
    :caption: spin.yaml
 
-    - name: <name>
-      path: kernels/user_krnl/apps/<name>
-      moduletype: recon
-      top: <name>
-      build: synth
-      build_dir: build
-      rtl:
-        dir: src/rtl
-        files:
-        - <name>.v
-        - <name>_core.v
-        - ../../../../reassembly/rtl/axis_register.v
-      xdc:
-        dir: src/xdc
-        files: null
-      xci:
-        dir: src/xci
-        files: null
-      ip:
-        dir: src/ip
-        files: null
-      # you can add dummy numbers here.
-      utilization:
-        slices: 142
-        ramb36: 0
-        dsp: 0
-
+   - name: <name>
+     path: kernels/user_krnl/apps/<name>
+     moduletype: recon
+     top: <name>
+     build: synth
+     build_dir: build
+     rtl:
+       dir: src/rtl
+       files:
+       - <name>.v
+       - <name>_core.v
+       - ../../../../reassembly/rtl/axis_register.v
+     xdc:
+       dir: src/xdc
+       files: null
+     xci:
+       dir: src/xci
+       files: null
+     ip:
+       dir: src/ip
+       files: null
+     # You can add dummy numbers here.
+     utilization:
+       slices: 142
+       ramb36: 0
+       dsp: 0
 
 .. code-block:: yaml
    :caption: spinhdl.yaml
 
-    - name: C00
-      id: 0
-      slot_id: 0
-      region:
-      ...
-      components:
-      ...
-      - name: test_app
-        id: 8
-        unit: test_app
+   - name: C00
+     id: 0
+     slot_id: 0
+     region:
+       # Existing region settings
+     components:
+       # Existing components
+       - name: <name>
+         id: 8
+         unit: <name>
 
 
 Now just build with a abstract shell.
 
 .. code-block:: sh
 
-   $ ./bin/spinhdl spin test_app --shell build/frac/abstract_shell/ab_sh_c00_bbx_inst.dcp \
+   $ ./bin/spinhdl spin <name> --shell build/frac/abstract_shell/ab_sh_c00_bbx_inst.dcp \
                     --cell C00 --out-dir out
 
 
