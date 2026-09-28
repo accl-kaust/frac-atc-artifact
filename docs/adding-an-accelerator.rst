@@ -1,82 +1,31 @@
 Integrating Your Own Accelerator
 ================================
 
-Six steps take an accelerator from an empty directory to serving requests on
-the FPGA. ``kernels/user_krnl/apps/top_k/`` is the reference throughout: copy
-it and edit.
+fRAC provides abstract shells that let developers integrate accelerators without rebuilding the entire stack. An accelerator needs little to no knowledge of the network.
+This guide shows how to bring your own accelerator into fRAC. It covers where the accelerator connects, the interface it must implement, how to implement the hardware, and how a client sends it requests.
 
-.. This guide explains how to bring your own accelerator into fRAC: where it plugs
-.. in, what interface it must present, how to write the hardware, and how a client
-.. formats the requests that reach it.
+Creating files
+--------------
 
-Where an Accelerator Plugs In
------------------------------
+fRAC expects a specific directory layout and set of files.
 
-fRAC receives TCP payload from the network stack, reassembles it into
-requests, and hands each request to one of three accelerator slots. The
-response from the slot is sent back on the same TCP connection.
+.. code-block:: sh
 
-.. code:: text
+   $ cd ~/frac-atc-artifact
+   $ mkdir -p kernels/user_krnl/apps/<name>/src/{rtl,ip,xci,tb}
+   $ touch kernels/user_krnl/apps/<name>/unit.yaml
 
-   TCP stack ──> pkt_receiver ──> dispatcher ──> scheduler ──> per-slot FIFO ──┐
-                                                                               │
-                                                     ┌── slot boundary ────────┤
-                                                     │   your accelerator      │
-                                                     └── slot boundary ────────┤
-                                                                               │
-   TCP stack <── pkt_sender <── slot_tx_axis_switch <──────────────────────────┘
-
-Your accelerator is the module inside the slot boundary. Everything outside it
-(header parsing, request reassembly, slot selection, response return) already
-exists and is shared by all accelerators. You do not touch the network stack,
-the dispatcher, or the scheduler.
-
-Existing accelerators to learn from
-   .. list-table::
-      :header-rows: 1
-      :widths: 22 78
-
-      * - Module
-        - Summary
-      * - ``pattern_slot``, ``or_slot``
-        - Pass-through modules that return a constant pattern. The minimum
-          legal module and a loopback test.
-      * - ``top_k``
-        - Native RTL. Skips the header, reads a parameter from it, returns one
-          response line.
-      * - ``log``
-        - Streaming kernel built on Xilinx floating-point IP. One response line
-          per input line.
-      * - ``norm``
-        - Two-pass kernel that buffers the whole request before answering.
-      * - ``mm``
-        - CNN inference around an hls4ml-generated IP, with its own packet
-          parser and FIFOs; ``mm.v`` adapts it to the slot interface.
-
-Step 1: Create the Module Directory
------------------------------------
-
-Create ``kernels/user_krnl/apps/<name>/`` with this layout. Copying
-``apps/top_k/`` gives you all of it.
-
-``src/rtl/``: Your RTL.
-
-``src/ip/`` or ``src/xci/``: Vivado IP generation scripts or ``.xci`` files, only if the module uses IP.
-
-``tb/``: cocotb testbench (Step 3).
-
-``unit.yaml``: The module's build manifest (Step 4).
-
-Step 2: Write the Top-Level Module
-----------------------------------
+Write an Accelerator
+--------------------
 
 Give the top module exactly this port list. It must match the slot boundary in
 ``kernels/user_krnl/reconfctrl/rtl/cell_bbx.sv``; the static design
 instantiates it with the parameter values in the Width column.
 
+
 .. list-table::
    :header-rows: 1
-   :widths: 22 14 64
+   :widths: 32 18 50
 
    * - Port
      - Width
@@ -84,275 +33,355 @@ instantiates it with the parameter values in the Width column.
    * - ``clk``, ``rst``
      - 1
      - Static-side clock and synchronous, active-high reset.
-   * - ``s_axis_tdata``
+   * - ``s_axis_tdata`` / ``m_axis_tdata``
      - ``AXIS_DATA_W`` = 512
-     - One 64-byte line of the request per beat.
-   * - ``s_axis_tkeep``, ``s_axis_tstrb``
+     - Request input and response output, with a 64-byte data bus per beat.
+   * - | ``s_axis_tkeep`` / ``m_axis_tkeep``,
+       | ``s_axis_tstrb`` / ``m_axis_tstrb``
      - 64
      - Always all-ones on input. Every request beat is a full 64-byte line.
-   * - ``s_axis_tvalid``, ``s_axis_tready``
+   * - | ``s_axis_tvalid`` / ``m_axis_tvalid``,
+       | ``s_axis_tready`` / ``m_axis_tready``
      - 1
-     - Standard AXI-Stream handshake. You may hold ``tready`` low while busy,
-       a FIFO ahead of the slot absorbs the back-pressure.
-   * - ``s_axis_tlast``
+     - Standard AXI-Stream handshakes. You may hold ``s_axis_tready`` low
+       while busy; a FIFO ahead of the slot absorbs the back-pressure.
+   * - ``s_axis_tlast`` / ``m_axis_tlast``
      - 1
-     - Set on the final beat of a request.
-   * - ``s_axis_tdest``, ``s_axis_tid``, ``s_axis_tuser``
-     - ``TDEST_W`` = 1, ``TID_W`` = 1, ``USER_W`` = 1
-     - Driven to zero. Carry no information. Echo them or drive zero.
-   * - ``m_axis_*``
-     - as above
-     - The response stream. Same signal set, same widths.
+     - Set on the final beat of a request or response, respectively.
+   * - | ``s_axis_tdest`` / ``m_axis_tdest``,
+       | ``s_axis_tid`` / ``m_axis_tid``,
+       | ``s_axis_tuser`` / ``m_axis_tuser``
+     - | ``TDEST_W`` = 1,
+       | ``TID_W`` = 1,
+       | ``USER_W`` = 1
+     - Driven to zero on input. They carry no information; echo them or
+       drive zero on output.
 
-Start from this skeleton (the structure of ``top_k.v``):
 
-.. code:: verilog
+Your accelerator might require registers at input and output port so we recommemd.
 
-   (* DONT_TOUCH = "yes" *)
-   module my_acc #(
-       parameter integer AXIS_DATA_W = 512,
-       parameter integer KEEP_W      = AXIS_DATA_W/8,
-       parameter integer TDEST_W     = 1,
-       parameter integer TID_W       = 1,
-       parameter integer USER_W      = 1
-   ) (
-       input  wire                   clk,
-       input  wire                   rst,
-       // request in
-       input  wire [AXIS_DATA_W-1:0] s_axis_tdata,
-       input  wire [KEEP_W-1:0]      s_axis_tkeep,
-       input  wire [KEEP_W-1:0]      s_axis_tstrb,
-       input  wire                   s_axis_tvalid,
-       output wire                   s_axis_tready,
-       input  wire                   s_axis_tlast,
-       input  wire [TDEST_W-1:0]     s_axis_tdest,
-       input  wire [TID_W-1:0]       s_axis_tid,
-       input  wire [USER_W-1:0]      s_axis_tuser,
-       // response out
-       output wire [AXIS_DATA_W-1:0] m_axis_tdata,
-       output wire [KEEP_W-1:0]      m_axis_tkeep,
-       output wire [KEEP_W-1:0]      m_axis_tstrb,
-       output wire                   m_axis_tvalid,
-       input  wire                   m_axis_tready,
-       output wire                   m_axis_tlast,
-       output wire [TDEST_W-1:0]     m_axis_tdest,
-       output wire [TID_W-1:0]       m_axis_tid,
-       output wire [USER_W-1:0]      m_axis_tuser
-   );
-       wire is_header = (s_axis_tdata[447:0] == {448{1'b1}});
-       wire rx_fire   = s_axis_tvalid && s_axis_tready;
 
-       reg frame_active;   // a request is in progress
-       reg resp_valid;     // response line is ready
-       reg [AXIS_DATA_W-1:0] resp_data;
 
-       assign s_axis_tready = !resp_valid;   // one request at a time
 
-       always @(posedge clk) begin
-           if (rst) begin
-               frame_active <= 1'b0;
-               resp_valid   <= 1'b0;
-           end else begin
-               if (rx_fire) begin
-                   frame_active <= !s_axis_tlast;
-                   if (!frame_active && is_header) begin
-                       // read per-request parameters from tdata[495:482]
-                   end else begin
-                       // feed s_axis_tdata to the kernel
-                   end
-                   if (s_axis_tlast) resp_valid <= 1'b1;
-               end
-               if (resp_valid && m_axis_tready) resp_valid <= 1'b0;
-           end
-       end
+Start from this template.
 
-       assign m_axis_tdata  = resp_data;
-       assign m_axis_tvalid = resp_valid;
-       assign m_axis_tlast  = 1'b1;
-       assign m_axis_tkeep  = {KEEP_W{1'b1}};
-       assign m_axis_tstrb  = {KEEP_W{1'b1}};
-       assign m_axis_tdest  = {TDEST_W{1'b0}};
-       assign m_axis_tid    = {TID_W{1'b0}};
-       assign m_axis_tuser  = {USER_W{1'b0}};
-   endmodule
 
-Then check the module against this list:
+.. code-block:: verilog
+   :caption: kernels/user_krnl/apps/<name>/src/rtl/<name>.v
 
--  Skip the header beat. It is the first beat of every request and has bytes
-   0-55 all ``0xff``. Per-request parameters are in ``tdata[495:482]``.
--  Return exactly one response per request, ending in ``m_axis_tlast``.
--  Make every response beat a full 64-byte line, pad short results.
--  Make the response the same number of bytes as the request's TCP packet,
-   header included.
--  Hold ``s_axis_tready`` low while busy. Never drop beats.
--  Keep a single request under 512 beats (32 KiB). If you buffer the whole
-   request, make the buffer depth a parameter.
--  Keep ``(* DONT_TOUCH = "yes" *)`` on the top module. Use no I/O, clocking
-   primitives, or hard blocks.
--  Initialise all state in the ``rst`` branch.
 
-.. Points that are easy to get wrong:
+    (* DONT_TOUCH = "yes" *)
+    module <name> #(
+        parameter integer AXIS_DATA_W = 512 + 1 + 32,
+        parameter integer KEEP_W      = 1,
+        parameter integer TDEST_W     = 1,
+        parameter integer TID_W       = 1,
+        parameter integer USER_W      = 1
+    ) (
+        input  wire                   clk,
+        input  wire                   rst,
 
-.. -  If the kernel needs several cycles per beat, hold ``s_axis_tready`` low
-..    rather than dropping beats. The slot FIFO provides the elasticity.
-.. -  If the kernel needs the whole request before producing output (as ``norm``
-..    does), the buffer depth defines the largest request you accept. Make it a
-..    parameter and document it.
+        input  wire [AXIS_DATA_W-1:0] s_axis_tdata,
+        input  wire [KEEP_W-1:0]      s_axis_tkeep,
+        input  wire [KEEP_W-1:0]      s_axis_tstrb,
+        input  wire                   s_axis_tvalid,
+        output wire                   s_axis_tready,
+        input  wire                   s_axis_tlast,
+        input  wire [TDEST_W-1:0]     s_axis_tdest,
+        input  wire [TID_W-1:0]       s_axis_tid,
+        input  wire [USER_W-1:0]      s_axis_tuser,
 
-.. Rules the static side imposes:
+        output wire [AXIS_DATA_W-1:0] m_axis_tdata,
+        output wire [KEEP_W-1:0]      m_axis_tkeep,
+        output wire [KEEP_W-1:0]      m_axis_tstrb,
+        output wire                   m_axis_tvalid,
+        input  wire                   m_axis_tready,
+        output wire                   m_axis_tlast,
+        output wire [TDEST_W-1:0]     m_axis_tdest,
+        output wire [TID_W-1:0]       m_axis_tid,
+        output wire [USER_W-1:0]      m_axis_tuser
+    );
 
-.. Requests arrive whole and in order
-..    The scheduler does not forward a request until every TCP packet of it has
-..    arrived, so your module sees the beats of one request back to back, ending
-..    in ``tlast``. Beats of two different requests are never interleaved on one
-..    slot.
+        reg rst_q = 1'b1;
+        always @(posedge clk) rst_q <= rst;
 
-.. The header beat is delivered to you
-..    The first beat of every request is the 64-byte fRAC request header (format
-..    below). The dispatcher reads the workload ID and size from it but does not
-..    remove it. Your module must recognise and skip it, or treat it as data on
-..    purpose. ``top_k.v`` recognises it by testing whether bytes 0-55 are all
-..    ``0xff``:
+        // request: boundary -> req_reg_inst -> core
+        wire [AXIS_DATA_W-1:0] req_tdata;
+        wire                   req_tvalid, req_tready, req_tlast;
+        wire [TDEST_W-1:0]     req_tdest;
+        wire [TID_W-1:0]       req_tid;
+        wire [USER_W-1:0]      req_tuser;
 
-..    .. code:: verilog
+        // response: core -> resp_reg_inst -> boundary
+        wire [AXIS_DATA_W-1:0] resp_tdata;
+        wire                   resp_tvalid, resp_tready, resp_tlast;
+        wire [TDEST_W-1:0]     resp_tdest;
+        wire [TID_W-1:0]       resp_tid;
+        wire [USER_W-1:0]      resp_tuser;
 
-..       wire is_header = (s_axis_tdata[447:0] == {448{1'b1}});
+        axis_register #(
+            .DATA_WIDTH (AXIS_DATA_W),
+            .KEEP_ENABLE(0),
+            .KEEP_WIDTH (1),
+            .LAST_ENABLE(1),
+            .ID_ENABLE  (1),
+            .ID_WIDTH   (TID_W),
+            .DEST_ENABLE(1),
+            .DEST_WIDTH (TDEST_W),
+            .USER_ENABLE(1),
+            .USER_WIDTH (USER_W),
+            .REG_TYPE   (2)
+        ) req_reg_inst (
+            .clk          (clk),
+            .rst          (rst_q),
+            .s_axis_tdata (s_axis_tdata),
+            .s_axis_tkeep (1'b1),
+            .s_axis_tvalid(s_axis_tvalid),
+            .s_axis_tready(s_axis_tready),
+            .s_axis_tlast (s_axis_tlast),
+            .s_axis_tid   (s_axis_tid),
+            .s_axis_tdest (s_axis_tdest),
+            .s_axis_tuser (s_axis_tuser),
+            .m_axis_tdata (req_tdata),
+            .m_axis_tkeep (),
+            .m_axis_tvalid(req_tvalid),
+            .m_axis_tready(req_tready),
+            .m_axis_tlast (req_tlast),
+            .m_axis_tid   (req_tid),
+            .m_axis_tdest (req_tdest),
+            .m_axis_tuser (req_tuser)
+        );
 
-.. Responses are 64-byte lines
-..    Your ``m_axis_tkeep`` is not connected on the static side. Every response
-..    beat is transmitted as a full 64 bytes, so pad short results to a line.
+        // Please don't forget to change with the app name here
+        <name>_core #(
+            .AXIS_DATA_W(AXIS_DATA_W),
+            .KEEP_W     (KEEP_W),
+            .TDEST_W    (TDEST_W),
+            .TID_W      (TID_W),
+            .USER_W     (USER_W)
+        ) core_inst (
+            .clk          (clk),
+            .rst          (rst_q),
+            .s_axis_tdata (req_tdata),
+            .s_axis_tkeep ({KEEP_W{1'b1}}),
+            .s_axis_tstrb ({KEEP_W{1'b1}}),
+            .s_axis_tvalid(req_tvalid),
+            .s_axis_tready(req_tready),
+            .s_axis_tlast (req_tlast),
+            .s_axis_tdest (req_tdest),
+            .s_axis_tid   (req_tid),
+            .s_axis_tuser (req_tuser),
+            .m_axis_tdata (resp_tdata),
+            .m_axis_tkeep (),
+            .m_axis_tstrb (),
+            .m_axis_tvalid(resp_tvalid),
+            .m_axis_tready(resp_tready),
+            .m_axis_tlast (resp_tlast),
+            .m_axis_tdest (resp_tdest),
+            .m_axis_tid   (resp_tid),
+            .m_axis_tuser (resp_tuser)
+        );
 
-.. Exactly one response per request
-..    The static side captures one metadata entry per request when its first beat
-..    enters the slot FIFO, and releases it when your response's ``tlast`` passes
-..    the output switch. A request with no response leaks a metadata entry and
-..    eventually stalls the slot. Two responses to one request corrupt the pairing
-..    for all later requests on that slot.
+        axis_register #(
+            .DATA_WIDTH (AXIS_DATA_W),
+            .KEEP_ENABLE(0),
+            .KEEP_WIDTH (1),
+            .LAST_ENABLE(1),
+            .ID_ENABLE  (1),
+            .ID_WIDTH   (TID_W),
+            .DEST_ENABLE(1),
+            .DEST_WIDTH (TDEST_W),
+            .USER_ENABLE(1),
+            .USER_WIDTH (USER_W),
+            .REG_TYPE   (2)
+        ) resp_reg_inst (
+            .clk          (clk),
+            .rst          (rst_q),
+            .s_axis_tdata (resp_tdata),
+            .s_axis_tkeep (1'b1),
+            .s_axis_tvalid(resp_tvalid),
+            .s_axis_tready(resp_tready),
+            .s_axis_tlast (resp_tlast),
+            .s_axis_tid   (resp_tid),
+            .s_axis_tdest (resp_tdest),
+            .s_axis_tuser (resp_tuser),
+            .m_axis_tdata (m_axis_tdata),
+            .m_axis_tkeep (),
+            .m_axis_tvalid(m_axis_tvalid),
+            .m_axis_tready(m_axis_tready),
+            .m_axis_tlast (m_axis_tlast),
+            .m_axis_tid   (m_axis_tid),
+            .m_axis_tdest (m_axis_tdest),
+            .m_axis_tuser (m_axis_tuser)
+        );
 
-.. Response length is taken from the request
-..    ``pkt_sender.v`` passes the request's TCP metadata (payload length and
-..    session ID) to the TCP stack unchanged as the response metadata. The stack
-..    therefore expects the response to be as long as the request's TCP packet.
-..    For a single-packet request the safe design is a response with the same
-..    number of bytes as that packet, header included. If your response size
-..    must differ, check ``pkt_sender.v`` and the TCP transmit path before
-..    relying on it; this is a known limitation of the current static design,
-..    not a property of the protocol.
+        assign m_axis_tkeep = {KEEP_W{1'b1}};
+        assign m_axis_tstrb = {KEEP_W{1'b1}};
 
-.. Request size is bounded by the slot FIFO
-..    ``pkt_logic.v`` places a request FIFO of ``SLOT_RX_FIFO_DEPTH`` beats
-..    (currently 512, so 32 KiB) ahead of each slot. A single request larger than
-..    that cannot be absorbed and deadlocks the slot. Raising the constant is a
-..    static-design change.
+    endmodule
 
-.. Constraints that come from PR slot boundaries
-..    The module is delivered as a partial bitstream into a fixed region of the
-..    FPGA, so its resources must fit the slot's clock regions listed in
-..    ``spinhdl.yaml``, and it is built once per slot it may occupy. Keep a
-..    ``(* DONT_TOUCH = "yes" *)`` attribute on the top module so trivial logic is
-..    not optimised away, and do not use I/O, clocking primitives, or hard blocks
-..    outside the region. The module's registers are not reset by the static side
-..    after a reconfiguration; initialise your state in the ``rst`` branch.
+    `resetall
 
-.. What the Accelerator Sees
-.. -------------------------
 
-.. A request is a sequence of 64-byte lines. Line 0 is the header; lines 1 to N
-.. are the payload exactly as the client sent it.
+.. code-block:: verilog
+   :caption: kernels/user_krnl/apps/<name>/src/rtl/<name>_core.v
 
-.. .. list-table::
-..    :header-rows: 1
-..    :widths: 12 10 78
+    module <name>_core #(
+        parameter integer AXIS_DATA_W = 512 + 1 + 32,
+        parameter integer KEEP_W      = 1,
+        parameter integer TDEST_W     = 1,
+        parameter integer TID_W       = 1,
+        parameter integer USER_W      = 1
+    ) (
+        input  wire                   clk,
+        input  wire                   rst,
 
-..    * - Bytes
-..      - Bits
-..      - Field
-..    * - 0-55
-..      - 447:0
-..      - Prefix, ``0xff`` in every byte. Use it to recognise the header line.
-..    * - 56-59
-..      - 479:448
-..      - Declared request size, little-endian, in bytes, **including** this
-..        header. Consumed by the dispatcher; informational to you.
-..    * - 60-61
-..      - 495:480
-..      - Configuration word. Bits 1:0 are the framing flags ``FIRST`` and
-..        ``LAST`` and belong to the dispatcher. Bits 15:2 are free for
-..        per-request accelerator parameters; ``top_k`` uses this word as its
-..        result mask.
-..    * - 62-63
-..      - 511:496
-..      - Workload ID. Selects the slot; already acted on before you see it.
+        input  wire [AXIS_DATA_W-1:0] s_axis_tdata,
+        input  wire [KEEP_W-1:0]      s_axis_tkeep,
+        input  wire [KEEP_W-1:0]      s_axis_tstrb,
+        input  wire                   s_axis_tvalid,
+        output wire                   s_axis_tready,
+        input  wire                   s_axis_tlast,
+        input  wire [TDEST_W-1:0]     s_axis_tdest,
+        input  wire [TID_W-1:0]       s_axis_tid,
+        input  wire [USER_W-1:0]      s_axis_tuser,
 
-.. Byte ``n`` of a line is at ``tdata[8n+7:8n]``. Existing accelerators treat the
-.. payload as 16 little-endian 32-bit words per line, word ``i`` at
-.. ``tdata[32i+31:32i]``, but that is a convention, not a requirement.
+        output wire [AXIS_DATA_W-1:0] m_axis_tdata,
+        output wire [KEEP_W-1:0]      m_axis_tkeep,
+        output wire [KEEP_W-1:0]      m_axis_tstrb,
+        output wire                   m_axis_tvalid,
+        input  wire                   m_axis_tready,
+        output wire                   m_axis_tlast,
+        output wire [TDEST_W-1:0]     m_axis_tdest,
+        output wire [TID_W-1:0]       m_axis_tid,
+        output wire [USER_W-1:0]      m_axis_tuser
+    );
 
-Wrapping an existing core
-~~~~~~~~~~~~~~~~~~~~~~~~~
+        assign s_axis_tready = m_axis_tready;
+        assign m_axis_tvalid = s_axis_tvalid;
 
-Keep the core unchanged and add an adapter module at the top that maps the
-slot ports onto it. ``kernels/user_krnl/apps/mm/`` is the example:
-``CNN_workload.v`` is untouched and ``mm.v`` is the adapter. Declare any
-Vivado IP the core needs in ``unit.yaml`` (``xci`` for ``.xci`` files, ``ip``
-for a ``gen_ip.tcl``).
+        // change tdata accordingly, for example here we are
+        // OR'ing on the data we receive
 
-.. If the kernel already exists with its own interface, keep it unchanged and
-.. add an adapter at the top. ``kernels/user_krnl/apps/mm/`` is the example: the
-.. CNN accelerator (``CNN_workload.v`` with its packet parser, FIFOs, and the
-.. hls4ml IP ``myproject_1``) is untouched, and ``mm.v`` only maps the slot
-.. ports onto it.
-.. Vivado IP the core depends on is declared in ``unit.yaml`` (``xci`` for
-.. ``.xci`` files, ``ip`` for a ``gen_ip.tcl``) so the per-module synthesis can
-.. regenerate it.
+        assign m_axis_tdata  = s_axis_tdata | {AXIS_DATA_W {1'b1}};
+        assign m_axis_tkeep  = s_axis_tkeep;
+        assign m_axis_tstrb  = s_axis_tstrb;
+        assign m_axis_tlast  = s_axis_tlast;
+        assign m_axis_tdest  = s_axis_tdest;
+        assign m_axis_tid    = s_axis_tid;
+        assign m_axis_tuser  = s_axis_tuser;
 
-Step 3: Simulate
-----------------
+    endmodule
 
-Unit test
-   Copy ``kernels/user_krnl/apps/top_k/tb/`` into your ``tb/`` and point its
-   ``Makefile`` at your RTL. It runs cocotb under Verilator or Icarus.
-   ``test_top_k.py`` has a ``header_line()`` helper that builds a valid header
-   beat and an AXI-Stream source/sink pair from ``cocotbext-axi``. Drive
-   header-only, single-line, multi-line, and back-to-back requests, and insert
-   random ``tready`` stalls on the response side.
+    `resetall
 
-Integration test
-   Swap ``cell_bbx_pattern_sim.sv`` for your module and run
-   ``make -C kernels/user_krnl/reassembly/tb``. This drives the dispatcher,
-   scheduler, and slot routing over a modelled TCP interface and checks the
-   header skip, request reassembly across TCP packets, and the
-   one-response-per-request rule together.
 
-Step 4: Register with the Build
--------------------------------
+Check if your files and directory looks like this
 
-Add the module to all three manifests.
+.. code-block:: sh
 
-``kernels/user_krnl/apps/<name>/unit.yaml``
-   The module's own manifest: ``name``, ``top``, ``moduletype: recon``, the
-   target part, and the RTL, XDC, XCI, and IP file lists. Copy
-   ``apps/top_k/unit.yaml`` and edit.
+   $ tree kernels/user_krnl/apps/<name>/
 
-``spin.yaml`` (repository root)
-   Append a unit entry with the same fields plus a ``utilization`` estimate.
-   Run an out-of-context synthesis first and record the numbers, as the
-   existing entries do.
+.. code-block:: output
 
-``spinhdl.yaml`` (repository root)
-   Under each slot (``C00``, ``C01``, ``C02``) that may host your module, add a
-   ``component`` naming the unit. Component ``id`` values are unique across
-   the whole file; the next free value is 15. The module is only built for the
-   slots you list it under.
+    kernels/user_krnl/apps/<name>/
+    ├── src
+    │   ├── ip
+    │   ├── rtl
+    │   │   ├── <name>.v
+    │   │   └── <name>_core.v
+    │   ├── tb
+    │   └── xci
+    └── unit.yaml
 
-Then run the DFX build as in :doc:`build-and-deployment`. It produces a full
-image for initial programming and one ICAP partial ``.bin`` per (module, slot)
-pair; Step 6 loads them.
 
-.. The DFX build then produces one partial bitstream per (module, slot) pair. How
-.. to run that flow and load the result is covered in :doc:`build-and-deployment`
-.. and :doc:`reconfiguration-controller`; it is the same for every accelerator
-.. and needs nothing module-specific beyond these manifests.
+Now, unit.yaml
+
+.. code-block:: yaml
+   :caption: kernels/user_krnl/apps/<name>/unit.yaml
+
+    name: <name>
+    moduletype: recon
+    top: <name>
+    build: synth
+    build_dir: build
+    version: 0.1.0
+    part: xcu280-fsvh2892-2L-e
+    arch: ultraplus
+
+    rtl:
+      dir: "src/rtl"
+      files:
+        - <name>.v
+        - <name>_core.v
+        - ../../../../reassembly/rtl/axis_register.v
+
+    xdc:
+      dir: "src/xdc"
+      files:
+
+    xci:
+      dir: "src/xci"
+      files:
+
+    ip:
+      dir: "src/ip"
+      files:
+
+Add your accelerator to database.
+
+.. code-block:: yaml
+   :caption: spin.yaml
+
+    - name: <name>
+      path: kernels/user_krnl/apps/<name>
+      moduletype: recon
+      top: <name>
+      build: synth
+      build_dir: build
+      rtl:
+        dir: src/rtl
+        files:
+        - <name>.v
+        - <name>_core.v
+        - ../../../../reassembly/rtl/axis_register.v
+      xdc:
+        dir: src/xdc
+        files: null
+      xci:
+        dir: src/xci
+        files: null
+      ip:
+        dir: src/ip
+        files: null
+      # you can add dummy numbers here.
+      utilization:
+        slices: 142
+        ramb36: 0
+        dsp: 0
+
+
+.. code-block:: yaml
+   :caption: spinhdl.yaml
+
+    - name: C00
+      id: 0
+      slot_id: 0
+      region:
+      ...
+      components:
+      ...
+      - name: test_app
+        id: 8
+        unit: test_app
+
+
+Now just build with a abstract shell.
+
+.. code-block:: sh
+
+   $  ./bin/spinhdl spin test_app --shell build/frac/abstract_shell/ab_sh_c00_bbx_inst.dcp \
+                    --cell C00 --out-dir out
 
 Step 5: Send a Request
 ----------------------
@@ -487,7 +516,7 @@ Step 6: Try It on Hardware
           -chunk-size 64 -query-status -post-probe \
           path/to/<slot>_<module>_icap_part.bin
 
-   Use the ICAP-formatted ``.bin``, not the ``.bit``. 
+   Use the ICAP-formatted ``.bin``, not the ``.bit``.
 #. Send a header-only request to your slot's workload ID (Step 5) and confirm
    a response arrives. For instance, for slot C00, workload ID ``0``:
 

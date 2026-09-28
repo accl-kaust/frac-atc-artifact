@@ -42,7 +42,8 @@ Generating bitstream
                     --static static.yaml
 
 .. note::
-   You can skip this section and use our bitstreams instead under ``example/``
+   You can skip this section and use our bitstreams instead under ``example/``.
+   From this point on, we use the provided bitstreams. If you built fRAC yourself, you can find the bitstreams under ``~/frac-atc-artifact/build/frac/bitstreams``.
 
 
 Setting up the NIC
