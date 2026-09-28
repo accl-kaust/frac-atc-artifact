@@ -3,7 +3,7 @@ name: Publish documentation
 
 on:
   push:
-    branches: [reconf-hdr-frmt-port]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
