@@ -16,8 +16,11 @@ root:
     # Both cells are in SLR1, each with static on two sides. The static pblock
     # in frac/xdc/floorplan.xdc is carved around exactly these regions -- keep
     # the two files consistent. SLR0 now holds no cell.
-    # Both cells carry the same three accelerators, so either slot can be
-    # swapped to any of them and the pair can run different ones at once.
+    # Both cells carry the same set, so either slot can be swapped to any of
+    # them and the pair can run different ones at once: top_k, norm and log,
+    # then or_slot and pattern_slot, whose responses are as long as their
+    # requests (all-ones and echo) for throughput tests and probing.  The
+    # first in each list is what the full image starts with.
     - name: C00
       id: 0
       slot_id: 0
@@ -35,6 +38,12 @@ root:
       - name: log
         id: 2
         unit: log
+      - name: or_slot
+        id: 6
+        unit: or_slot
+      - name: pattern_slot
+        id: 7
+        unit: pattern_slot
     - name: C01
       id: 1
       slot_id: 1
@@ -52,3 +61,9 @@ root:
       - name: log
         id: 5
         unit: log
+      - name: or_slot
+        id: 8
+        unit: or_slot
+      - name: pattern_slot
+        id: 9
+        unit: pattern_slot
