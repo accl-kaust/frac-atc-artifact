@@ -4,6 +4,8 @@ Integrating Your Own Accelerator
 fRAC provides abstract shells that let developers integrate accelerators without rebuilding the entire stack. An accelerator needs little to no knowledge of the network.
 This guide shows how to bring your own accelerator into fRAC. It covers where the accelerator connects, the interface it must implement, how to implement the hardware, and how a client sends it requests.
 
+Please follow  `quick-start <https://accl-kaust.github.io/frac-atc-artifact/>`_ before proceeding.
+
 Creating files
 --------------
 
@@ -263,7 +265,7 @@ Start from this template.
         // change tdata accordingly, for example here we are
         // OR'ing on the data we receive
 
-        assign m_axis_tdata  = s_axis_tdata | {AXIS_DATA_W {1'b1}};
+        assign m_axis_tdata  = {s_axis_tdata[AXIS_DATA_W-1:512], s_axis_tdata[511:0] | {512{1'b1}}};
         assign m_axis_tkeep  = s_axis_tkeep;
         assign m_axis_tstrb  = s_axis_tstrb;
         assign m_axis_tlast  = s_axis_tlast;
@@ -380,158 +382,69 @@ Now just build with a abstract shell.
 
 .. code-block:: sh
 
-   $  ./bin/spinhdl spin test_app --shell build/frac/abstract_shell/ab_sh_c00_bbx_inst.dcp \
+   $ ./bin/spinhdl spin test_app --shell build/frac/abstract_shell/ab_sh_c00_bbx_inst.dcp \
                     --cell C00 --out-dir out
 
-Step 5: Send a Request
-----------------------
 
-Open a raw TCP connection to port 2888 (address ``172.24.1.52`` in the
-checked-in design). Send the 64-byte header followed by the payload, then read
-the response as raw bytes. There is no response header, so the client must
-know how many bytes to expect.
-
-Header layout
-~~~~~~~~~~~~~
-
-.. list-table::
-   :header-rows: 1
-   :widths: 12 10 78
-
-   * - Bytes
-     - Size
-     - Value
-   * - 0-55
-     - 56
-     - ``0xff`` repeated. Required: accelerators use it to recognise the
-       header line.
-   * - 56-59
-     - 4
-     - Total request size in bytes, little-endian, **including** these 64
-       header bytes. A header-only request declares 64.
-   * - 60-61
-     - 2
-     - Configuration word, little-endian. Bit 0 = ``FIRST``, bit 1 = ``LAST``;
-       set both (``0x3``) for an ordinary single request. Bits 15:2 are passed
-       to the accelerator as parameters; use ``0xffff`` masked with the flags
-       when the accelerator has none.
-   * - 62-63
-     - 2
-     - Workload ID, little-endian: the slot your accelerator is loaded in.
-
-The size rule differs for the reconfiguration controller (its declared size
-excludes the header; see :ref:`protocol:fRAC Request Header`). For
-accelerators, count the header.
-
-Workload ID
-~~~~~~~~~~~
-
-The workload ID selects the slot. The mapping is fixed in
-``kernels/user_krnl/reassembly/rtl/pkt_logic.v``:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 25 25 50
-
-   * - Workload ID
-     - Parameter
-     - Destination
-   * - ``0x0000``
-     - ``PATTERN_APP``
-     - Slot C00
-   * - ``0x0001``
-     - ``OR_APP``
-     - Slot C01
-   * - ``0x0002``
-     - ``C02_APP``
-     - Slot C02
-   * - ``0x00ab``
-     - ``RECONF_APP``
-     - Reconfiguration controller, not an accelerator slot
-   * - anything else
-     -
-     - Falls through to slot C00
-
-.. -  Giving an accelerator a stable ID independent of slot is a static-design
-..    change: add a parameter and a routing case in ``pkt_logic.v``, then rebuild
-..    the static design and every partial bitstream.
-
-Ready-made clients
-~~~~~~~~~~~~~~~~~~
-
-The Go client in ``sw/pr/main.go`` builds the header in ``buildHeader`` and is
-a convenient starting point for a Go tool. For load testing, the libtpa
-``tperf`` fork used in :doc:`quick-start` encodes the header with ``-Z 1``,
-selects the workload with ``-F``, and sets request and response sizes with
-``-m``/``-X`` and ``-R``.
-
-.. Example
-.. ~~~~~~~
-
-.. A Python client sending 32 little-endian 32-bit values to the accelerator in
-.. slot C01 and reading back one 64-byte line:
-
-.. .. code:: python
-
-..    import socket, struct
-
-..    FIRST, LAST = 0x1, 0x2
-..    values = list(range(32))                       # 2 lines of 16 words
-..    payload = b"".join(struct.pack("<I", v) for v in values)
-..    assert len(payload) % 64 == 0
-
-..    total  = 64 + len(payload)                     # header included
-..    config = (0xffff & ~0x3) | FIRST | LAST        # no parameters
-..    header = (bytes([0xff]) * 56
-..              + struct.pack("<I", total)
-..              + struct.pack("<H", config)
-..              + struct.pack("<H", 0x0001))         # slot C01
-
-..    s = socket.create_connection(("172.24.1.52", 2888))
-..    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-..    s.sendall(header + payload)                    # 192 bytes, one segment
-..    response = s.recv(64)
-
-Step 6: Try It on Hardware
+Try It on Hardware
 --------------------------
 
-#. Program the FPGA with the full image from the same DFX build as your partial
-   bitstream, using Vivado Hardware Manager (:ref:`quick-start:Program the FPGA`).
-#. Give the host interface connected to the U280 an address on the FPGA's
-   subnet, for example ``172.24.1.10/24``
-   (:ref:`quick-start:Configure the Host Network`).
-#. Check that the FPGA accepts a TCP connection:
+1. Program the FPGA with the full image
 
-   .. code:: sh
+.. code-block:: sh
 
-      sudo env TPA_ETH_DEV="$FRAC_NETDEV" TPA_ID=frac-connect \
-          tpa run swing 172.24.1.52 2888
+   $ ./scripts/programfpga.sh build/frac/bitstreams/jtag/frac.bit
 
-   Wait for ``[connected]``, then press Ctrl+C.
-#. Load your partial bitstream into the slot with the reconfiguration client:
+2. Send a request just to check if fRAC is live
 
-   .. code:: sh
+.. code-block:: sh
 
-      go run ./sw/pr/main.go -addr 172.24.1.52:2888 -hbm-addr 0x4000 \
-          -chunk-size 64 -query-status -post-probe \
-          path/to/<slot>_<module>_icap_part.bin
+   $ go run ./scripts/testfuncs.go -slots 0,1 -counter
 
-   Use the ICAP-formatted ``.bin``, not the ``.bit``.
-#. Send a header-only request to your slot's workload ID (Step 5) and confirm
-   a response arrives. For instance, for slot C00, workload ID ``0``:
+.. code-block:: output
 
-   .. code:: sh
+  workload 0x0000 (slot 0):
+  unrecognised; closest is or_slot (ff 00 00 .., 8-bit line) (1/16 words)   64B in 301.471095ms
+  00000000  b9 aa aa aa 00 00 00 00  b7 aa aa aa b6 aa aa aa  |................|
+  00000010  b5 aa aa aa b4 aa aa aa  b3 aa aa aa b2 aa aa aa  |................|
+  00000020  b1 aa aa aa b0 aa aa aa  af aa aa aa ae aa aa aa  |................|
+  00000030  ad aa aa aa ac aa aa aa  ab aa aa aa aa aa aa aa  |................|
 
-      sudo env TPA_ETH_DEV="$FRAC_NETDEV" TPA_ID=frac-test \
-          tpa run tperf -c 172.24.1.52 -p 2888 -t rr \
-          -Z 1 -F 0 -m 64 -X 64 -R 64 -n 1 -C 1 -d 5
+  workload 0x0001 (slot 1):
+  unrecognised; closest is or_slot (ff 00 00 .., 8-bit line) (1/16 words)   64B in 301.646634ms
+  00000000  b9 aa aa aa 00 00 00 00  b7 aa aa aa b6 aa aa aa  |................|
+  00000010  b5 aa aa aa b4 aa aa aa  b3 aa aa aa b2 aa aa aa  |................|
+  00000020  b1 aa aa aa b0 aa aa aa  af aa aa aa ae aa aa aa  |................|
+  00000030  ad aa aa aa ac aa aa aa  ab aa aa aa aa aa aa aa  |................|
 
-   A nonzero request ``count`` in the output means the exchange works.
-#. Send real payloads: set ``-m``/``-X`` to the full request size, header
-   included, and ``-R`` to your response size.
+3. Program your accelerator
 
-.. #. Send a header-only request (declared size 64) and confirm one 64-byte
-..    response arrives.
-.. #. Send real payloads.
-.. #. If responses stop arriving after a while, look for a request shape that
-..    gets no response or two responses.
+.. code-block:: sh
+
+   $ go run ./scripts/reconfslots.go -slot 0 -chunk-size 256 -hbm-addr 0x10004000 -query-status out/icap/c00_f08.bin
+
+4. Send a request again to see the change
+
+.. code-block:: sh
+
+   $ go run ./scripts/testfuncs.go -slots 0,1 -counter
+
+.. code-block:: output
+
+  workload 0x0000 (slot 0):
+  or_slot (payload | all-ones, wide line)  16/16 words   128B in 1.160003ms
+  00000000  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000010  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000020  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000030  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000040  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000050  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000060  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+  00000070  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+
+  workload 0x0001 (slot 1):
+  unrecognised; closest is or_slot (ff 00 00 .., 8-bit line) (1/16 words)   64B in 302.145387ms
+  00000000  b9 aa aa aa 00 00 00 00  b7 aa aa aa b6 aa aa aa  |................|
+  00000010  b5 aa aa aa b4 aa aa aa  b3 aa aa aa b2 aa aa aa  |................|
+  00000020  b1 aa aa aa b0 aa aa aa  af aa aa aa ae aa aa aa  |................|
+  00000030  ad aa aa aa ac aa aa aa  ab aa aa aa aa aa aa aa  |................|
