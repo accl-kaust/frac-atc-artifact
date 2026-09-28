@@ -3,6 +3,7 @@
 *.log
 tmp/
 .*
+!.github
 build
 *.swp
 sim_build/
