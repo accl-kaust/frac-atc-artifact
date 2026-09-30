@@ -86,6 +86,33 @@ module pkt_logic (
         .tx_tready(dispatcher_tready)
     );
 
+    // The scheduler routes a beat -- which queue, whether it ends its request
+    // -- in the cycle the beat is offered, 13-14 levels deep from rx_tdata,
+    // and takes it or not on the outcome.  Fed straight from the dispatcher's
+    // output FIFO, that path starts at a block RAM wherever the FIFO landed;
+    // this skid buffer starts it at a flop the placer can put beside the
+    // scheduler, and gives the FIFO a registered ready.  One cycle of latency.
+    wire [512 + 32 + 32 + 16:0] sched_rx_tdata;
+    wire                        sched_rx_tvalid;
+    wire                        sched_rx_tready;
+
+    axis_pipeline_register #(
+      .DATA_WIDTH(512 + 32 + 32 + 16 + 1),
+      .KEEP_ENABLE(0),
+      .LAST_ENABLE(0),
+      .USER_ENABLE(0),
+      .LENGTH(1)
+    ) sched_in_reg_inst (
+      .clk(clk),
+      .rst(rst),
+      .s_axis_tdata(dispatcher_tdata),
+      .s_axis_tvalid(dispatcher_tvalid),
+      .s_axis_tready(dispatcher_tready),
+      .m_axis_tdata(sched_rx_tdata),
+      .m_axis_tvalid(sched_rx_tvalid),
+      .m_axis_tready(sched_rx_tready)
+    );
+
     wire [512 + 16 + 32 + 16 + 1:0] scheduler_tdata;
     wire                            scheduler_tvalid;
     wire                            scheduler_tready;
@@ -93,9 +120,9 @@ module pkt_logic (
     scheduler scheduler_inst (
         .clk(clk),
         .rst(rst),
-        .rx_tdata(dispatcher_tdata),
-        .rx_tvalid(dispatcher_tvalid),
-        .rx_tready(dispatcher_tready),
+        .rx_tdata(sched_rx_tdata),
+        .rx_tvalid(sched_rx_tvalid),
+        .rx_tready(sched_rx_tready),
         .tx_tdata(scheduler_tdata),
         .tx_tvalid(scheduler_tvalid),
         .tx_tready(scheduler_tready)
