@@ -20,8 +20,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 // Tags every beat with the {packet_size, workload_selection} of the request
-// it belongs to.  pkt_logic steers beats to the reconfiguration controller or
-// the scheduler on that workload, and the scheduler reads the header's size.
+// it belongs to.  The scheduler reads the header's size; the workload travels
+// with the beats, though with one kernel in pkt_logic nothing steers on it.
 //
 // The TOE hands over each TCP segment contiguously, but segments of different
 // connections interleave, so the request a beat belongs to is a property of
@@ -34,13 +34,14 @@
 // the segment carries the tags decided at its first beat.  A header that
 // needs a context while all CTX_NUM are open waits for one to close.
 //
-// A request ends where its declared size (plus the header line for the
-// reconfiguration controller, whose size excludes it) is reached at a segment
-// boundary, or at a one-beat header segment flagged LAST.  Requests are
-// assumed to start at segment boundaries.
+// A request ends where its declared size is reached at a segment boundary,
+// or at a one-beat header segment flagged LAST.  Every workload counts its
+// size the same way, as the scheduler does: with no reconfiguration
+// controller there is no request whose size leaves out its header line.
+// Requests are assumed to start at segment boundaries.
 
 module dispatcher
-#(ECHO  = 16'b0000, TOP_K = 16'b0001, MM = 16'b0010, LOG = 6'b0011, CRYPTO=16'b0100 , NORM=16'b0101, RECONF_APP = 16'h00ab,
+#(ECHO  = 16'b0000, TOP_K = 16'b0001, MM = 16'b0010, LOG = 6'b0011, CRYPTO=16'b0100 , NORM=16'b0101,
   CTX_NUM = 8)
 (
     input wire clk,
@@ -84,8 +85,7 @@ module dispatcher
     wire        request_last        = request_flags[1];
     wire [15:0] header_workload_selection = in_tdata[511:496];
     wire [31:0] header_packet_size  = in_tdata[479:448];
-    wire [31:0] header_request_bytes = (header_workload_selection == RECONF_APP) ?
-        header_packet_size + 32'd64 : header_packet_size;
+    wire [31:0] header_request_bytes = header_packet_size;
 
     integer i;
 

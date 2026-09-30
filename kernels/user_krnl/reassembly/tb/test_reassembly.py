@@ -25,9 +25,9 @@ TOE_MSS_1500_MTU = 1408
 # request in a 512-beat queue FIFO until its declared size has arrived, and
 # pkt_sender holds the whole response in a 512-beat FIFO before announcing it.
 MAX_REQUEST_BYTES = 512 * BYTE_LANES
+# The reconfiguration controller's workload on main; here, one more workload
+# for the one kernel.
 RECONF_APP = 0x00AB
-OP_WRITE_HBM = 1
-OP_READ_HBM = 2
 REQ_FLAG_FIRST = 0x1
 REQ_FLAG_LAST = 0x2
 REQ_FLAG_SINGLE = REQ_FLAG_FIRST | REQ_FLAG_LAST
@@ -45,15 +45,6 @@ def assert_keep_all(frame, byte_count):
     assert frame.tkeep is None or frame.tkeep == [1] * byte_count
 
 
-def pack_reconf_command(opcode, addr, size, slot_id=0):
-    payload = bytearray(BYTE_LANES)
-    payload[0] = opcode
-    payload[1] = slot_id
-    payload[8:16] = int(addr).to_bytes(8, "little")
-    payload[16:24] = int(size).to_bytes(8, "little")
-    return bytes(payload)
-
-
 def response_metadata(conn_id, byte_count):
     """
     The TCP tx metadata pkt_sender hands the stack, {length, session}, read
@@ -63,10 +54,6 @@ def response_metadata(conn_id, byte_count):
     reported as long as the whole request, however many TCP packets it came in.
     """
     return TcpNotification(length=byte_count, conn_id=conn_id).pack()
-
-
-def reconf_response_metadata(conn_id):
-    return response_metadata(conn_id, BYTE_LANES)
 
 
 @dataclass
@@ -255,15 +242,9 @@ class ToeRxBuffer:
 
 
 def echo_response(payloads) -> bytes:
-    """C00 (apps/pattern_slot): every request beat is echoed, payload and meta
-    unchanged; the meta names the request size, which is the response size."""
+    """pattern_slot, the one kernel: every request beat is echoed, payload and
+    meta unchanged; the meta names the request size, which is the response size."""
     return b"".join(payloads)
-
-
-def or_response(payloads) -> bytes:
-    """C01 (apps/or_slot): every request beat comes back with its payload OR-ed
-    with all ones, meta unchanged."""
-    return bytes([0xff]) * sum(len(payload) for payload in payloads)
 
 
 async def run_single_packet_request(dut, workload_id, expected):
@@ -585,8 +566,37 @@ async def test_single_packet_echo_app(dut):
 
 
 @cocotb.test()
-async def test_single_packet_or_app(dut):
-    await run_single_packet_request(dut, workload_id=0x0001, expected=or_response)
+async def test_single_packet_or_workload_is_echoed(dut):
+    """There is no or_slot: workload 1 goes to the one kernel like any other."""
+    await run_single_packet_request(dut, workload_id=0x0001, expected=echo_response)
+
+
+@cocotb.test()
+async def test_reconf_workload_is_echoed_and_ends_where_its_size_says(dut):
+    """
+    There is no reconfiguration controller: a RECONF_APP request is echoed like
+    any other workload.  The dispatcher no longer counts a header line on top
+    of its size, so it closes the request where the scheduler does, and the
+    next request on the connection starts clean instead of being taken for the
+    rest of this one.
+    """
+    tb = TB(dut)
+    await tb.reset()
+
+    first = MultiPacketRequest(packet_lengths=(BYTE_LANES, BYTE_LANES), conn_id=0x2345, workload_id=RECONF_APP)
+    second = SinglePacketRequest(conn_id=first.conn_id)
+    segments = list(zip(first.notifications, first.payloads)) + [(second.notification, second.payload)]
+    for notification, payload in segments:
+        read_cmd = await tb.send_notification(notification)
+        assert read_cmd == notification.pack()
+        await tb.send_rx_payload(payload)
+
+    for expected_payload in (echo_response(first.payloads), echo_response([second.payload])):
+        await tb.send_tx_status_ok()
+        metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
+        assert frame_to_int(metadata_frame) == response_metadata(first.conn_id, len(expected_payload))
+        assert bytes(data_frame.tdata) == expected_payload
+    await tb.expect_no_response()
 
 
 @cocotb.test()
@@ -612,244 +622,6 @@ async def test_back_to_back_three_line_echo_app(dut):
 @cocotb.test()
 async def test_repeated_six_line_echo_app(dut):
     await run_repeated_multi_packet_requests(dut, workload_id=0x0000, line_count=6, request_count=8, expected=echo_response)
-
-
-@cocotb.test()
-async def test_reconf_read_hbm_request(dut):
-    tb = TB(dut)
-    await tb.reset()
-
-    addr = 0x4000
-    expected_payload = bytes((0x40 + idx) & 0xFF for idx in range(BYTE_LANES))
-    tb.axi_ram.write(addr, expected_payload)
-
-    request_payload = (
-        RequestHeader(total_size=2 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
-        + pack_reconf_command(OP_READ_HBM, addr, BYTE_LANES)
-    )
-    notification = TcpNotification(length=len(request_payload), conn_id=0x3456)
-
-    read_cmd = await tb.send_notification(notification)
-    assert read_cmd == notification.pack()
-
-    await tb.send_rx_payload(request_payload)
-    await tb.send_tx_status_ok()
-
-    metadata_frame, data_frame = await tb.recv_response()
-
-    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
-    assert bytes(data_frame.tdata) == expected_payload
-    assert_keep_all(data_frame, BYTE_LANES)
-
-
-@cocotb.test()
-async def test_reconf_write_hbm_uses_command_size(dut):
-    tb = TB(dut)
-    await tb.reset()
-
-    addr = 0x5000
-    write_size = 96
-    payload_capacity = 2 * BYTE_LANES
-    payload = bytes((0x80 + idx) & 0xFF for idx in range(payload_capacity))
-    original = bytes([0xee] * payload_capacity)
-    tb.axi_ram.write(addr, original)
-
-    request_payload = (
-        RequestHeader(total_size=BYTE_LANES + BYTE_LANES + payload_capacity, workload_id=RECONF_APP).to_bytes()
-        + pack_reconf_command(OP_WRITE_HBM, addr, write_size)
-        + payload
-    )
-    notification = TcpNotification(length=len(request_payload), conn_id=0x4567)
-
-    read_cmd = await tb.send_notification(notification)
-    assert read_cmd == notification.pack()
-
-    await tb.send_rx_payload(request_payload)
-    await tb.send_tx_status_ok()
-
-    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
-
-    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
-    assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
-    assert_keep_all(data_frame, BYTE_LANES)
-    assert bytes(tb.axi_ram.read(addr, payload_capacity)) == payload[:write_size] + original[write_size:]
-
-
-@cocotb.test()
-async def test_reconf_write_hbm_exact_board_packet_has_one_response(dut):
-    tb = TB(dut)
-    await tb.reset()
-
-    addr = 0x4000
-    payload = bytes((0x40 + idx) & 0xFF for idx in range(BYTE_LANES))
-    original = bytes([0xee] * BYTE_LANES)
-    tb.axi_ram.write(addr, original)
-
-    request_payload = (
-        RequestHeader(total_size=2 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
-        + pack_reconf_command(OP_WRITE_HBM, addr, BYTE_LANES)
-        + payload
-    )
-    notification = TcpNotification(length=len(request_payload), conn_id=0x6c00)
-
-    assert len(request_payload) == 3 * BYTE_LANES
-    assert request_payload[56:60] == bytes([0x80, 0x00, 0x00, 0x00])
-
-    read_cmd = await tb.send_notification(notification)
-    assert read_cmd == notification.pack()
-
-    await tb.send_rx_payload(request_payload)
-    await tb.send_tx_status_ok()
-
-    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
-
-    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
-    assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
-    assert_keep_all(data_frame, BYTE_LANES)
-    assert bytes(tb.axi_ram.read(addr, BYTE_LANES)) == payload
-
-    await tb.expect_no_response()
-
-    await tb.send_tx_status_ok()
-    await tb.expect_no_response()
-
-    await tb.send_tx_status_ok()
-    await tb.expect_no_response()
-
-
-@cocotb.test()
-async def test_reconf_write_hbm_payload_ff_prefix_is_not_header(dut):
-    tb = TB(dut)
-    await tb.reset()
-
-    addr = 0x4800
-    payload = bytes([0xff] * 56) + bytes((0x80 + idx) & 0xFF for idx in range(8))
-    original = bytes([0xee] * BYTE_LANES)
-    tb.axi_ram.write(addr, original)
-
-    request_payload = (
-        RequestHeader(total_size=2 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
-        + pack_reconf_command(OP_WRITE_HBM, addr, BYTE_LANES)
-        + payload
-    )
-    notification = TcpNotification(length=len(request_payload), conn_id=0x6d00)
-
-    read_cmd = await tb.send_notification(notification)
-    assert read_cmd == notification.pack()
-
-    await tb.send_rx_payload(request_payload)
-    await tb.send_tx_status_ok()
-
-    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
-
-    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
-    assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
-    assert_keep_all(data_frame, BYTE_LANES)
-    assert bytes(tb.axi_ram.read(addr, BYTE_LANES)) == payload
-
-    await tb.expect_no_response()
-
-
-@cocotb.test()
-async def test_reconf_repeated_exact_write_hbm_has_one_response_each(dut):
-    tb = TB(dut)
-    await tb.reset()
-
-    for req_idx in range(3):
-        addr = 0x4000 + req_idx * BYTE_LANES
-        payload = bytes((0x40 + req_idx + idx) & 0xFF for idx in range(BYTE_LANES))
-        request_payload = (
-            RequestHeader(total_size=2 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
-            + pack_reconf_command(OP_WRITE_HBM, addr, BYTE_LANES)
-            + payload
-        )
-        notification = TcpNotification(length=len(request_payload), conn_id=0x6c00 + req_idx)
-
-        read_cmd = await tb.send_notification(notification)
-        assert read_cmd == notification.pack()
-
-        await tb.send_rx_payload(request_payload)
-        await tb.send_tx_status_ok()
-
-        metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
-
-        assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
-        assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
-        assert_keep_all(data_frame, BYTE_LANES)
-        assert bytes(tb.axi_ram.read(addr, BYTE_LANES)) == payload
-
-        await tb.expect_no_response()
-
-
-@cocotb.test()
-async def test_reconf_write_hbm_ignores_transport_padding(dut):
-    tb = TB(dut)
-    await tb.reset()
-
-    addr = 0x6000
-    write_size = BYTE_LANES
-    payload_capacity = 2 * BYTE_LANES
-    payload = bytes((0x20 + idx) & 0xFF for idx in range(payload_capacity))
-    original = bytes([0xee] * payload_capacity)
-    tb.axi_ram.write(addr, original)
-
-    request_payload = (
-        RequestHeader(total_size=BYTE_LANES + payload_capacity, workload_id=RECONF_APP).to_bytes()
-        + pack_reconf_command(OP_WRITE_HBM, addr, write_size)
-        + payload
-    )
-    notification = TcpNotification(length=len(request_payload), conn_id=0x5678)
-
-    read_cmd = await tb.send_notification(notification)
-    assert read_cmd == notification.pack()
-
-    await tb.send_rx_payload(request_payload)
-    await tb.send_tx_status_ok()
-
-    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
-
-    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
-    assert bytes(data_frame.tdata) == bytes(BYTE_LANES)
-    assert_keep_all(data_frame, BYTE_LANES)
-    assert bytes(tb.axi_ram.read(addr, payload_capacity)) == payload[:write_size] + original[write_size:]
-
-    await tb.expect_no_response()
-    await tb.send_tx_status_ok()
-    await tb.expect_no_response()
-
-
-@cocotb.test()
-async def test_reconf_read_hbm_ignores_extra_packet_data(dut):
-    tb = TB(dut)
-    await tb.reset()
-
-    addr = 0x7000
-    expected_payload = bytes((0x60 + idx) & 0xFF for idx in range(BYTE_LANES))
-    tb.axi_ram.write(addr, expected_payload)
-    extra_payload = bytes((0xa0 + idx) & 0xFF for idx in range(BYTE_LANES))
-
-    request_payload = (
-        RequestHeader(total_size=3 * BYTE_LANES, workload_id=RECONF_APP).to_bytes()
-        + pack_reconf_command(OP_READ_HBM, addr, BYTE_LANES)
-        + extra_payload
-    )
-    notification = TcpNotification(length=len(request_payload), conn_id=0x6789)
-
-    read_cmd = await tb.send_notification(notification)
-    assert read_cmd == notification.pack()
-
-    await tb.send_rx_payload(request_payload)
-    await tb.send_tx_status_ok()
-
-    metadata_frame, data_frame = await with_timeout(tb.recv_response(), 20, "us")
-
-    assert frame_to_int(metadata_frame) == reconf_response_metadata(notification.conn_id)
-    assert bytes(data_frame.tdata) == expected_payload
-    assert_keep_all(data_frame, BYTE_LANES)
-
-    await tb.expect_no_response()
-    await tb.send_tx_status_ok()
-    await tb.expect_no_response()
 
 
 @cocotb.test()
@@ -927,9 +699,8 @@ async def test_request_cut_at_legacy_mss_leaves_later_requests_intact(dut):
 
 tests_dir = os.path.dirname(__file__)
 rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "rtl"))
-reconf_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "reconfctrl", "rtl"))
+apps_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "apps"))
 taxi_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "..", "..", "lib", "taxi", "axis", "rtl"))
-taxi_prim_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "..", "..", "lib", "taxi", "prim", "rtl"))
 
 
 def test_reassembly(request):
@@ -938,21 +709,14 @@ def test_reassembly(request):
     verilog_sources = [
         os.path.join(taxi_rtl_dir, "taxi_axis_if.sv"),
         os.path.join(taxi_rtl_dir, "taxi_axis_fifo.sv"),
-        os.path.join(taxi_prim_rtl_dir, "taxi_penc.sv"),
-        os.path.join(taxi_prim_rtl_dir, "taxi_arbiter.sv"),
-        os.path.join(taxi_rtl_dir, "taxi_axis_register.sv"),
-        os.path.join(taxi_rtl_dir, "taxi_axis_switch.sv"),
         os.path.join(rtl_dir, "axis_fifo_taxi.sv"),
         os.path.join(rtl_dir, "axis_data_fifo_replacements.sv"),
         os.path.join(rtl_dir, "axis_register.v"),
         os.path.join(rtl_dir, "axis_pipeline_register.v"),
         os.path.join(rtl_dir, "dispatcher.v"),
         os.path.join(rtl_dir, "scheduler.v"),
-        os.path.join(rtl_dir, "slot_tx_axis_switch.sv"),
-        os.path.join(reconf_rtl_dir, "axis_dfx_decoupler.sv"),
-        os.path.join(tests_dir, "cell_bbx_pattern_sim.sv"),
-        os.path.join(reconf_rtl_dir, "reconfctrl.v"),
-        os.path.join(reconf_rtl_dir, "icap_ctrl.v"),
+        os.path.join(apps_dir, "pattern_slot", "src", "rtl", "pattern_slot.v"),
+        os.path.join(apps_dir, "pattern_slot", "src", "rtl", "pattern_slot_core.v"),
         os.path.join(rtl_dir, "pkt_logic.v"),
         os.path.join(rtl_dir, "pkt_receiver.v"),
         os.path.join(rtl_dir, "pkt_sender.v"),

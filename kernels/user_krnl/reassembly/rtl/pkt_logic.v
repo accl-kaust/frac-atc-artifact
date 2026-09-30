@@ -1,12 +1,34 @@
 `timescale 1ns / 1ps
 
-module pkt_logic #(
-    parameter PATTERN_APP = 16'h0000,
-    parameter OR_APP = 16'h0001,
-    parameter RECONF_APP = 16'h00ab,
-    parameter integer APP_DELAY_CYCLES = 16,
-    parameter integer SLOT_COUNT = 2
-) (
+// One pattern_slot, instantiated directly: no partial reconfiguration.
+//
+//   pkt_rx -> dispatcher -> scheduler -> pattern_slot -> pkt_tx
+//
+// Every request goes to the one kernel, whatever its workload, so the
+// scheduler's whole-request grant is all the steering there is.  Nothing of
+// the PR slot boundary is left: no cell_bbx, no decouplers, no second slot
+// or output switch, no reconfiguration controller or ICAP, and none of the
+// boundary pipelines that were there to reach the cells' pblocks.
+// pattern_slot keeps a skid buffer on each side, so the scheduler's output
+// FIFO, the kernel and pkt_sender's FIFOs still meet at flops.
+//
+// The kernel sees the same flat stream a PR cell did (pattern_slot_core.v):
+//
+//   tdata[544:513] = meta_TDATA      {request_bytes[15:0], session_id[15:0]}
+//   tdata[512]     = tlast, in-band  (the request's last beat)
+//   tdata[511:0]   = payload
+//
+// meta_TDATA[31:16] is the size of the whole request (the header's
+// packet_size, see scheduler.v rx_req_size).  The echo sends every beat back
+// with the meta unchanged, which is the format pkt_sender consumes: it takes
+// the meta of the beat carrying tlast as the TCP tx metadata {length,
+// session}.
+//
+// m_axi, the HBM master the reconfiguration controller drove, stays on the
+// port list so tcp_top_loopback, user_krnl and frac_hbm are unchanged.  It is
+// tied off: nothing is ever requested, and a response would be taken.
+
+module pkt_logic (
     input  wire                     clk,
     input  wire                     rst,
     input  wire [512+88-1 + 1 : 0]  pkt_rx_tdata,
@@ -50,9 +72,8 @@ module pkt_logic #(
 );
 
     wire [512 + 32 + 32 + 16:0] dispatcher_tdata;
-    wire                         dispatcher_tvalid;
-    wire                         dispatcher_tready;
-    wire                         scheduler_rx_tready;
+    wire                        dispatcher_tvalid;
+    wire                        dispatcher_tready;
 
     dispatcher dispatcher_inst (
         .clk(clk),
@@ -66,704 +87,73 @@ module pkt_logic #(
     );
 
     wire [512 + 16 + 32 + 16 + 1:0] scheduler_tdata;
-    wire                        scheduler_tvalid;
-    reg                         scheduler_tready;
-
-    wire [512:0] dispatcher_payload = dispatcher_tdata[512:0];
-    wire [31:0]  dispatcher_meta = dispatcher_tdata[512+32:512+1];
-    wire [15:0]  dispatcher_workload = dispatcher_tdata[512+32+16:512+32+1];
-    wire         dispatcher_reconf_selected = dispatcher_workload == RECONF_APP;
+    wire                            scheduler_tvalid;
+    wire                            scheduler_tready;
 
     scheduler scheduler_inst (
         .clk(clk),
         .rst(rst),
         .rx_tdata(dispatcher_tdata),
-        .rx_tvalid(dispatcher_tvalid && !dispatcher_reconf_selected),
-        .rx_tready(scheduler_rx_tready),
+        .rx_tvalid(dispatcher_tvalid),
+        .rx_tready(dispatcher_tready),
         .tx_tdata(scheduler_tdata),
         .tx_tvalid(scheduler_tvalid),
         .tx_tready(scheduler_tready)
     );
 
-    wire [512:0] app_rx_payload = scheduler_tdata[512:0];
-    wire [31:0]  app_rx_meta = scheduler_tdata[512+32:512+1]; // {request_bytes[15:0], session_id[15:0]}: upstream meta_TDATA with the whole request's size in the length field (see scheduler.v rx_req_size)
-    wire [15:0]  app_rx_workload = scheduler_tdata[512+32+16:512+32+1];
+    wire [511:0] app_rx_payload  = scheduler_tdata[511:0];
+    wire [31:0]  app_rx_meta     = scheduler_tdata[512+32:512+1];
     wire         app_rx_req_last = scheduler_tdata[512+32+16+16+1];
 
-    wire pattern_rx_ready;
-    wire or_rx_ready;
-    wire reconf_rx_ready;
-
-    reg  reconf_seen_header = 1'b0;
-    reg  reconf_drain_packet = 1'b0;
-
-    wire reconf_header_line = dispatcher_reconf_selected && !reconf_seen_header;
-    wire reconf_payload_line = dispatcher_reconf_selected && reconf_seen_header;
-    wire reconf_forward_line = reconf_payload_line && !reconf_drain_packet;
-
-    wire pattern_rx_valid = scheduler_tvalid && (app_rx_workload != OR_APP);
-    wire or_rx_valid = scheduler_tvalid && (app_rx_workload == OR_APP);
-    wire reconf_rx_valid = dispatcher_tvalid && reconf_forward_line;
-
-    wire [511:0] reconf_tx_tdata;
-    wire [63:0]  reconf_tx_tkeep;
-    wire         reconf_tx_tlast;
-    wire         reconf_tx_tvalid;
-    wire         reconf_tx_tready;
-    wire [3:0]   reconf_state;
-    wire [7:0]   reconf_last_error;
-    reg  [31:0]  reconf_tx_meta = 32'd0;
-    wire         reconf_axis_icap_tvalid;
-    wire [31:0]  reconf_axis_icap_tdata;
-    wire         reconf_axis_icap_tlast;
-    wire         reconf_axis_icap_tready;
-    wire         icap_pr_done;
-    wire         icap_pr_err;
-    wire         icap_avail;
-    wire         icap_pr_done_reconf;
-    wire         icap_pr_err_reconf;
-    wire         icap_avail_reconf;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg1 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg2 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg3 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg4 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg5 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg6 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg7 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg8 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg9 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_done_reg10 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg1 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg2 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg3 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg4 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg5 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg6 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg7 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg8 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg9 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_pr_err_reg10 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg1 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg2 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg3 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg4 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg5 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg6 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg7 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg8 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg9 = 1'b0;
-    (* shreg_extract = "no" *) reg icap_avail_reg10 = 1'b0;
-    wire [SLOT_COUNT-1:0] slot_decouple;
-    wire         reconf_active;
-    wire [7:0]   reconf_active_slot_id;
-    wire [7:0]   reconf_last_slot_id;
-    wire [63:0]  reconf_cycles;
-    wire [63:0]  reconf_last_cycles;
-
-    assign icap_pr_done_reconf = icap_pr_done_reg10;
-    assign icap_pr_err_reconf = icap_pr_err_reg10;
-    assign icap_avail_reconf = icap_avail_reg10;
-
-    always @(posedge clk) begin
-        if (rst) begin
-            icap_pr_done_reg1 <= 1'b0;
-            icap_pr_done_reg2 <= 1'b0;
-            icap_pr_done_reg3 <= 1'b0;
-            icap_pr_done_reg4 <= 1'b0;
-            icap_pr_done_reg5 <= 1'b0;
-            icap_pr_done_reg6 <= 1'b0;
-            icap_pr_done_reg7 <= 1'b0;
-            icap_pr_done_reg8 <= 1'b0;
-            icap_pr_done_reg9 <= 1'b0;
-            icap_pr_done_reg10 <= 1'b0;
-            icap_pr_err_reg1 <= 1'b0;
-            icap_pr_err_reg2 <= 1'b0;
-            icap_pr_err_reg3 <= 1'b0;
-            icap_pr_err_reg4 <= 1'b0;
-            icap_pr_err_reg5 <= 1'b0;
-            icap_pr_err_reg6 <= 1'b0;
-            icap_pr_err_reg7 <= 1'b0;
-            icap_pr_err_reg8 <= 1'b0;
-            icap_pr_err_reg9 <= 1'b0;
-            icap_pr_err_reg10 <= 1'b0;
-            icap_avail_reg1 <= 1'b0;
-            icap_avail_reg2 <= 1'b0;
-            icap_avail_reg3 <= 1'b0;
-            icap_avail_reg4 <= 1'b0;
-            icap_avail_reg5 <= 1'b0;
-            icap_avail_reg6 <= 1'b0;
-            icap_avail_reg7 <= 1'b0;
-            icap_avail_reg8 <= 1'b0;
-            icap_avail_reg9 <= 1'b0;
-            icap_avail_reg10 <= 1'b0;
-        end else begin
-            icap_pr_done_reg1 <= icap_pr_done;
-            icap_pr_done_reg2 <= icap_pr_done_reg1;
-            icap_pr_done_reg3 <= icap_pr_done_reg2;
-            icap_pr_done_reg4 <= icap_pr_done_reg3;
-            icap_pr_done_reg5 <= icap_pr_done_reg4;
-            icap_pr_done_reg6 <= icap_pr_done_reg5;
-            icap_pr_done_reg7 <= icap_pr_done_reg6;
-            icap_pr_done_reg8 <= icap_pr_done_reg7;
-            icap_pr_done_reg9 <= icap_pr_done_reg8;
-            icap_pr_done_reg10 <= icap_pr_done_reg9;
-            icap_pr_err_reg1 <= icap_pr_err;
-            icap_pr_err_reg2 <= icap_pr_err_reg1;
-            icap_pr_err_reg3 <= icap_pr_err_reg2;
-            icap_pr_err_reg4 <= icap_pr_err_reg3;
-            icap_pr_err_reg5 <= icap_pr_err_reg4;
-            icap_pr_err_reg6 <= icap_pr_err_reg5;
-            icap_pr_err_reg7 <= icap_pr_err_reg6;
-            icap_pr_err_reg8 <= icap_pr_err_reg7;
-            icap_pr_err_reg9 <= icap_pr_err_reg8;
-            icap_pr_err_reg10 <= icap_pr_err_reg9;
-            icap_avail_reg1 <= icap_avail;
-            icap_avail_reg2 <= icap_avail_reg1;
-            icap_avail_reg3 <= icap_avail_reg2;
-            icap_avail_reg4 <= icap_avail_reg3;
-            icap_avail_reg5 <= icap_avail_reg4;
-            icap_avail_reg6 <= icap_avail_reg5;
-            icap_avail_reg7 <= icap_avail_reg6;
-            icap_avail_reg8 <= icap_avail_reg7;
-            icap_avail_reg9 <= icap_avail_reg8;
-            icap_avail_reg10 <= icap_avail_reg9;
-        end
-    end
-
-    assign dispatcher_tready = dispatcher_reconf_selected ?
-        (reconf_header_line ? (reconf_state == 4'd0) : (reconf_drain_packet ? 1'b1 : reconf_rx_ready)) :
-        scheduler_rx_tready;
-
-    always @* begin
-        if (app_rx_workload == OR_APP) begin
-            scheduler_tready = or_rx_ready;
-        end else begin
-            scheduler_tready = pattern_rx_ready;
-        end
-    end
-
-    reconfctrl #(
-        .ADDR_WIDTH(33),
-        .AXI_DATA_WIDTH(256),
-        .AXIS_DATA_WIDTH(512),
-        .ICAP_DATA_WIDTH(32),
-        .SLOT_COUNT(SLOT_COUNT)
-    ) reconfctrl_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tvalid(reconf_rx_valid),
-        .s_axis_tready(reconf_rx_ready),
-        .s_axis_tdata(dispatcher_payload[511:0]),
-        .s_axis_tkeep({64{1'b1}}),
-        .s_axis_tlast(dispatcher_payload[512]),
-        .m_axis_tvalid(reconf_tx_tvalid),
-        .m_axis_tready(reconf_tx_tready),
-        .m_axis_tdata(reconf_tx_tdata),
-        .m_axis_tkeep(reconf_tx_tkeep),
-        .m_axis_tlast(reconf_tx_tlast),
-        .m_axis_icap_tvalid(reconf_axis_icap_tvalid),
-        .m_axis_icap_tready(reconf_axis_icap_tready),
-        .m_axis_icap_tdata(reconf_axis_icap_tdata),
-        .m_axis_icap_tlast(reconf_axis_icap_tlast),
-        .icap_pr_done(icap_pr_done_reconf),
-        .icap_pr_err(icap_pr_err_reconf),
-        .icap_avail(icap_avail_reconf),
-        .slot_decouple(slot_decouple),
-        .m_axi_awaddr(m_axi_awaddr),
-        .m_axi_awburst(m_axi_awburst),
-        .m_axi_awid(m_axi_awid),
-        .m_axi_awlen(m_axi_awlen),
-        .m_axi_awsize(m_axi_awsize),
-        .m_axi_awvalid(m_axi_awvalid),
-        .m_axi_awready(m_axi_awready),
-        .m_axi_wdata(m_axi_wdata),
-        .m_axi_wstrb(m_axi_wstrb),
-        .m_axi_wdata_parity(m_axi_wdata_parity),
-        .m_axi_wlast(m_axi_wlast),
-        .m_axi_wvalid(m_axi_wvalid),
-        .m_axi_wready(m_axi_wready),
-        .m_axi_bid(m_axi_bid),
-        .m_axi_bresp(m_axi_bresp),
-        .m_axi_bvalid(m_axi_bvalid),
-        .m_axi_bready(m_axi_bready),
-        .m_axi_araddr(m_axi_araddr),
-        .m_axi_arburst(m_axi_arburst),
-        .m_axi_arid(m_axi_arid),
-        .m_axi_arlen(m_axi_arlen),
-        .m_axi_arsize(m_axi_arsize),
-        .m_axi_arvalid(m_axi_arvalid),
-        .m_axi_arready(m_axi_arready),
-        .m_axi_rid(m_axi_rid),
-        .m_axi_rdata(m_axi_rdata),
-        .m_axi_rdata_parity(m_axi_rdata_parity),
-        .m_axi_rresp(m_axi_rresp),
-        .m_axi_rlast(m_axi_rlast),
-        .m_axi_rvalid(m_axi_rvalid),
-        .m_axi_rready(m_axi_rready),
-        .state(reconf_state),
-        .last_error(reconf_last_error),
-        .reconf_active(reconf_active),
-        .active_slot_id(reconf_active_slot_id),
-        .last_slot_id(reconf_last_slot_id),
-        .reconf_cycles(reconf_cycles),
-        .last_reconf_cycles(reconf_last_cycles)
-    );
-
-    icap_ctrl #(
-        .DATA_WIDTH(32)
-    ) icap_ctrl_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(reconf_axis_icap_tdata),
-        .s_axis_tkeep(4'hf),
-        .s_axis_tlast(reconf_axis_icap_tlast),
-        .s_axis_tready(reconf_axis_icap_tready),
-        .s_axis_tvalid(reconf_axis_icap_tvalid),
-        .pr_done(icap_pr_done),
-        .pr_err(icap_pr_err),
-        .avail(icap_avail)
-    );
-
-    always @(posedge clk) begin
-        if (rst) begin
-            reconf_seen_header <= 1'b0;
-            reconf_drain_packet <= 1'b0;
-            reconf_tx_meta <= 32'd0;
-        end else if (dispatcher_tvalid && dispatcher_tready && reconf_header_line) begin
-            reconf_tx_meta <= {16'd64, dispatcher_meta[15:0]};
-            reconf_seen_header <= !dispatcher_payload[512];
-            reconf_drain_packet <= 1'b0;
-        end else if (dispatcher_tvalid && dispatcher_tready && reconf_payload_line && dispatcher_payload[512]) begin
-            reconf_seen_header <= 1'b0;
-            reconf_drain_packet <= 1'b0;
-        end else if (reconf_tx_tvalid && reconf_tx_tready && reconf_tx_tlast && reconf_seen_header) begin
-            reconf_drain_packet <= 1'b1;
-        end
-    end
-
-    // ------------------------------------------------------------------
-    // Accelerator slot boundary (C00 and C01 are identical).
-    //
-    // Same data and metadata paths as the upstream offrac kernel
-    // (kernel/user_krnl/offrac_krnl/src/hdl/offrac/pkt_logic.v +
-    // echo_workload.v), with the workload ports flattened onto one
-    // AXI-Stream so the PR cell keeps a single flat AXIS boundary:
-    //
-    //   tdata[544:513] = meta_TDATA      {request_bytes[15:0], session_id[15:0]}
-    //   tdata[512]     = rx_TDATA[512]   tlast, in-band (tlast line duplicates it)
-    //   tdata[511:0]   = rx_TDATA[511:0] payload
-    //
-    // meta_TDATA[31:16] is the size of the whole request (the header's
-    // packet_size, put there by the scheduler), not the TCP packet's length
-    // as upstream had it, so the slot can take the request length from meta.
-    // Every beat of a request enters the slot.  Every beat the slot emits is
-    // already {meta_TDATA_out, tlast, payload}, the format the output switch
-    // and pkt_sender consume, so it is forwarded as-is (upstream pushes the
-    // same word into the per-workload result FIFO); pkt_sender takes the meta
-    // of the beat carrying tlast as the TCP tx metadata {length, session}.
-    // ------------------------------------------------------------------
     localparam integer SLOT_DATA_W = 512 + 1 + 32;
 
-    // ---- C00 ----
-    wire [SLOT_DATA_W-1:0] pattern_rx_tdata = {app_rx_meta, app_rx_req_last, app_rx_payload[511:0]};
-    wire [SLOT_DATA_W-1:0] pattern_piped_tdata;
-    wire                   pattern_piped_tvalid;
-    wire                   pattern_piped_tready;
-    wire                   pattern_piped_tlast;
-    wire [SLOT_DATA_W-1:0] pattern_decoupled_tdata;
-    wire                   pattern_decoupled_tvalid;
-    wire                   pattern_decoupled_tready;
-    wire                   pattern_decoupled_tlast;
-    wire                   pattern_app_ready;
-    wire [SLOT_DATA_W-1:0] pattern_slot_tx_data_raw;
-    wire                   pattern_slot_tx_valid_raw;
-    wire                   pattern_slot_tx_ready_raw;
-    wire                   pattern_slot_tx_last_raw;
-    wire [SLOT_DATA_W-1:0] pattern_tx_decoupled_tdata;
-    wire                   pattern_tx_decoupled_tvalid;
-    wire                   pattern_tx_decoupled_tready;
-    wire                   pattern_tx_decoupled_tlast;
-    wire [SLOT_DATA_W-1:0] pattern_tx_tdata;
-    wire                   pattern_tx_valid;
-    wire                   pattern_tx_ready;
-
-    // echo_workload.v: rx_TREADY comes straight from the workload, now through
-    // the input pipeline.
-    assign pattern_rx_ready = pattern_piped_tready;
-
-    // The pipeline stages sit OUTSIDE the decoupler deliberately.  The decoupler
-    // stays the last thing before the RM, so isolation during reconfiguration is
-    // exactly what it was and no beat can be stranded between a pipe stage and a
-    // partition that is being rewritten; a stage placed inside would still be
-    // holding the RM's stale handshake when the cell came back.
-    //
-    // LENGTH is given at each instantiation rather than through a module
-    // parameter, so the depth of a slot boundary is visible where that boundary
-    // is built.  All four are 20: the cells sit in a different SLR from the
-    // scheduler and the output switch, and the abstract shell implementation of
-    // each RM has to close timing across that distance.
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) pattern_slot_pr_in_pipe_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(pattern_rx_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(pattern_rx_valid),
-        .s_axis_tready(pattern_piped_tready),
-        .s_axis_tlast(app_rx_req_last),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_piped_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(pattern_piped_tvalid),
-        .m_axis_tready(pattern_decoupled_tready),
-        .m_axis_tlast(pattern_piped_tlast),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
-    );
-
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) pattern_slot_decoupler_inst (
-        .decouple(slot_decouple[0]),
-        .s_axis_tdata(pattern_piped_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_piped_tvalid),
-        .s_axis_tready(pattern_decoupled_tready),
-        .s_axis_tlast(pattern_piped_tlast),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(pattern_decoupled_tvalid),
-        .m_axis_tready(pattern_app_ready),
-        .m_axis_tlast(pattern_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    cell_bbx #(
+    pattern_slot #(
         .AXIS_DATA_W(SLOT_DATA_W),
         .KEEP_W(1),
         .TDEST_W(1),
         .TID_W(1),
         .USER_W(1)
-    ) c00_bbx_inst (
+    ) pattern_slot_inst (
         .clk(clk),
         .rst(rst),
-        .s_axis_tdata(pattern_decoupled_tdata),
+        .s_axis_tdata({app_rx_meta, app_rx_req_last, app_rx_payload}),
         .s_axis_tkeep(1'b1),
         .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_decoupled_tvalid),
-        .s_axis_tready(pattern_app_ready),
-        .s_axis_tlast(pattern_decoupled_tlast),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_slot_tx_data_raw),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(pattern_slot_tx_valid_raw),
-        .m_axis_tready(pattern_slot_tx_ready_raw),
-        .m_axis_tlast(pattern_slot_tx_last_raw),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) pattern_slot_tx_decoupler_inst (
-        .decouple(slot_decouple[0]),
-        .s_axis_tdata(pattern_slot_tx_data_raw),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_slot_tx_valid_raw),
-        .s_axis_tready(pattern_slot_tx_ready_raw),
-        .s_axis_tlast(pattern_slot_tx_last_raw),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_tx_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(pattern_tx_decoupled_tvalid),
-        .m_axis_tready(pattern_tx_decoupled_tready),
-        .m_axis_tlast(pattern_tx_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    // Registered so the slot output has a clean timing boundary before the
-    // switch.  The frame boundary the switch and pkt_sender use is the in-band
-    // tdata[512], exactly as upstream; the AXIS tlast is only carried along.
-    //
-    // Deeper than one stage because a single flop here has to serve two masters:
-    // it is the first capture point for the RM's output pin and it has to reach
-    // the switch.  With several, the placer can leave the first next to the
-    // pblock and spend the rest of the budget on the trip back.
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) pattern_slot_tx_reg_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(pattern_tx_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(pattern_tx_decoupled_tvalid),
-        .s_axis_tready(pattern_tx_decoupled_tready),
-        .s_axis_tlast(pattern_tx_decoupled_tlast),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_tx_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(pattern_tx_valid),
-        .m_axis_tready(pattern_tx_ready),
-        .m_axis_tlast(),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
-    );
-
-    // ---- C01 ----
-    wire [SLOT_DATA_W-1:0] or_rx_tdata = {app_rx_meta, app_rx_req_last, app_rx_payload[511:0]};
-    wire [SLOT_DATA_W-1:0] or_piped_tdata;
-    wire                   or_piped_tvalid;
-    wire                   or_piped_tready;
-    wire                   or_piped_tlast;
-    wire [SLOT_DATA_W-1:0] or_decoupled_tdata;
-    wire                   or_decoupled_tvalid;
-    wire                   or_decoupled_tready;
-    wire                   or_decoupled_tlast;
-    wire                   or_app_ready;
-    wire [SLOT_DATA_W-1:0] or_slot_tx_data_raw;
-    wire                   or_slot_tx_valid_raw;
-    wire                   or_slot_tx_ready_raw;
-    wire                   or_slot_tx_last_raw;
-    wire [SLOT_DATA_W-1:0] or_tx_decoupled_tdata;
-    wire                   or_tx_decoupled_tvalid;
-    wire                   or_tx_decoupled_tready;
-    wire                   or_tx_decoupled_tlast;
-    wire [SLOT_DATA_W-1:0] or_tx_tdata;
-    wire                   or_tx_valid;
-    wire                   or_tx_ready;
-
-    // echo_workload.v: rx_TREADY comes straight from the workload, now through
-    // the input pipeline.
-    assign or_rx_ready = or_piped_tready;
-
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) or_slot_pr_in_pipe_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(or_rx_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(or_rx_valid),
-        .s_axis_tready(or_piped_tready),
+        .s_axis_tvalid(scheduler_tvalid),
+        .s_axis_tready(scheduler_tready),
         .s_axis_tlast(app_rx_req_last),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_piped_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(or_piped_tvalid),
-        .m_axis_tready(or_decoupled_tready),
-        .m_axis_tlast(or_piped_tlast),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
-    );
-
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) or_slot_decoupler_inst (
-        .decouple(slot_decouple[1]),
-        .s_axis_tdata(or_piped_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_piped_tvalid),
-        .s_axis_tready(or_decoupled_tready),
-        .s_axis_tlast(or_piped_tlast),
         .s_axis_tdest(1'b0),
         .s_axis_tid(1'b0),
         .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(or_decoupled_tvalid),
-        .m_axis_tready(or_app_ready),
-        .m_axis_tlast(or_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    cell_bbx #(
-        .AXIS_DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .TDEST_W(1),
-        .TID_W(1),
-        .USER_W(1)
-    ) c01_bbx_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(or_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_decoupled_tvalid),
-        .s_axis_tready(or_app_ready),
-        .s_axis_tlast(or_decoupled_tlast),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_slot_tx_data_raw),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(or_slot_tx_valid_raw),
-        .m_axis_tready(or_slot_tx_ready_raw),
-        .m_axis_tlast(or_slot_tx_last_raw),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) or_slot_tx_decoupler_inst (
-        .decouple(slot_decouple[1]),
-        .s_axis_tdata(or_slot_tx_data_raw),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_slot_tx_valid_raw),
-        .s_axis_tready(or_slot_tx_ready_raw),
-        .s_axis_tlast(or_slot_tx_last_raw),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_tx_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(or_tx_decoupled_tvalid),
-        .m_axis_tready(or_tx_decoupled_tready),
-        .m_axis_tlast(or_tx_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    // Registered so the slot output has a clean timing boundary before the
-    // switch.  The frame boundary the switch and pkt_sender use is the in-band
-    // tdata[512], exactly as upstream; the AXIS tlast is only carried along.
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) or_slot_tx_reg_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(or_tx_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(or_tx_decoupled_tvalid),
-        .s_axis_tready(or_tx_decoupled_tready),
-        .s_axis_tlast(or_tx_decoupled_tlast),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_tx_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(or_tx_valid),
-        .m_axis_tready(or_tx_ready),
-        .m_axis_tlast(),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
-    );
-
-    slot_tx_axis_switch #(
-        .DATA_W(SLOT_DATA_W),
-        .TLAST_IDX(512)
-    ) slot_tx_axis_switch_inst (
-        .clk(clk),
-        .rst(rst),
-        .s00_axis_tdata(pattern_tx_tdata),
-        .s00_axis_tvalid(pattern_tx_valid),
-        .s00_axis_tready(pattern_tx_ready),
-        .s01_axis_tdata(or_tx_tdata),
-        .s01_axis_tvalid(or_tx_valid),
-        .s01_axis_tready(or_tx_ready),
-        .s02_axis_tdata({reconf_tx_meta, reconf_tx_tlast, reconf_tx_tdata}),
-        .s02_axis_tvalid(reconf_tx_tvalid),
-        .s02_axis_tready(reconf_tx_tready),
         .m_axis_tdata(pkt_tx_tdata),
+        .m_axis_tkeep(),
+        .m_axis_tstrb(),
         .m_axis_tvalid(pkt_tx_tvalid),
-        .m_axis_tready(pkt_tx_tready)
+        .m_axis_tready(pkt_tx_tready),
+        .m_axis_tlast(),
+        .m_axis_tdest(),
+        .m_axis_tid(),
+        .m_axis_tuser()
     );
+
+    assign m_axi_awaddr       = 33'd0;
+    assign m_axi_awburst      = 2'd0;
+    assign m_axi_awid         = 6'd0;
+    assign m_axi_awlen        = 8'd0;
+    assign m_axi_awsize       = 3'd0;
+    assign m_axi_awvalid      = 1'b0;
+    assign m_axi_wdata        = 256'd0;
+    assign m_axi_wstrb        = 32'd0;
+    assign m_axi_wdata_parity = 32'd0;
+    assign m_axi_wlast        = 1'b0;
+    assign m_axi_wvalid       = 1'b0;
+    assign m_axi_bready       = 1'b1;
+    assign m_axi_araddr       = 33'd0;
+    assign m_axi_arburst      = 2'd0;
+    assign m_axi_arid         = 6'd0;
+    assign m_axi_arlen        = 8'd0;
+    assign m_axi_arsize       = 3'd0;
+    assign m_axi_arvalid      = 1'b0;
+    assign m_axi_rready       = 1'b1;
 
 endmodule
