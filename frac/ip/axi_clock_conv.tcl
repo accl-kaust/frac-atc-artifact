@@ -50,3 +50,35 @@ set_property -dict [list \
                         CONFIG.REG_R {1} \
                         CONFIG.REG_B {1}
                    ] [get_ips axi_reg_slice_hbm]
+
+# Between each width converter and its protocol converter: every channel fully
+# registered, so neither converter's logic shares a cycle with the other's
+create_ip -name axi_register_slice -vendor xilinx.com -library ip -module_name axi_reg_slice_256
+
+set_property -dict [list \
+                        CONFIG.PROTOCOL {AXI4} \
+                        CONFIG.ADDR_WIDTH {64} \
+                        CONFIG.DATA_WIDTH {256} \
+                        CONFIG.ID_WIDTH {0} \
+                        CONFIG.REG_AW {1} \
+                        CONFIG.REG_AR {1} \
+                        CONFIG.REG_W {1} \
+                        CONFIG.REG_R {1} \
+                        CONFIG.REG_B {1}
+                   ] [get_ips axi_reg_slice_256]
+
+# Between each clock converter and its width converter: only the read channel
+# is registered, in front of the clock converter's read FIFO write enable
+create_ip -name axi_register_slice -vendor xilinx.com -library ip -module_name axi_reg_slice_512_r
+
+set_property -dict [list \
+                        CONFIG.PROTOCOL {AXI4} \
+                        CONFIG.ADDR_WIDTH {64} \
+                        CONFIG.DATA_WIDTH {512} \
+                        CONFIG.ID_WIDTH {0} \
+                        CONFIG.REG_AW {0} \
+                        CONFIG.REG_AR {0} \
+                        CONFIG.REG_W {0} \
+                        CONFIG.REG_R {1} \
+                        CONFIG.REG_B {0}
+                   ] [get_ips axi_reg_slice_512_r]
