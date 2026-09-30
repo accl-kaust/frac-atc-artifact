@@ -257,7 +257,7 @@ We measure performance with our libtpa based perf tool.
    # set TPA_ETH_DEV to ConnectX-6 Dx interface connected to Alveo U280
    $ cd ~/libtpa
 
-   $ sudo TPA_ID=client TPA_ETH_DEV=enp33s0f0np0 TPA_CFG="tcp {tso = 0; } dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }" /home/hpcadmin/.local/bin/tpa run build/bin/app/fperf -c 172.24.1.52 -p 2888 -t rr -d 5 -n 22 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 1
+   $ sudo TPA_ID=client TPA_ETH_DEV=enp33s0f0np0 TPA_CFG="tcp {tso = 0; } dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }" /home/atcae/.local/bin/tpa run build/bin/app/fperf -c 172.24.1.52 -p 2888 -t rr -d 5 -n 22 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 1
 
 .. code-block:: output
 
