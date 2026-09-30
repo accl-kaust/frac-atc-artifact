@@ -1,13 +1,13 @@
 # AXI clock converters, and the register slices that go with them, in front of
 # the HBM (frac_hbm.v). The masters -- the TCP stack's two memory ports and the
-# reconfiguration controller -- run on the 200 MHz design clock; the HBM AXI
+# reconfiguration controller -- run on the 250 MHz design clock; the HBM AXI
 # ports and the width and protocol converters before them run on the 400 MHz
 # HBM AXI clock.
 #
 # The conversion happens at 512 bits, before the 512->256 width converter, so
-# the HBM port carries 256 b x 400 MHz = 12.8 GB/s: the whole 512 b x 200 MHz
-# stream. Converting after the width converter would leave the port at 256 b x
-# 200 MHz, 6.4 GB/s, which is the limit this replaces.
+# the HBM port carries 256 b x 400 MHz = 12.8 GB/s, above the 100G line rate
+# (12.5 GB/s). Converting after the width converter would leave the port at
+# 256 b x 250 MHz, 8 GB/s.
 
 # m00_axi (TX buffer) and m01_axi (RX buffer, idle with RX_DDR_BYPASS)
 create_ip -name axi_clock_converter -vendor xilinx.com -library ip -module_name axi_clock_conv_512

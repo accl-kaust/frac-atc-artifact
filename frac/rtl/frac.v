@@ -18,7 +18,7 @@ module frac (
     input wire        sys_rstn
 );
 
-wire clk;
+wire clk;           // the design clock, 250 MHz
 wire sys_clk_ibufg;
 wire mmcm_clkfb;
 wire mmcm_locked;
@@ -230,16 +230,22 @@ clk_100mhz_0_ibufg_inst (
    .IB  (sys_clk_n)
 );
 
+// 1500 MHz VCO: 400 MHz for the HBM AXI ports, 50 MHz for the HBM APB and
+// 250 MHz for the design clock.  No VCO in the MMCM's 800-1600 MHz range
+// divides to both 250 and 400 MHz by whole numbers, and the ones that give
+// 400 (1200, 1600) would need 4.8 or 6.4 for 250, finer than the eighths the
+// fractional divider steps in.  So the HBM clock takes CLKOUT0, the only
+// output with a fractional divider, at 1500 / 3.75, and the design clock
+// divides by a whole 6.
 MMCME4_BASE #(
     .BANDWIDTH("OPTIMIZED"),
-    .CLKOUT0_DIVIDE_F(6),
+    .CLKOUT0_DIVIDE_F(3.75),
     .CLKOUT0_DUTY_CYCLE(0.5),
     .CLKOUT0_PHASE(0),
-    .CLKOUT1_DIVIDE(24),
+    .CLKOUT1_DIVIDE(30),
     .CLKOUT1_DUTY_CYCLE(0.5),
     .CLKOUT1_PHASE(0),
-    // 1200 MHz VCO / 3 = 400 MHz for the HBM AXI ports
-    .CLKOUT2_DIVIDE(3),
+    .CLKOUT2_DIVIDE(6),
     .CLKOUT2_DUTY_CYCLE(0.5),
     .CLKOUT2_PHASE(0),
     .CLKOUT3_DIVIDE(1),
@@ -254,7 +260,7 @@ MMCME4_BASE #(
     .CLKOUT6_DIVIDE(1),
     .CLKOUT6_DUTY_CYCLE(0.5),
     .CLKOUT6_PHASE(0),
-    .CLKFBOUT_MULT_F(12),
+    .CLKFBOUT_MULT_F(15),
     .CLKFBOUT_PHASE(0),
     .DIVCLK_DIVIDE(1),
     .REF_JITTER1(0.010),
@@ -267,11 +273,11 @@ main_clk_mmcm_inst (
     .CLKFBIN(mmcm_clkfb),
     .RST(sys_rst),
     .PWRDWN(1'b0),
-    .CLKOUT0(clk),
+    .CLKOUT0(hbm_axi_clk),
     .CLKOUT0B(),
     .CLKOUT1(hbm_apb_clk),
     .CLKOUT1B(),
-    .CLKOUT2(hbm_axi_clk),
+    .CLKOUT2(clk),
     .CLKOUT2B(),
     .CLKOUT3(),
     .CLKOUT3B(),

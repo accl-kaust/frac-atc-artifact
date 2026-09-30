@@ -5,13 +5,14 @@
 
 // The three AXI masters -- the TCP stack's m00 (TX buffer) and m01 (RX buffer,
 // idle with RX_DDR_BYPASS) and the reconfiguration controller -- are on
-// s_axi_clk, the 200 MHz design clock. The HBM AXI ports, and the width and
+// s_axi_clk, the 250 MHz design clock. The HBM AXI ports, and the width and
 // protocol converters in front of them, are on hbm_clk, 400 MHz, and each
 // master crosses over in an AXI clock converter.
 //
 // The crossing is at 512 bits, before the 512->256 width converter, so an HBM
-// port carries 256 b x 400 MHz = 12.8 GB/s, the whole 512 b x 200 MHz stream.
-// With everything on the 200 MHz clock the port was 6.4 GB/s = 51.2 Gbps, and
+// port carries 256 b x 400 MHz = 12.8 GB/s, above the 12.5 GB/s of the 100G
+// line rate that paces the TX stream (512 b x 250 MHz bursts at 16 GB/s).
+// With everything on a 200 MHz clock the port was 6.4 GB/s = 51.2 Gbps, and
 // that capped the TCP stack's transmit rate: it writes a copy of every byte it
 // sends into the TX buffer for retransmission.
 module frac_hbm (
