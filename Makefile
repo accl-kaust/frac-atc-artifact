@@ -13,7 +13,13 @@ endif
 NETWORK_BANDWIDTH            ?= 100
 NETWORK_INTERFACE            ?= 100
 DATA_WIDTH                   ?= 64
-CLOCK_PERIOD                 ?= 5.0
+# The HLS target for the network stack IPs, which run on the 200 MHz design
+# clock (frac.v). It is fpga-network-stack's own default, 3.2 ns, rather than
+# the clock's 5.0: at 250 MHz, scheduled for 4.0, the TOE's TX buffer read
+# path (txBufferReadData into read_data_stitching_512) came out eight LUTs
+# deep and missed once routed. Changing it changes CMAKE_ARGS, so the IPs
+# are rebuilt.
+CLOCK_PERIOD                 ?= 3.2
 TCP_STACK_EN                 ?= 0
 UDP_STACK_EN                 ?= 1
 # fpga-network-stack's CMake reads these as TCP_STACK_*. They used to be
