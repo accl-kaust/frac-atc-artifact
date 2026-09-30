@@ -166,60 +166,24 @@ module tcp_top_loopback #(parameter IS_SIM = 0)
     );
 
 
-    wire [512+32-1 + 1: 0] pkt_tdata_int;
-    wire pkt_tvalid_int;
-    wire pkt_tready_int;
-
-
-    pkt_logic pkt_logic_inst(
-        .clk(clk),
-        .rst(rst),
-        .pkt_rx_tdata(pkt_tdata),
-        .pkt_rx_tvalid(pkt_tvalid),
-        .pkt_rx_tready(pkt_tready),
-        .pkt_tx_tdata(pkt_tdata_int),
-        .pkt_tx_tvalid(pkt_tvalid_int),
-        .pkt_tx_tready(pkt_tready_int),
-        .m_axi_awaddr(m_axi_awaddr),
-        .m_axi_awburst(m_axi_awburst),
-        .m_axi_awid(m_axi_awid),
-        .m_axi_awlen(m_axi_awlen),
-        .m_axi_awsize(m_axi_awsize),
-        .m_axi_awvalid(m_axi_awvalid),
-        .m_axi_awready(m_axi_awready),
-        .m_axi_wdata(m_axi_wdata),
-        .m_axi_wstrb(m_axi_wstrb),
-        .m_axi_wdata_parity(m_axi_wdata_parity),
-        .m_axi_wlast(m_axi_wlast),
-        .m_axi_wvalid(m_axi_wvalid),
-        .m_axi_wready(m_axi_wready),
-        .m_axi_bid(m_axi_bid),
-        .m_axi_bresp(m_axi_bresp),
-        .m_axi_bvalid(m_axi_bvalid),
-        .m_axi_bready(m_axi_bready),
-        .m_axi_araddr(m_axi_araddr),
-        .m_axi_arburst(m_axi_arburst),
-        .m_axi_arid(m_axi_arid),
-        .m_axi_arlen(m_axi_arlen),
-        .m_axi_arsize(m_axi_arsize),
-        .m_axi_arvalid(m_axi_arvalid),
-        .m_axi_arready(m_axi_arready),
-        .m_axi_rid(m_axi_rid),
-        .m_axi_rdata(m_axi_rdata),
-        .m_axi_rdata_parity(m_axi_rdata_parity),
-        .m_axi_rresp(m_axi_rresp),
-        .m_axi_rlast(m_axi_rlast),
-        .m_axi_rvalid(m_axi_rvalid),
-        .m_axi_rready(m_axi_rready)
-    );
-
-
+    // No pkt_logic: pkt_receiver feeds pkt_sender directly, with no PR cell,
+    // dispatcher, scheduler or kernel between them.
+    //
+    // pkt_receiver's beat is {notification[87:0], tlast, payload}, and the
+    // notification's low 32 bits are the segment's {length, session} -- the
+    // {length, session} pkt_sender reads from the beat carrying tlast.  So the
+    // low 545 bits are already pkt_sender's {meta, tlast, payload}, and every
+    // TCP segment read goes back out as its own response, on its own session,
+    // announced with its own length.  Nothing parses the request header: a
+    // request spread over several segments comes back as several responses,
+    // the same bytes in the same order on the connection, and any bytes at all
+    // are echoed.
     pkt_sender pkt_sender_inst(
         .clk(clk),
         .rst(rst),
-        .pkt_rx_tdata(pkt_tdata_int), //metadata + tlast + tdata
-        .pkt_rx_tvalid(pkt_tvalid_int),
-        .pkt_rx_tready(pkt_tready_int),
+        .pkt_rx_tdata(pkt_tdata[512+32:0]), //{length, session} + tlast + tdata
+        .pkt_rx_tvalid(pkt_tvalid),
+        .pkt_rx_tready(pkt_tready),
         .s_axis_tx_status_tdata(s_axis_tx_status_tdata),
         .s_axis_tx_status_tvalid(s_axis_tx_status_tvalid),
         .s_axis_tx_status_tready(s_axis_tx_status_tready),
@@ -232,5 +196,28 @@ module tcp_top_loopback #(parameter IS_SIM = 0)
         .m_axis_tx_data_tlast(m_axis_tx_data_tlast),
         .m_axis_tx_data_tready(m_axis_tx_data_tready)
     );
+
+    // m_axi, the HBM master the reconfiguration controller drove, stays on the
+    // port list so user_krnl and frac_hbm are unchanged.  It is tied off:
+    // nothing is ever requested, and a response would be taken.
+    assign m_axi_awaddr       = 33'd0;
+    assign m_axi_awburst      = 2'd0;
+    assign m_axi_awid         = 6'd0;
+    assign m_axi_awlen        = 8'd0;
+    assign m_axi_awsize       = 3'd0;
+    assign m_axi_awvalid      = 1'b0;
+    assign m_axi_wdata        = 256'd0;
+    assign m_axi_wstrb        = 32'd0;
+    assign m_axi_wdata_parity = 32'd0;
+    assign m_axi_wlast        = 1'b0;
+    assign m_axi_wvalid       = 1'b0;
+    assign m_axi_bready       = 1'b1;
+    assign m_axi_araddr       = 33'd0;
+    assign m_axi_arburst      = 2'd0;
+    assign m_axi_arid         = 6'd0;
+    assign m_axi_arlen        = 8'd0;
+    assign m_axi_arsize       = 3'd0;
+    assign m_axi_arvalid      = 1'b0;
+    assign m_axi_rready       = 1'b1;
 
 endmodule
