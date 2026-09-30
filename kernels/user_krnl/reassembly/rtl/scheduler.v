@@ -135,7 +135,7 @@
      reg  [15:0]          q_dstPort  [QUEUE_NUM-1:0];
      reg  [15:0]          q_workload [QUEUE_NUM-1:0];
      reg  [31:0]          q_size     [QUEUE_NUM-1:0];   // declared request size
-     reg  [31:0]          q_got      [QUEUE_NUM-1:0];   // bytes of its segments seen so far
+     reg  [31:0]          q_rem      [QUEUE_NUM-1:0];   // bytes still to come after its segments so far
      reg  [15:0]          q_done     [QUEUE_NUM-1:0];   // requests finished (input side)
      reg  [15:0]          q_sent     [QUEUE_NUM-1:0];   // requests handed on (output side)
 
@@ -155,21 +155,24 @@
                       R_NEW_QUEUE  = 3'd3,  // new request, spread over segments
                       R_DROP       = 3'd4;  // starts nothing
 
-     reg        hit;
-     reg [7:0]  hit_idx;
-     reg        free_found;
-     reg [7:0]  free_idx;
+     // The lookup is one bit per queue.  A connection takes a queue only while
+     // it holds none, so at most one bit of hit_vec is set, and each queue is
+     // read and updated through its own bit rather than through an index: at
+     // 250 MHz the index, the select behind it and the sum and compare behind
+     // that did not fit one cycle.  Each queue counts the bytes still to come,
+     // so whether this segment ends its request is one compare, made for every
+     // queue alongside the lookup.
+     reg  [QUEUE_NUM-1:0] hit_vec;
+     reg  [QUEUE_NUM-1:0] done_vec;
+     reg                  free_found;
+     reg  [7:0]           free_idx;
 
      always @* begin
-         hit = 1'b0;
-         hit_idx = 8'd0;
          free_found = 1'b0;
          free_idx = 8'd0;
          for (i = 0; i < QUEUE_NUM; i = i + 1) begin
-             if (!hit && q_busy[i] && q_conn[i] == rx_connid) begin
-                 hit = 1'b1;
-                 hit_idx = i;
-             end
+             hit_vec[i] = q_busy[i] && q_conn[i] == rx_connid;
+             done_vec[i] = rx_tlast && {16'd0, rx_tcp_bytes} >= q_rem[i];
              if (!free_found && !q_busy[i]) begin
                  free_found = 1'b1;
                  free_idx = i;
@@ -177,10 +180,25 @@
          end
      end
 
+     reg  [15:0] hit_dstPort;
+     reg  [15:0] hit_workload;
+     reg  [15:0] hit_req_size;
+
+     always @* begin
+         hit_dstPort = 16'd0;
+         hit_workload = 16'd0;
+         hit_req_size = 16'd0;
+         for (i = 0; i < QUEUE_NUM; i = i + 1) begin
+             hit_dstPort = hit_dstPort | ({16{hit_vec[i]}} & q_dstPort[i]);
+             hit_workload = hit_workload | ({16{hit_vec[i]}} & q_workload[i]);
+             hit_req_size = hit_req_size | ({16{hit_vec[i]}} & q_size[i][15:0]);
+         end
+     end
+
+     wire        hit              = |hit_vec;
      wire        in_single        = single_active && rx_connid == single_conn;
      wire        whole_in_segment = {16'd0, rx_tcp_bytes} >= rx_pkt_size;
-     wire [31:0] hit_got_next     = q_got[hit_idx] + {16'd0, rx_tcp_bytes};
-     wire        hit_request_done = rx_tlast && hit_got_next >= q_size[hit_idx];
+     wire        hit_request_done = |(hit_vec & done_vec);
 
      reg [2:0] route;
      always @* begin
@@ -195,7 +213,7 @@
          case (route)
              R_SINGLE:     rx_tready = input_tready_single;
              R_NEW_SINGLE: rx_tready = input_tready_single && !single_active;
-             R_QUEUE:      rx_tready = input_tready[hit_idx];
+             R_QUEUE:      rx_tready = |(hit_vec & input_tready);
              R_NEW_QUEUE:  rx_tready = free_found && input_tready[free_idx];
              default:      rx_tready = 1'b1;
          endcase
@@ -208,7 +226,7 @@
              R_SINGLE:
                  in_entry = {rx_tlast, single_dstPort, single_workload, single_req_size, rx_connid, rx_beat};
              R_QUEUE:
-                 in_entry = {hit_request_done, q_dstPort[hit_idx], q_workload[hit_idx], q_size[hit_idx][15:0],
+                 in_entry = {hit_request_done, hit_dstPort, hit_workload, hit_req_size,
                              rx_connid, hit_request_done, rx_beat[511:0]};
              R_NEW_QUEUE:
                  in_entry = {1'b0, rx_dstPort, rx_workload, rx_req_size, rx_connid, 1'b0, rx_beat[511:0]};
@@ -219,7 +237,7 @@
 
      always @* begin
          for (i = 0; i < QUEUE_NUM; i = i + 1) begin
-             input_tvalid[i] = rx_fire && ((route == R_QUEUE && hit_idx == i) ||
+             input_tvalid[i] = rx_fire && ((route == R_QUEUE && hit_vec[i]) ||
                                            (route == R_NEW_QUEUE && free_idx == i));
          end
          input_tvalid_single = rx_fire && (route == R_SINGLE || route == R_NEW_SINGLE);
@@ -238,7 +256,7 @@
                  q_dstPort[i] <= 16'd0;
                  q_workload[i] <= 16'd0;
                  q_size[i] <= 32'd0;
-                 q_got[i] <= 32'd0;
+                 q_rem[i] <= 32'd0;
                  q_done[i] <= 16'd0;
              end
          end else if (rx_fire) begin
@@ -263,15 +281,19 @@
                      q_dstPort[free_idx] <= rx_dstPort;
                      q_workload[free_idx] <= rx_workload;
                      q_size[free_idx] <= rx_pkt_size;
-                     q_got[free_idx] <= rx_tlast ? {16'd0, rx_tcp_bytes} : 32'd0;
+                     q_rem[free_idx] <= rx_tlast ? rx_pkt_size - {16'd0, rx_tcp_bytes} : rx_pkt_size;
                  end
                  R_QUEUE: begin
-                     if (hit_request_done) begin
-                         q_busy[hit_idx] <= 1'b0;
-                         q_got[hit_idx] <= 32'd0;
-                         q_done[hit_idx] <= q_done[hit_idx] + 16'd1;
-                     end else if (rx_tlast) begin
-                         q_got[hit_idx] <= hit_got_next;
+                     for (i = 0; i < QUEUE_NUM; i = i + 1) begin
+                         if (hit_vec[i]) begin
+                             if (done_vec[i]) begin
+                                 q_busy[i] <= 1'b0;
+                                 q_rem[i] <= 32'd0;
+                                 q_done[i] <= q_done[i] + 16'd1;
+                             end else if (rx_tlast) begin
+                                 q_rem[i] <= q_rem[i] - {16'd0, rx_tcp_bytes};
+                             end
+                         end
                      end
                  end
                  default: begin
