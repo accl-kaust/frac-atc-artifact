@@ -26,8 +26,10 @@
 
 // LENGTH register stages with neither reset nor enable.  shreg_extract keeps
 // the chain out of SRLs, which would put every stage of a bit into one LUT and
-// defeat the point of spreading the stages along the route.  The stages power
-// up at INIT.
+// defeat the point of spreading the stages along the route.  keep stops
+// synthesis merging two chains that carry the same thing, as every slot's
+// request data is: merged, all the slots' data would travel one chain and fan
+// out to every cell from its last stage.  The stages power up at INIT.
 module slot_pipe #(
     parameter integer WIDTH  = 1,
     parameter integer LENGTH = 1,
@@ -42,7 +44,7 @@ module slot_pipe #(
         if (LENGTH == 0) begin : g_wire
             assign out = in;
         end else if (LENGTH == 1) begin : g_one
-            (* shreg_extract = "no" *) reg [WIDTH-1:0] stage = {WIDTH{INIT}};
+            (* shreg_extract = "no", keep = "true" *) reg [WIDTH-1:0] stage = {WIDTH{INIT}};
             always @(posedge clk) begin
                 stage <= in;
             end
@@ -50,7 +52,7 @@ module slot_pipe #(
         end else begin : g_stages
             // stage 0 is the low WIDTH bits, the last stage the high ones
             /* verilator lint_off WIDTHCONCAT */
-            (* shreg_extract = "no" *) reg [WIDTH*LENGTH-1:0] stages = {WIDTH*LENGTH{INIT}};
+            (* shreg_extract = "no", keep = "true" *) reg [WIDTH*LENGTH-1:0] stages = {WIDTH*LENGTH{INIT}};
             /* verilator lint_on WIDTHCONCAT */
             always @(posedge clk) begin
                 stages <= {stages[WIDTH*(LENGTH-1)-1:0], in};
@@ -66,7 +68,8 @@ endmodule
 // out_tvalid saying whether it is a beat, so the output carries no enable.
 // in_credit is registered before it is counted.  In reset no beat goes out
 // and credits arriving are dropped; coming out of it the source has CREDITS
-// again.
+// again.  out_tdata and out_tlast are kept for the reason slot_pipe's stages
+// are: every slot's source loads the same scheduler data.
 module slot_credit_source #(
     parameter integer DATA_W  = 545,
     parameter integer CREDITS = 64
@@ -79,8 +82,10 @@ module slot_credit_source #(
     output wire              s_axis_tready,
     input  wire              s_axis_tlast,
 
+    (* keep = "true" *)
     output reg  [DATA_W-1:0] out_tdata = {DATA_W{1'b0}},
     output reg               out_tvalid = 1'b0,
+    (* keep = "true" *)
     output reg               out_tlast = 1'b0,
     input  wire              in_credit
 );
