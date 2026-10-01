@@ -2,23 +2,22 @@
 create_pblock pblock_cmac_krnl_inst
 add_cells_to_pblock [get_pblocks pblock_cmac_krnl_inst] [get_cells -quiet [list frac_inst/cmac_krnl_inst]]
 resize_pblock [get_pblocks pblock_cmac_krnl_inst] -add {CLOCKREGION_X0Y8:CLOCKREGION_X1Y11}
-# Static owns the left half of SLR0 (X0-X3), the X4-X7 strip at Y1, SLR1 less
-# two reconfigurable cells and SLR2 less the cmac pblock and the other two
-# (spinhdl.yaml): C00 at X6Y6:X7Y7 and C01 at X5Y4:X7Y4 in SLR1, C02 at
-# X5Y8:X7Y8 and C03 at X6Y10:X7Y11 in SLR2, the SLR1 shapes one SLR up. The
-# strip is not optional: CONFIG_SITE_X0Y0 -- the only site the ICAPE3 may
-# occupy -- lives in clock region X7Y1, and user_krnl_inst (which holds the
-# ICAPE3) is confined to this pblock, so the strip must contain it or
-# place_design fails with [Place 30-1100]. Each cell keeps static on two sides
-# for its slot boundary logic: C00 has X5Y6:X5Y7 and X6Y5:X7Y5, C01 has X4Y4
-# and X5Y5:X7Y5, C02 has X4Y8 and X5Y9:X7Y9, C03 has X5Y10:X5Y11 and
-# X6Y9:X7Y9. The cells hold the same kinds of site as each other and no I/O
-# or GT: C02 those of C01 (a PCIE40E4, HARD_SYNC, LAGUNA), C03 those of C00
-# (CFGIO, ILKNE4, SYSMONE4, HARD_SYNC); the pinned I/O are in X4Y1, X4Y5 and
-# X4Y11, the QSFP GTs in X0Y10. Keep the two files consistent.
+# Static owns the left half of SLR0 (X0-X3) with X4Y2:X4Y3 and the X4-X7 strip
+# at Y1, X0-X5 of SLR1, and X2-X4 of SLR2 right of the cmac pblock. The four
+# reconfigurable cells (spinhdl.yaml) run down the right of the device: C00 at
+# X5Y10:X7Y11 and C01 at X5Y8:X7Y9 in SLR2, C02 at X6Y4:X7Y7, the full height
+# of SLR1, and C03 at X5Y2:X7Y3 in SLR0. The strip is not optional:
+# CONFIG_SITE_X0Y0 -- the only site the ICAPE3 may occupy -- lives in clock
+# region X7Y1, and user_krnl_inst (which holds the ICAPE3) is confined to this
+# pblock, so the strip must contain it or place_design fails with
+# [Place 30-1100]. Every cell has static on its left for its slot boundary
+# logic, column X4 for C00, C01 and C03 and column X5 for C02, and C03 also
+# has the strip below. X4Y0 and X5Y0:X7Y0, along the HBM ports, stay outside
+# every pblock. The pinned I/O are in X4Y1, X4Y5 and X4Y11, the QSFP GTs in
+# X0Y10. Keep the two files consistent.
 create_pblock pblock_1
 add_cells_to_pblock [get_pblocks pblock_1] [get_cells -quiet [list frac_inst/network_krnl_inst frac_inst/sys_rst_inst frac_inst/tcp_open_status_width_conv_inst frac_inst/user_krnl_inst]]
-resize_pblock [get_pblocks pblock_1] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3Y3 CLOCKREGION_X4Y1:CLOCKREGION_X7Y1 CLOCKREGION_X0Y4:CLOCKREGION_X4Y4 CLOCKREGION_X0Y5:CLOCKREGION_X7Y5 CLOCKREGION_X0Y6:CLOCKREGION_X5Y7 CLOCKREGION_X2Y8:CLOCKREGION_X4Y8 CLOCKREGION_X2Y9:CLOCKREGION_X7Y9 CLOCKREGION_X2Y10:CLOCKREGION_X5Y11}
+resize_pblock [get_pblocks pblock_1] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3Y3 CLOCKREGION_X4Y1:CLOCKREGION_X7Y1 CLOCKREGION_X4Y2:CLOCKREGION_X4Y3 CLOCKREGION_X0Y4:CLOCKREGION_X5Y7 CLOCKREGION_X2Y8:CLOCKREGION_X4Y11}
 
 # The debug hub stays although no ILA or VIO is left: the HBM IP carries a
 # debug core of its own (hbm_0_inst, for the Hardware Manager's HBM monitor),

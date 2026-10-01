@@ -13,12 +13,12 @@ root:
   - name: frac_static
     id: 0
     cells:
-    # Four cells, two in SLR1 and the same two shapes one SLR up in SLR2, each
-    # with static on two sides. The static pblock in frac/xdc/floorplan.xdc is
-    # carved around exactly these regions -- keep the two files consistent.
-    # SLR0 holds no cell. Every cell talks to static with credits, not ready
-    # (kernels/user_krnl/reassembly/rtl/slot_credit.v), so the boundary
-    # pipelines can reach SLR2 as easily as SLR1.
+    # Four cells down the right of the device, two in SLR2, one the full height
+    # of SLR1 and one in SLR0, each with static on its left. The static pblock
+    # in frac/xdc/floorplan.xdc is carved around exactly these regions -- keep
+    # the two files consistent. Every cell talks to static with credits, not
+    # ready (kernels/user_krnl/reassembly/rtl/slot_credit.v), so the boundary
+    # pipelines can reach any SLR.
     # All four carry the same set, so any slot can be swapped to any of them
     # and the four can run different ones at once: top_k, norm and log, then
     # or_slot and pattern_slot, whose responses are as long as their requests
@@ -28,9 +28,9 @@ root:
       id: 0
       slot_id: 0
       region:
-        # Four clock regions, the top-right corner of SLR1: static X5Y6:X5Y7
-        # to the left and X6Y5:X7Y5 below.
-        add: CLOCKREGION_X6Y6:CLOCKREGION_X7Y7
+        # Six clock regions, the top two rows of SLR2 in X5-X7: static
+        # X4Y10:X4Y11 to the left; C01 below.
+        add: CLOCKREGION_X5Y10:CLOCKREGION_X7Y11
       components:
       - name: top_k
         id: 0
@@ -51,9 +51,9 @@ root:
       id: 1
       slot_id: 1
       region:
-        # Three clock regions along the bottom row of SLR1: static X4Y4 to the
-        # left and X5Y5:X7Y5 above.
-        add: CLOCKREGION_X5Y4:CLOCKREGION_X7Y4
+        # Six clock regions, the bottom two rows of SLR2 in X5-X7: static
+        # X4Y8:X4Y9 to the left and X5Y7 below; C00 above, C02 below X6-X7.
+        add: CLOCKREGION_X5Y8:CLOCKREGION_X7Y9
       components:
       - name: top_k
         id: 3
@@ -74,9 +74,9 @@ root:
       id: 2
       slot_id: 2
       region:
-        # Three clock regions along the bottom row of SLR2, C01's shape one SLR
-        # up: static X4Y8 to the left and X5Y9:X7Y9 above.
-        add: CLOCKREGION_X5Y8:CLOCKREGION_X7Y8
+        # Eight clock regions, all four rows of SLR1 in X6-X7: static
+        # X5Y4:X5Y7 to the left; C01 above and C03 below.
+        add: CLOCKREGION_X6Y4:CLOCKREGION_X7Y7
       components:
       - name: top_k
         id: 10
@@ -97,9 +97,10 @@ root:
       id: 3
       slot_id: 3
       region:
-        # Four clock regions, the top-right corner of SLR2, C00's shape one SLR
-        # up: static X5Y10:X5Y11 to the left and X6Y9:X7Y9 below.
-        add: CLOCKREGION_X6Y10:CLOCKREGION_X7Y11
+        # Six clock regions, the top two rows of SLR0 in X5-X7: static
+        # X4Y2:X4Y3 to the left, X5Y1:X7Y1 below and X5Y4 above; C02 above
+        # X6-X7.
+        add: CLOCKREGION_X5Y2:CLOCKREGION_X7Y3
       components:
       - name: top_k
         id: 15
