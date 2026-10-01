@@ -2,8 +2,8 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
-// top_k, the reconfigurable module: top_k_core behind a register stage on each
-// side of the slot boundary, so that every partition pin meets a flop.
+// top_k, the reconfigurable module: top_k_core between the two ends of the slot
+// boundary's credit links, so that every partition pin meets a flop.
 //
 // Without these stages each boundary signal passed through the core's logic
 // before it reached a register -- the 448-bit header compare and the line
@@ -13,18 +13,24 @@
 // partition pin into that logic, and those paths are what the abstract-shell
 // placement of a cell stretches.
 //
-// Each stage is a skid buffer (axis_register, REG_TYPE 2): a beat every
-// cycle, two beats of buffering and one cycle of latency, so a request and
-// its response each take a cycle longer and nothing else changes.  The core
-// ignores tkeep and tstrb and drives them high, so they are not carried.
+// The request side is a slot_credit_sink: it registers the boundary, queues
+// every beat in its FIFO and pulses s_axis_credit for each beat the core takes
+// out of it.  The response side is a slot_credit_source: it sends a beat only
+// with a credit from static, which comes back on m_axis_credit.  See
+// reassembly/rtl/slot_credit.v.  Every pin meets a register, a beat still
+// moves every cycle, and no ready crosses the boundary.  tkeep, tstrb, tdest,
+// tid and tuser are not carried: static drove constants into them and never
+// read them back.
 //
-// The reset gets the same treatment: it comes from a static synchroniser,
-// and rst_q takes it at the partition pin, so its fan-out to every register
-// here starts inside the cell.  The module leaves reset a cycle after the
-// slot does, and the request stage takes nothing while it is in reset.
-// rst_q starts high, so a freshly configured module begins in reset too.
+// The reset gets the same treatment: it is the slot's reset from
+// slot_boundary.v, held while the slot is decoupled, and rst_q takes it at the
+// partition pin, so its fan-out to every register here starts inside the
+// cell.  In reset the request FIFO empties and the response side gets all its
+// credits back.  rst_q starts high, so a freshly configured module begins in
+// reset too.
 //
-// Same interface as the core; see top_k_core.v for the slot boundary format.
+// See top_k_core.v for the slot boundary format.  The core itself is
+// AXI-Stream with tready; the credit ends here stand between it and the pins.
 
 (* DONT_TOUCH = "yes" *)
 module top_k #(
@@ -40,74 +46,40 @@ module top_k #(
     input  wire                   rst,
 
     input  wire [AXIS_DATA_W-1:0] s_axis_tdata,
-    input  wire [KEEP_W-1:0]      s_axis_tkeep,
-    input  wire [KEEP_W-1:0]      s_axis_tstrb,
     input  wire                   s_axis_tvalid,
-    output wire                   s_axis_tready,
     input  wire                   s_axis_tlast,
-    input  wire [TDEST_W-1:0]     s_axis_tdest,
-    input  wire [TID_W-1:0]       s_axis_tid,
-    input  wire [USER_W-1:0]      s_axis_tuser,
+    output wire                   s_axis_credit,
 
     output wire [AXIS_DATA_W-1:0] m_axis_tdata,
-    output wire [KEEP_W-1:0]      m_axis_tkeep,
-    output wire [KEEP_W-1:0]      m_axis_tstrb,
     output wire                   m_axis_tvalid,
-    input  wire                   m_axis_tready,
     output wire                   m_axis_tlast,
-    output wire [TDEST_W-1:0]     m_axis_tdest,
-    output wire [TID_W-1:0]       m_axis_tid,
-    output wire [USER_W-1:0]      m_axis_tuser
+    input  wire                   m_axis_credit
 );
 
     reg rst_q = 1'b1;
     always @(posedge clk) rst_q <= rst;
 
-    // request: boundary -> req_reg_inst -> core
+    // request: boundary -> req_inst -> core
     wire [AXIS_DATA_W-1:0] req_tdata;
     wire                   req_tvalid, req_tready, req_tlast;
-    wire [TDEST_W-1:0]     req_tdest;
-    wire [TID_W-1:0]       req_tid;
-    wire [USER_W-1:0]      req_tuser;
 
-    // response: core -> resp_reg_inst -> boundary
+    // response: core -> resp_inst -> boundary
     wire [AXIS_DATA_W-1:0] resp_tdata;
     wire                   resp_tvalid, resp_tready, resp_tlast;
-    wire [TDEST_W-1:0]     resp_tdest;
-    wire [TID_W-1:0]       resp_tid;
-    wire [USER_W-1:0]      resp_tuser;
 
-    axis_register #(
-        .DATA_WIDTH (AXIS_DATA_W),
-        .KEEP_ENABLE(0),
-        .KEEP_WIDTH (1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE  (1),
-        .ID_WIDTH   (TID_W),
-        .DEST_ENABLE(1),
-        .DEST_WIDTH (TDEST_W),
-        .USER_ENABLE(1),
-        .USER_WIDTH (USER_W),
-        .REG_TYPE   (2)
-    ) req_reg_inst (
+    slot_credit_sink #(
+        .DATA_W(AXIS_DATA_W)
+    ) req_inst (
         .clk          (clk),
         .rst          (rst_q),
-        .s_axis_tdata (s_axis_tdata),
-        .s_axis_tkeep (1'b1),
-        .s_axis_tvalid(s_axis_tvalid),
-        .s_axis_tready(s_axis_tready),
-        .s_axis_tlast (s_axis_tlast),
-        .s_axis_tid   (s_axis_tid),
-        .s_axis_tdest (s_axis_tdest),
-        .s_axis_tuser (s_axis_tuser),
+        .in_tdata     (s_axis_tdata),
+        .in_tvalid    (s_axis_tvalid),
+        .in_tlast     (s_axis_tlast),
+        .out_credit   (s_axis_credit),
         .m_axis_tdata (req_tdata),
-        .m_axis_tkeep (),
         .m_axis_tvalid(req_tvalid),
         .m_axis_tready(req_tready),
-        .m_axis_tlast (req_tlast),
-        .m_axis_tid   (req_tid),
-        .m_axis_tdest (req_tdest),
-        .m_axis_tuser (req_tuser)
+        .m_axis_tlast (req_tlast)
     );
 
     top_k_core #(
@@ -127,55 +99,34 @@ module top_k #(
         .s_axis_tvalid(req_tvalid),
         .s_axis_tready(req_tready),
         .s_axis_tlast (req_tlast),
-        .s_axis_tdest (req_tdest),
-        .s_axis_tid   (req_tid),
-        .s_axis_tuser (req_tuser),
+        .s_axis_tdest ({TDEST_W{1'b0}}),
+        .s_axis_tid   ({TID_W{1'b0}}),
+        .s_axis_tuser ({USER_W{1'b0}}),
         .m_axis_tdata (resp_tdata),
         .m_axis_tkeep (),
         .m_axis_tstrb (),
         .m_axis_tvalid(resp_tvalid),
         .m_axis_tready(resp_tready),
         .m_axis_tlast (resp_tlast),
-        .m_axis_tdest (resp_tdest),
-        .m_axis_tid   (resp_tid),
-        .m_axis_tuser (resp_tuser)
+        .m_axis_tdest (),
+        .m_axis_tid   (),
+        .m_axis_tuser ()
     );
 
-    axis_register #(
-        .DATA_WIDTH (AXIS_DATA_W),
-        .KEEP_ENABLE(0),
-        .KEEP_WIDTH (1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE  (1),
-        .ID_WIDTH   (TID_W),
-        .DEST_ENABLE(1),
-        .DEST_WIDTH (TDEST_W),
-        .USER_ENABLE(1),
-        .USER_WIDTH (USER_W),
-        .REG_TYPE   (2)
-    ) resp_reg_inst (
+    slot_credit_source #(
+        .DATA_W(AXIS_DATA_W)
+    ) resp_inst (
         .clk          (clk),
         .rst          (rst_q),
         .s_axis_tdata (resp_tdata),
-        .s_axis_tkeep (1'b1),
         .s_axis_tvalid(resp_tvalid),
         .s_axis_tready(resp_tready),
         .s_axis_tlast (resp_tlast),
-        .s_axis_tid   (resp_tid),
-        .s_axis_tdest (resp_tdest),
-        .s_axis_tuser (resp_tuser),
-        .m_axis_tdata (m_axis_tdata),
-        .m_axis_tkeep (),
-        .m_axis_tvalid(m_axis_tvalid),
-        .m_axis_tready(m_axis_tready),
-        .m_axis_tlast (m_axis_tlast),
-        .m_axis_tid   (m_axis_tid),
-        .m_axis_tdest (m_axis_tdest),
-        .m_axis_tuser (m_axis_tuser)
+        .out_tdata    (m_axis_tdata),
+        .out_tvalid   (m_axis_tvalid),
+        .out_tlast    (m_axis_tlast),
+        .in_credit    (m_axis_credit)
     );
-
-    assign m_axis_tkeep = {KEEP_W{1'b1}};
-    assign m_axis_tstrb = {KEEP_W{1'b1}};
 
 endmodule
 

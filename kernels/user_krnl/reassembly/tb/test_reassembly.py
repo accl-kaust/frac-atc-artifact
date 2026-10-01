@@ -928,6 +928,7 @@ async def test_request_cut_at_legacy_mss_leaves_later_requests_intact(dut):
 tests_dir = os.path.dirname(__file__)
 rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "rtl"))
 reconf_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "reconfctrl", "rtl"))
+apps_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "apps"))
 taxi_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "..", "..", "lib", "taxi", "axis", "rtl"))
 taxi_prim_rtl_dir = os.path.abspath(os.path.join(tests_dir, "..", "..", "..", "..", "lib", "taxi", "prim", "rtl"))
 
@@ -946,10 +947,16 @@ def test_reassembly(request):
         os.path.join(rtl_dir, "axis_data_fifo_replacements.sv"),
         os.path.join(rtl_dir, "axis_register.v"),
         os.path.join(rtl_dir, "axis_pipeline_register.v"),
+        os.path.join(rtl_dir, "slot_credit.v"),
+        os.path.join(rtl_dir, "slot_boundary.v"),
         os.path.join(rtl_dir, "dispatcher.v"),
         os.path.join(rtl_dir, "scheduler.v"),
         os.path.join(rtl_dir, "slot_tx_axis_switch.sv"),
         os.path.join(reconf_rtl_dir, "axis_dfx_decoupler.sv"),
+        os.path.join(apps_dir, "pattern_slot", "src", "rtl", "pattern_slot.v"),
+        os.path.join(apps_dir, "pattern_slot", "src", "rtl", "pattern_slot_core.v"),
+        os.path.join(apps_dir, "or_slot", "src", "rtl", "or_slot.v"),
+        os.path.join(apps_dir, "or_slot", "src", "rtl", "or_slot_core.v"),
         os.path.join(tests_dir, "cell_bbx_pattern_sim.sv"),
         os.path.join(reconf_rtl_dir, "reconfctrl.v"),
         os.path.join(reconf_rtl_dir, "icap_ctrl.v"),

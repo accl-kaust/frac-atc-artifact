@@ -64,7 +64,8 @@ includes:
 -  Draining excess request packet data after a controller response.
 
 The checked-in ``results.xml`` records 18 passing tests for the complete integration
-suite. It does not issue an integrated ``RECONF_ICAP`` or ``QUERY_STATUS`` request.
+suite. It does not issue an integrated ``QUERY_STATUS`` request; ``test_slots``
+below issues an integrated ``RECONF_ICAP``.
 
 The same run includes ``test_multiclient``, which drives several connections at
 once through a model of the TOE's shared RX FIFO and checks that every response
@@ -90,6 +91,22 @@ per 8 cycles, as measured in xsim on the TOE's HLS RTL and the network
 kernel's FIFOs. It requires every response intact and at least 0.97 beats of
 TX data a cycle; ``pkt_sender`` reaches 0.985 (the scheduler's re-grant is the
 cycle left), where waiting out the round trip for each response gave 0.736.
+It runs once with every request to C00 and once with four connections to each
+of the four slots, which the output switch takes in turn: 0.985 both times.
+
+And ``test_slots``, on the four slots and their credit links (in the bench C00
+and C02 echo, C01 and C03 OR every line with all ones, and each cell counts the
+request beats it is sent):
+
+-  Workloads 0 to 3 reach C00 to C03 and any other reaches C00.
+-  Eight connections over the four slots with up to eight requests in flight
+   each, while the stack takes response data a quarter of the time: every
+   slot's request and response links run out of credits for thousands of
+   cycles, and every response comes back whole, once, on its own connection.
+-  ``RECONF_ICAP`` of slot 2 from a 32 KB stand-in bitstream: while it is
+   decoupled C02 is held in reset and sent nothing, C00 keeps answering and a
+   request for C02 waits; afterwards that request is answered, and C02 takes
+   4 KB requests, which need all 64 credits, back to back.
 
 An additional direct SystemVerilog HBM-write test is available:
 
@@ -112,8 +129,7 @@ The following cases are not covered by the current automated tests:
 -  ``AVAIL=0`` behavior.
 -  Missing, simultaneous, or delayed ``PRDONE`` and ``PRERROR``.
 -  Reset during HBM upload or ICAP reconfiguration.
--  Integrated ICAP operation and post-reconfiguration slot traffic.
--  Every slot and every supported module/slot combination.
+-  Every supported module/slot combination.
 -  A request already in a slot or its pipeline when decoupling is asserted.
 -  ICAP bit and byte ordering against the physical U280 configuration engine.
 -  Very large partial bitstreams.
@@ -128,7 +144,10 @@ Reconfiguration Safety
 
 -  The target slot is decoupled immediately. No busy/idle handshake proves that
    in-flight accelerator work or the surrounding pipeline has drained.
--  The controller has no per-slot reset output.
+-  The controller has no per-slot reset output. The slot's boundary logic
+   (``slot_boundary.v``) holds the cell in reset while the slot is decoupled, so
+   a newly loaded module starts empty, and a request on its way to the cell or
+   a response not yet taken when the slot is decoupled is lost.
 -  ``PRERROR`` clears the selected decouple bit, reconnecting a potentially invalid
    module.
 -  There is no timeout while waiting for ``PRDONE`` or ``PRERROR``.

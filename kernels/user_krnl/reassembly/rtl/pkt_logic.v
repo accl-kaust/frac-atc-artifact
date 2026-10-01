@@ -1,11 +1,8 @@
 `timescale 1ns / 1ps
 
 module pkt_logic #(
-    parameter PATTERN_APP = 16'h0000,
-    parameter OR_APP = 16'h0001,
     parameter RECONF_APP = 16'h00ab,
-    parameter integer APP_DELAY_CYCLES = 16,
-    parameter integer SLOT_COUNT = 2
+    parameter integer APP_DELAY_CYCLES = 16
 ) (
     input  wire                     clk,
     input  wire                     rst,
@@ -49,6 +46,10 @@ module pkt_logic #(
     output wire                     m_axi_rready
 );
 
+    // C00-C03, instantiated by name below: the PR flow finds a cell by its
+    // instance name, cNN_bbx_inst.
+    localparam integer SLOT_COUNT = 4;
+
     wire [512 + 32 + 32 + 16:0] dispatcher_tdata;
     wire                         dispatcher_tvalid;
     wire                         dispatcher_tready;
@@ -90,8 +91,6 @@ module pkt_logic #(
     wire [15:0]  app_rx_workload = scheduler_tdata[512+32+16:512+32+1];
     wire         app_rx_req_last = scheduler_tdata[512+32+16+16+1];
 
-    wire pattern_rx_ready;
-    wire or_rx_ready;
     wire reconf_rx_ready;
 
     reg  reconf_seen_header = 1'b0;
@@ -101,8 +100,6 @@ module pkt_logic #(
     wire reconf_payload_line = dispatcher_reconf_selected && reconf_seen_header;
     wire reconf_forward_line = reconf_payload_line && !reconf_drain_packet;
 
-    wire pattern_rx_valid = scheduler_tvalid && (app_rx_workload != OR_APP);
-    wire or_rx_valid = scheduler_tvalid && (app_rx_workload == OR_APP);
     wire reconf_rx_valid = dispatcher_tvalid && reconf_forward_line;
 
     wire [511:0] reconf_tx_tdata;
@@ -234,14 +231,6 @@ module pkt_logic #(
         (reconf_header_line ? (reconf_state == 4'd0) : (reconf_drain_packet ? 1'b1 : reconf_rx_ready)) :
         scheduler_rx_tready;
 
-    always @* begin
-        if (app_rx_workload == OR_APP) begin
-            scheduler_tready = or_rx_ready;
-        end else begin
-            scheduler_tready = pattern_rx_ready;
-        end
-    end
-
     reconfctrl #(
         .ADDR_WIDTH(33),
         .AXI_DATA_WIDTH(256),
@@ -342,12 +331,12 @@ module pkt_logic #(
     end
 
     // ------------------------------------------------------------------
-    // Accelerator slot boundary (C00 and C01 are identical).
+    // Accelerator slots C00-C03.
     //
     // Same data and metadata paths as the upstream offrac kernel
     // (kernel/user_krnl/offrac_krnl/src/hdl/offrac/pkt_logic.v +
     // echo_workload.v), with the workload ports flattened onto one
-    // AXI-Stream so the PR cell keeps a single flat AXIS boundary:
+    // AXI-Stream so the PR cell keeps a single flat boundary:
     //
     //   tdata[544:513] = meta_TDATA      {request_bytes[15:0], session_id[15:0]}
     //   tdata[512]     = rx_TDATA[512]   tlast, in-band (tlast line duplicates it)
@@ -361,406 +350,163 @@ module pkt_logic #(
     // and pkt_sender consume, so it is forwarded as-is (upstream pushes the
     // same word into the per-workload result FIFO); pkt_sender takes the meta
     // of the beat carrying tlast as the TCP tx metadata {length, session}.
+    //
+    // Workload N goes to slot N, cell C0N, for N below SLOT_COUNT; every other
+    // workload but the controller's goes to C00.  The scheduler hands over
+    // whole requests in order, so one waiting for a slot that cannot take it
+    // holds up the rest.
+    //
+    // Each slot is a slot_boundary, which talks to its cell with credits
+    // instead of a ready (slot_credit.v) over PIPE_LEN register stages each
+    // way, then the cell.  Nothing on the way to or from a cell depends on a
+    // signal coming back in the same cycle, so the stages can be spread over
+    // whatever distance the cell is from here, an SLR crossing included.  The
+    // round trip of a credit has to fit in the 64 the cell starts with:
+    // PIPE_LEN up to 29.  The cell's reset is the slot's, held while
+    // reconfctrl decouples the slot; see slot_boundary.v.
     // ------------------------------------------------------------------
     localparam integer SLOT_DATA_W = 512 + 1 + 32;
 
-    // ---- C00 ----
-    wire [SLOT_DATA_W-1:0] pattern_rx_tdata = {app_rx_meta, app_rx_req_last, app_rx_payload[511:0]};
-    wire [SLOT_DATA_W-1:0] pattern_piped_tdata;
-    wire                   pattern_piped_tvalid;
-    wire                   pattern_piped_tready;
-    wire                   pattern_piped_tlast;
-    wire [SLOT_DATA_W-1:0] pattern_decoupled_tdata;
-    wire                   pattern_decoupled_tvalid;
-    wire                   pattern_decoupled_tready;
-    wire                   pattern_decoupled_tlast;
-    wire                   pattern_app_ready;
-    wire [SLOT_DATA_W-1:0] pattern_slot_tx_data_raw;
-    wire                   pattern_slot_tx_valid_raw;
-    wire                   pattern_slot_tx_ready_raw;
-    wire                   pattern_slot_tx_last_raw;
-    wire [SLOT_DATA_W-1:0] pattern_tx_decoupled_tdata;
-    wire                   pattern_tx_decoupled_tvalid;
-    wire                   pattern_tx_decoupled_tready;
-    wire                   pattern_tx_decoupled_tlast;
-    wire [SLOT_DATA_W-1:0] pattern_tx_tdata;
-    wire                   pattern_tx_valid;
-    wire                   pattern_tx_ready;
+    // stages each way between a slot_boundary and its cell, C03 first
+    localparam [8*SLOT_COUNT-1:0] SLOT_PIPE_LEN = {8'd16, 8'd16, 8'd16, 8'd16};
 
-    // echo_workload.v: rx_TREADY comes straight from the workload, now through
-    // the input pipeline.
-    assign pattern_rx_ready = pattern_piped_tready;
+    wire [1:0]             app_slot = (app_rx_workload < SLOT_COUNT) ? app_rx_workload[1:0] : 2'd0;
+    wire [SLOT_DATA_W-1:0] app_rx_tdata = {app_rx_meta, app_rx_req_last, app_rx_payload[511:0]};
 
-    // The pipeline stages sit OUTSIDE the decoupler deliberately.  The decoupler
-    // stays the last thing before the RM, so isolation during reconfiguration is
-    // exactly what it was and no beat can be stranded between a pipe stage and a
-    // partition that is being rewritten; a stage placed inside would still be
-    // holding the RM's stale handshake when the cell came back.
-    //
-    // LENGTH is given at each instantiation rather than through a module
-    // parameter, so the depth of a slot boundary is visible where that boundary
-    // is built.  All four are 20: the cells sit in a different SLR from the
-    // scheduler and the output switch, and the abstract shell implementation of
-    // each RM has to close timing across that distance.
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) pattern_slot_pr_in_pipe_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(pattern_rx_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(pattern_rx_valid),
-        .s_axis_tready(pattern_piped_tready),
-        .s_axis_tlast(app_rx_req_last),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_piped_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(pattern_piped_tvalid),
-        .m_axis_tready(pattern_decoupled_tready),
-        .m_axis_tlast(pattern_piped_tlast),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
-    );
+    wire [SLOT_COUNT-1:0]  slot_s_tready;
+    wire [SLOT_DATA_W-1:0] slot_m_tdata [0:SLOT_COUNT-1];
+    wire [SLOT_COUNT-1:0]  slot_m_tvalid;
+    wire [SLOT_COUNT-1:0]  slot_m_tready;
 
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) pattern_slot_decoupler_inst (
-        .decouple(slot_decouple[0]),
-        .s_axis_tdata(pattern_piped_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_piped_tvalid),
-        .s_axis_tready(pattern_decoupled_tready),
-        .s_axis_tlast(pattern_piped_tlast),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(pattern_decoupled_tvalid),
-        .m_axis_tready(pattern_app_ready),
-        .m_axis_tlast(pattern_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
+    wire [SLOT_COUNT-1:0]  cell_rst;
+    wire [SLOT_DATA_W-1:0] cell_s_tdata [0:SLOT_COUNT-1];
+    wire [SLOT_COUNT-1:0]  cell_s_tvalid;
+    wire [SLOT_COUNT-1:0]  cell_s_tlast;
+    wire [SLOT_COUNT-1:0]  cell_s_credit;
+    wire [SLOT_DATA_W-1:0] cell_m_tdata [0:SLOT_COUNT-1];
+    wire [SLOT_COUNT-1:0]  cell_m_tvalid;
+    wire [SLOT_COUNT-1:0]  cell_m_tlast;
+    wire [SLOT_COUNT-1:0]  cell_m_credit;
+
+    always @* begin
+        scheduler_tready = slot_s_tready[app_slot];
+    end
+
+    genvar slot;
+    generate
+        for (slot = 0; slot < SLOT_COUNT; slot = slot + 1) begin : g_slot
+            slot_boundary #(
+                .DATA_W(SLOT_DATA_W),
+                .PIPE_LEN(SLOT_PIPE_LEN[8*slot +: 8])
+            ) boundary_inst (
+                .clk(clk),
+                .rst(rst),
+                .decouple(slot_decouple[slot]),
+                .s_axis_tdata(app_rx_tdata),
+                .s_axis_tvalid(scheduler_tvalid && app_slot == slot),
+                .s_axis_tready(slot_s_tready[slot]),
+                .s_axis_tlast(app_rx_req_last),
+                .m_axis_tdata(slot_m_tdata[slot]),
+                .m_axis_tvalid(slot_m_tvalid[slot]),
+                .m_axis_tready(slot_m_tready[slot]),
+                .m_axis_tlast(),
+                .cell_rst(cell_rst[slot]),
+                .cell_s_tdata(cell_s_tdata[slot]),
+                .cell_s_tvalid(cell_s_tvalid[slot]),
+                .cell_s_tlast(cell_s_tlast[slot]),
+                .cell_s_credit(cell_s_credit[slot]),
+                .cell_m_tdata(cell_m_tdata[slot]),
+                .cell_m_tvalid(cell_m_tvalid[slot]),
+                .cell_m_tlast(cell_m_tlast[slot]),
+                .cell_m_credit(cell_m_credit[slot])
+            );
+        end
+    endgenerate
 
     cell_bbx #(
-        .AXIS_DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .TDEST_W(1),
-        .TID_W(1),
-        .USER_W(1)
+        .AXIS_DATA_W(SLOT_DATA_W)
     ) c00_bbx_inst (
         .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(pattern_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_decoupled_tvalid),
-        .s_axis_tready(pattern_app_ready),
-        .s_axis_tlast(pattern_decoupled_tlast),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_slot_tx_data_raw),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(pattern_slot_tx_valid_raw),
-        .m_axis_tready(pattern_slot_tx_ready_raw),
-        .m_axis_tlast(pattern_slot_tx_last_raw),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) pattern_slot_tx_decoupler_inst (
-        .decouple(slot_decouple[0]),
-        .s_axis_tdata(pattern_slot_tx_data_raw),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(pattern_slot_tx_valid_raw),
-        .s_axis_tready(pattern_slot_tx_ready_raw),
-        .s_axis_tlast(pattern_slot_tx_last_raw),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_tx_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(pattern_tx_decoupled_tvalid),
-        .m_axis_tready(pattern_tx_decoupled_tready),
-        .m_axis_tlast(pattern_tx_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    // Registered so the slot output has a clean timing boundary before the
-    // switch.  The frame boundary the switch and pkt_sender use is the in-band
-    // tdata[512], exactly as upstream; the AXIS tlast is only carried along.
-    //
-    // Deeper than one stage because a single flop here has to serve two masters:
-    // it is the first capture point for the RM's output pin and it has to reach
-    // the switch.  With several, the placer can leave the first next to the
-    // pblock and spend the rest of the budget on the trip back.
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) pattern_slot_tx_reg_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(pattern_tx_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(pattern_tx_decoupled_tvalid),
-        .s_axis_tready(pattern_tx_decoupled_tready),
-        .s_axis_tlast(pattern_tx_decoupled_tlast),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(pattern_tx_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(pattern_tx_valid),
-        .m_axis_tready(pattern_tx_ready),
-        .m_axis_tlast(),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
-    );
-
-    // ---- C01 ----
-    wire [SLOT_DATA_W-1:0] or_rx_tdata = {app_rx_meta, app_rx_req_last, app_rx_payload[511:0]};
-    wire [SLOT_DATA_W-1:0] or_piped_tdata;
-    wire                   or_piped_tvalid;
-    wire                   or_piped_tready;
-    wire                   or_piped_tlast;
-    wire [SLOT_DATA_W-1:0] or_decoupled_tdata;
-    wire                   or_decoupled_tvalid;
-    wire                   or_decoupled_tready;
-    wire                   or_decoupled_tlast;
-    wire                   or_app_ready;
-    wire [SLOT_DATA_W-1:0] or_slot_tx_data_raw;
-    wire                   or_slot_tx_valid_raw;
-    wire                   or_slot_tx_ready_raw;
-    wire                   or_slot_tx_last_raw;
-    wire [SLOT_DATA_W-1:0] or_tx_decoupled_tdata;
-    wire                   or_tx_decoupled_tvalid;
-    wire                   or_tx_decoupled_tready;
-    wire                   or_tx_decoupled_tlast;
-    wire [SLOT_DATA_W-1:0] or_tx_tdata;
-    wire                   or_tx_valid;
-    wire                   or_tx_ready;
-
-    // echo_workload.v: rx_TREADY comes straight from the workload, now through
-    // the input pipeline.
-    assign or_rx_ready = or_piped_tready;
-
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) or_slot_pr_in_pipe_inst (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(or_rx_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(or_rx_valid),
-        .s_axis_tready(or_piped_tready),
-        .s_axis_tlast(app_rx_req_last),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_piped_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(or_piped_tvalid),
-        .m_axis_tready(or_decoupled_tready),
-        .m_axis_tlast(or_piped_tlast),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
-    );
-
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) or_slot_decoupler_inst (
-        .decouple(slot_decouple[1]),
-        .s_axis_tdata(or_piped_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_piped_tvalid),
-        .s_axis_tready(or_decoupled_tready),
-        .s_axis_tlast(or_piped_tlast),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(or_decoupled_tvalid),
-        .m_axis_tready(or_app_ready),
-        .m_axis_tlast(or_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
+        .rst(cell_rst[0]),
+        .s_axis_tdata(cell_s_tdata[0]),
+        .s_axis_tvalid(cell_s_tvalid[0]),
+        .s_axis_tlast(cell_s_tlast[0]),
+        .s_axis_credit(cell_s_credit[0]),
+        .m_axis_tdata(cell_m_tdata[0]),
+        .m_axis_tvalid(cell_m_tvalid[0]),
+        .m_axis_tlast(cell_m_tlast[0]),
+        .m_axis_credit(cell_m_credit[0])
     );
 
     cell_bbx #(
-        .AXIS_DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .TDEST_W(1),
-        .TID_W(1),
-        .USER_W(1)
+        .AXIS_DATA_W(SLOT_DATA_W)
     ) c01_bbx_inst (
         .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(or_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_decoupled_tvalid),
-        .s_axis_tready(or_app_ready),
-        .s_axis_tlast(or_decoupled_tlast),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_slot_tx_data_raw),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(or_slot_tx_valid_raw),
-        .m_axis_tready(or_slot_tx_ready_raw),
-        .m_axis_tlast(or_slot_tx_last_raw),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
+        .rst(cell_rst[1]),
+        .s_axis_tdata(cell_s_tdata[1]),
+        .s_axis_tvalid(cell_s_tvalid[1]),
+        .s_axis_tlast(cell_s_tlast[1]),
+        .s_axis_credit(cell_s_credit[1]),
+        .m_axis_tdata(cell_m_tdata[1]),
+        .m_axis_tvalid(cell_m_tvalid[1]),
+        .m_axis_tlast(cell_m_tlast[1]),
+        .m_axis_credit(cell_m_credit[1])
     );
 
-    axis_dfx_decoupler #(
-        .DATA_W(SLOT_DATA_W),
-        .KEEP_W(1),
-        .DEST_W(1),
-        .ID_W(1),
-        .USER_W(1)
-    ) or_slot_tx_decoupler_inst (
-        .decouple(slot_decouple[1]),
-        .s_axis_tdata(or_slot_tx_data_raw),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tstrb(1'b1),
-        .s_axis_tvalid(or_slot_tx_valid_raw),
-        .s_axis_tready(or_slot_tx_ready_raw),
-        .s_axis_tlast(or_slot_tx_last_raw),
-        .s_axis_tdest(1'b0),
-        .s_axis_tid(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_tx_decoupled_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tstrb(),
-        .m_axis_tvalid(or_tx_decoupled_tvalid),
-        .m_axis_tready(or_tx_decoupled_tready),
-        .m_axis_tlast(or_tx_decoupled_tlast),
-        .m_axis_tdest(),
-        .m_axis_tid(),
-        .m_axis_tuser()
-    );
-
-    // Registered so the slot output has a clean timing boundary before the
-    // switch.  The frame boundary the switch and pkt_sender use is the in-band
-    // tdata[512], exactly as upstream; the AXIS tlast is only carried along.
-    axis_pipeline_register #(
-        .DATA_WIDTH(SLOT_DATA_W),
-        .KEEP_ENABLE(1),
-        .KEEP_WIDTH(1),
-        .LAST_ENABLE(1),
-        .ID_ENABLE(0),
-        .ID_WIDTH(1),
-        .DEST_ENABLE(0),
-        .DEST_WIDTH(1),
-        .USER_ENABLE(0),
-        .USER_WIDTH(1),
-        .REG_TYPE(2),
-        .LENGTH(20)
-    ) or_slot_tx_reg_inst (
+    cell_bbx #(
+        .AXIS_DATA_W(SLOT_DATA_W)
+    ) c02_bbx_inst (
         .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(or_tx_decoupled_tdata),
-        .s_axis_tkeep(1'b1),
-        .s_axis_tvalid(or_tx_decoupled_tvalid),
-        .s_axis_tready(or_tx_decoupled_tready),
-        .s_axis_tlast(or_tx_decoupled_tlast),
-        .s_axis_tid(1'b0),
-        .s_axis_tdest(1'b0),
-        .s_axis_tuser(1'b0),
-        .m_axis_tdata(or_tx_tdata),
-        .m_axis_tkeep(),
-        .m_axis_tvalid(or_tx_valid),
-        .m_axis_tready(or_tx_ready),
-        .m_axis_tlast(),
-        .m_axis_tid(),
-        .m_axis_tdest(),
-        .m_axis_tuser()
+        .rst(cell_rst[2]),
+        .s_axis_tdata(cell_s_tdata[2]),
+        .s_axis_tvalid(cell_s_tvalid[2]),
+        .s_axis_tlast(cell_s_tlast[2]),
+        .s_axis_credit(cell_s_credit[2]),
+        .m_axis_tdata(cell_m_tdata[2]),
+        .m_axis_tvalid(cell_m_tvalid[2]),
+        .m_axis_tlast(cell_m_tlast[2]),
+        .m_axis_credit(cell_m_credit[2])
     );
 
+    cell_bbx #(
+        .AXIS_DATA_W(SLOT_DATA_W)
+    ) c03_bbx_inst (
+        .clk(clk),
+        .rst(cell_rst[3]),
+        .s_axis_tdata(cell_s_tdata[3]),
+        .s_axis_tvalid(cell_s_tvalid[3]),
+        .s_axis_tlast(cell_s_tlast[3]),
+        .s_axis_credit(cell_s_credit[3]),
+        .m_axis_tdata(cell_m_tdata[3]),
+        .m_axis_tvalid(cell_m_tvalid[3]),
+        .m_axis_tlast(cell_m_tlast[3]),
+        .m_axis_credit(cell_m_credit[3])
+    );
+
+    // Responses from the four slots and the controller's status, a frame at a
+    // time.  The frame boundary the switch and pkt_sender use is the in-band
+    // tdata[512], exactly as upstream.
     slot_tx_axis_switch #(
         .DATA_W(SLOT_DATA_W),
         .TLAST_IDX(512)
     ) slot_tx_axis_switch_inst (
         .clk(clk),
         .rst(rst),
-        .s00_axis_tdata(pattern_tx_tdata),
-        .s00_axis_tvalid(pattern_tx_valid),
-        .s00_axis_tready(pattern_tx_ready),
-        .s01_axis_tdata(or_tx_tdata),
-        .s01_axis_tvalid(or_tx_valid),
-        .s01_axis_tready(or_tx_ready),
-        .s02_axis_tdata({reconf_tx_meta, reconf_tx_tlast, reconf_tx_tdata}),
-        .s02_axis_tvalid(reconf_tx_tvalid),
-        .s02_axis_tready(reconf_tx_tready),
+        .s00_axis_tdata(slot_m_tdata[0]),
+        .s00_axis_tvalid(slot_m_tvalid[0]),
+        .s00_axis_tready(slot_m_tready[0]),
+        .s01_axis_tdata(slot_m_tdata[1]),
+        .s01_axis_tvalid(slot_m_tvalid[1]),
+        .s01_axis_tready(slot_m_tready[1]),
+        .s02_axis_tdata(slot_m_tdata[2]),
+        .s02_axis_tvalid(slot_m_tvalid[2]),
+        .s02_axis_tready(slot_m_tready[2]),
+        .s03_axis_tdata(slot_m_tdata[3]),
+        .s03_axis_tvalid(slot_m_tvalid[3]),
+        .s03_axis_tready(slot_m_tready[3]),
+        .s04_axis_tdata({reconf_tx_meta, reconf_tx_tlast, reconf_tx_tdata}),
+        .s04_axis_tvalid(reconf_tx_tvalid),
+        .s04_axis_tready(reconf_tx_tready),
         .m_axis_tdata(pkt_tx_tdata),
         .m_axis_tvalid(pkt_tx_tvalid),
         .m_axis_tready(pkt_tx_tready)

@@ -41,22 +41,27 @@ MIN_BEATS_PER_CYCLE = 0.97
 BYTE_LANES = 64
 
 
-def header(total_bytes):
-    """A request header line for workload 0, the echo in C00, whole in one segment."""
+def header(total_bytes, workload):
+    """A request header line for workload N, slot N, whole in one segment."""
     flags = 0x3                 # FIRST | LAST
     config = 0xfffc | flags
     return (bytes([0xff] * 56) + total_bytes.to_bytes(4, "little")
-            + config.to_bytes(2, "little") + (0).to_bytes(2, "little"))
+            + config.to_bytes(2, "little") + workload.to_bytes(2, "little"))
 
 
-def make_request(total_bytes, conn, seq):
+def make_request(total_bytes, conn, seq, workload=0):
     """Data lines carry (connection, request, line), so a misplaced beat shows."""
     lines = []
     for i in range(total_bytes // BYTE_LANES - 1):
         line = bytearray(bytes([conn & 0xff, seq & 0xff, (i + 1) & 0xff, 0x5a]) * 16)
         line[60] &= 0xfe        # FIRST flag clear in data lines
         lines.append(bytes(line))
-    return header(total_bytes) + b"".join(lines)
+    return header(total_bytes, workload) + b"".join(lines)
+
+
+def response_to(request, workload):
+    """The bench's cells: C00 and C02 echo, C01 and C03 send all ones."""
+    return request if workload in (0, 2) else bytes([0xff]) * len(request)
 
 
 def beats_of(segment):
@@ -87,18 +92,20 @@ async def reset(dut):
     await ClockCycles(dut.clk, 4)
 
 
-@cocotb.test()
-async def test_4k_echo_throughput(dut):
-    """Back-to-back 4 KB echoes from 16 connections: every response intact, and
-    at least MIN_BEATS_PER_CYCLE of tx data once the pipeline is full."""
+async def run_throughput(dut, workload_of):
+    """Back-to-back 4 KB requests from 16 connections, connection c's to
+    workload workload_of(c): every response intact, and at least
+    MIN_BEATS_PER_CYCLE of tx data once the pipeline is full."""
     cocotb.start_soon(Clock(dut.clk, 5, units="ns").start())
     await reset(dut)
 
-    requests = [(0x100 + i % CONNECTIONS, make_request(REQUEST_BYTES, 0x100 + i % CONNECTIONS, i // CONNECTIONS))
-                for i in range(REQUESTS)]
+    requests = []
     expected = {conn: deque() for conn in range(0x100, 0x100 + CONNECTIONS)}
-    for conn, request in requests:
-        expected[conn].append(request)
+    for i in range(REQUESTS):
+        conn = 0x100 + i % CONNECTIONS
+        request = make_request(REQUEST_BYTES, conn, i // CONNECTIONS, workload_of(conn))
+        requests.append((conn, request))
+        expected[conn].append(response_to(request, workload_of(conn)))
 
     to_notify = deque(requests)
     rx_buffer = deque()             # segments notified, not yet read
@@ -183,3 +190,17 @@ async def test_4k_echo_throughput(dut):
     assert rate >= MIN_BEATS_PER_CYCLE, f"{rate:.4f} beats a cycle, want at least {MIN_BEATS_PER_CYCLE}"
 
     await ClockCycles(dut.clk, 10)
+
+
+@cocotb.test()
+async def test_4k_echo_throughput(dut):
+    """Every request to C00, the echo."""
+    await run_throughput(dut, lambda conn: 0)
+
+
+@cocotb.test()
+async def test_4k_throughput_over_four_slots(dut):
+    """Four connections to each slot: the slots work side by side and the
+    output switch takes their responses in turn, so pkt_sender still gets a
+    beat every cycle."""
+    await run_throughput(dut, lambda conn: conn % 4)

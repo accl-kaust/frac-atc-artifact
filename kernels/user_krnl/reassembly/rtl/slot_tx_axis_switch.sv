@@ -2,6 +2,10 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
+// The four slots' responses and the reconfiguration controller's status
+// (s04) onto pkt_sender's one stream, a frame at a time, the frame ending at
+// the in-band tlast.  Arbitration is round robin: with four slots a fixed
+// priority would let a busy C00 hold C03 off for as long as it stays busy.
 module slot_tx_axis_switch #(
     parameter int DATA_W = 545,
     parameter int TLAST_IDX = 512
@@ -21,12 +25,20 @@ module slot_tx_axis_switch #(
     input  wire              s02_axis_tvalid,
     output wire              s02_axis_tready,
 
+    input  wire [DATA_W-1:0] s03_axis_tdata,
+    input  wire              s03_axis_tvalid,
+    output wire              s03_axis_tready,
+
+    input  wire [DATA_W-1:0] s04_axis_tdata,
+    input  wire              s04_axis_tvalid,
+    output wire              s04_axis_tready,
+
     output wire [DATA_W-1:0] m_axis_tdata,
     output wire              m_axis_tvalid,
     input  wire              m_axis_tready
 );
 
-    localparam int S_COUNT = 3;
+    localparam int S_COUNT = 5;
     localparam int ID_W = $clog2(S_COUNT);
 
     taxi_axis_if #(
@@ -40,7 +52,7 @@ module slot_tx_axis_switch #(
         .DEST_W(1),
         .USER_EN(1'b0),
         .USER_W(1)
-    ) s_axis[3]();
+    ) s_axis[S_COUNT]();
 
     taxi_axis_if #(
         .DATA_W(DATA_W),
@@ -85,6 +97,26 @@ module slot_tx_axis_switch #(
     assign s_axis[2].tuser = '0;
     assign s02_axis_tready = s_axis[2].tready;
 
+    assign s_axis[3].tdata = s03_axis_tdata;
+    assign s_axis[3].tkeep = '1;
+    assign s_axis[3].tstrb = '1;
+    assign s_axis[3].tvalid = s03_axis_tvalid;
+    assign s_axis[3].tlast = s03_axis_tdata[TLAST_IDX];
+    assign s_axis[3].tid = '0;
+    assign s_axis[3].tdest = '0;
+    assign s_axis[3].tuser = '0;
+    assign s03_axis_tready = s_axis[3].tready;
+
+    assign s_axis[4].tdata = s04_axis_tdata;
+    assign s_axis[4].tkeep = '1;
+    assign s_axis[4].tstrb = '1;
+    assign s_axis[4].tvalid = s04_axis_tvalid;
+    assign s_axis[4].tlast = s04_axis_tdata[TLAST_IDX];
+    assign s_axis[4].tid = '0;
+    assign s_axis[4].tdest = '0;
+    assign s_axis[4].tuser = '0;
+    assign s04_axis_tready = s_axis[4].tready;
+
     assign m_axis_tdata = m_axis[0].tdata;
     assign m_axis_tvalid = m_axis[0].tvalid;
     assign m_axis[0].tready = m_axis_tready;
@@ -95,7 +127,7 @@ module slot_tx_axis_switch #(
         .S_REG_TYPE(0),
         .M_REG_TYPE(2),
         .UPDATE_TID(1'b0),
-        .ARB_ROUND_ROBIN(1'b0),
+        .ARB_ROUND_ROBIN(1'b1),
         .ARB_LSB_HIGH_PRIO(1'b1)
     ) taxi_axis_switch_inst (
         .clk(clk),

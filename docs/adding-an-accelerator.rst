@@ -24,6 +24,16 @@ Give the top module exactly this port list. It must match the slot boundary in
 ``kernels/user_krnl/reconfctrl/rtl/cell_bbx.sv``; the static design
 instantiates it with the parameter values in the Width column.
 
+The boundary has no ``tready``. Flow control is by credits
+(``kernels/user_krnl/reassembly/rtl/slot_credit.v``): static sends a request
+beat only when it holds a credit for it, and the module sends a response beat
+only when it holds one, so a beat is never refused and nothing has to run back
+against the data in the same cycle. That is what lets a slot sit an SLR away
+from the network stack at 200 MHz. You do not write the credit logic: the
+template below puts a ``slot_credit_sink`` on the request side and a
+``slot_credit_source`` on the response side, and your core sees ordinary
+AXI-Stream with ``tready``.
+
 
 .. list-table::
    :header-rows: 1
@@ -34,35 +44,31 @@ instantiates it with the parameter values in the Width column.
      - Notes
    * - ``clk``, ``rst``
      - 1
-     - Static-side clock and synchronous, active-high reset.
+     - Static-side clock and synchronous, active-high reset. The reset is the
+       slot's own: static holds it while the slot is decoupled for
+       reconfiguration, so a newly loaded module starts empty.
    * - ``s_axis_tdata`` / ``m_axis_tdata``
-     - ``AXIS_DATA_W`` = 512
-     - Request input and response output, with a 64-byte data bus per beat.
-   * - | ``s_axis_tkeep`` / ``m_axis_tkeep``,
-       | ``s_axis_tstrb`` / ``m_axis_tstrb``
-     - 64
-     - Always all-ones on input. Every request beat is a full 64-byte line.
-   * - | ``s_axis_tvalid`` / ``m_axis_tvalid``,
-       | ``s_axis_tready`` / ``m_axis_tready``
+     - ``AXIS_DATA_W`` = 545
+     - Request input and response output: ``{meta, tlast, payload}``, a
+       64-byte line of payload per beat (see ``cell_bbx.sv``).
+   * - ``s_axis_tvalid`` / ``m_axis_tvalid``
      - 1
-     - Standard AXI-Stream handshakes. You may hold ``s_axis_tready`` low
-       while busy; a FIFO ahead of the slot absorbs the back-pressure.
+     - A beat, in every cycle the signal is high. There is no ``tready``.
    * - ``s_axis_tlast`` / ``m_axis_tlast``
      - 1
      - Set on the final beat of a request or response, respectively.
-   * - | ``s_axis_tdest`` / ``m_axis_tdest``,
-       | ``s_axis_tid`` / ``m_axis_tid``,
-       | ``s_axis_tuser`` / ``m_axis_tuser``
-     - | ``TDEST_W`` = 1,
-       | ``TID_W`` = 1,
-       | ``USER_W`` = 1
-     - Driven to zero on input. They carry no information; echo them or
-       drive zero on output.
+   * - ``s_axis_credit``
+     - 1
+     - Output. One pulse for each request beat the module takes out of its
+       input FIFO. Static starts with 64 credits, the FIFO's depth.
+   * - ``m_axis_credit``
+     - 1
+     - Input. One pulse for each response beat static takes out of its own
+       FIFO. The module starts with 64.
 
-
-Your accelerator might require registers at input and output port so we recommemd.
-
-
+Every pin meets a register on both sides, and a beat still moves every cycle;
+the core can hold its ``tready`` low while it is busy, and the requests wait in
+the input FIFO and, once it is full, in static.
 
 
 Start from this template.
@@ -84,74 +90,40 @@ Start from this template.
         input  wire                   rst,
 
         input  wire [AXIS_DATA_W-1:0] s_axis_tdata,
-        input  wire [KEEP_W-1:0]      s_axis_tkeep,
-        input  wire [KEEP_W-1:0]      s_axis_tstrb,
         input  wire                   s_axis_tvalid,
-        output wire                   s_axis_tready,
         input  wire                   s_axis_tlast,
-        input  wire [TDEST_W-1:0]     s_axis_tdest,
-        input  wire [TID_W-1:0]       s_axis_tid,
-        input  wire [USER_W-1:0]      s_axis_tuser,
+        output wire                   s_axis_credit,
 
         output wire [AXIS_DATA_W-1:0] m_axis_tdata,
-        output wire [KEEP_W-1:0]      m_axis_tkeep,
-        output wire [KEEP_W-1:0]      m_axis_tstrb,
         output wire                   m_axis_tvalid,
-        input  wire                   m_axis_tready,
         output wire                   m_axis_tlast,
-        output wire [TDEST_W-1:0]     m_axis_tdest,
-        output wire [TID_W-1:0]       m_axis_tid,
-        output wire [USER_W-1:0]      m_axis_tuser
+        input  wire                   m_axis_credit
     );
 
         reg rst_q = 1'b1;
         always @(posedge clk) rst_q <= rst;
 
-        // request: boundary -> req_reg_inst -> core
+        // request: boundary -> req_inst -> core
         wire [AXIS_DATA_W-1:0] req_tdata;
         wire                   req_tvalid, req_tready, req_tlast;
-        wire [TDEST_W-1:0]     req_tdest;
-        wire [TID_W-1:0]       req_tid;
-        wire [USER_W-1:0]      req_tuser;
 
-        // response: core -> resp_reg_inst -> boundary
+        // response: core -> resp_inst -> boundary
         wire [AXIS_DATA_W-1:0] resp_tdata;
         wire                   resp_tvalid, resp_tready, resp_tlast;
-        wire [TDEST_W-1:0]     resp_tdest;
-        wire [TID_W-1:0]       resp_tid;
-        wire [USER_W-1:0]      resp_tuser;
 
-        axis_register #(
-            .DATA_WIDTH (AXIS_DATA_W),
-            .KEEP_ENABLE(0),
-            .KEEP_WIDTH (1),
-            .LAST_ENABLE(1),
-            .ID_ENABLE  (1),
-            .ID_WIDTH   (TID_W),
-            .DEST_ENABLE(1),
-            .DEST_WIDTH (TDEST_W),
-            .USER_ENABLE(1),
-            .USER_WIDTH (USER_W),
-            .REG_TYPE   (2)
-        ) req_reg_inst (
+        slot_credit_sink #(
+            .DATA_W(AXIS_DATA_W)
+        ) req_inst (
             .clk          (clk),
             .rst          (rst_q),
-            .s_axis_tdata (s_axis_tdata),
-            .s_axis_tkeep (1'b1),
-            .s_axis_tvalid(s_axis_tvalid),
-            .s_axis_tready(s_axis_tready),
-            .s_axis_tlast (s_axis_tlast),
-            .s_axis_tid   (s_axis_tid),
-            .s_axis_tdest (s_axis_tdest),
-            .s_axis_tuser (s_axis_tuser),
+            .in_tdata     (s_axis_tdata),
+            .in_tvalid    (s_axis_tvalid),
+            .in_tlast     (s_axis_tlast),
+            .out_credit   (s_axis_credit),
             .m_axis_tdata (req_tdata),
-            .m_axis_tkeep (),
             .m_axis_tvalid(req_tvalid),
             .m_axis_tready(req_tready),
-            .m_axis_tlast (req_tlast),
-            .m_axis_tid   (req_tid),
-            .m_axis_tdest (req_tdest),
-            .m_axis_tuser (req_tuser)
+            .m_axis_tlast (req_tlast)
         );
 
         // Please don't forget to change with the app name here
@@ -170,55 +142,34 @@ Start from this template.
             .s_axis_tvalid(req_tvalid),
             .s_axis_tready(req_tready),
             .s_axis_tlast (req_tlast),
-            .s_axis_tdest (req_tdest),
-            .s_axis_tid   (req_tid),
-            .s_axis_tuser (req_tuser),
+            .s_axis_tdest ({TDEST_W{1'b0}}),
+            .s_axis_tid   ({TID_W{1'b0}}),
+            .s_axis_tuser ({USER_W{1'b0}}),
             .m_axis_tdata (resp_tdata),
             .m_axis_tkeep (),
             .m_axis_tstrb (),
             .m_axis_tvalid(resp_tvalid),
             .m_axis_tready(resp_tready),
             .m_axis_tlast (resp_tlast),
-            .m_axis_tdest (resp_tdest),
-            .m_axis_tid   (resp_tid),
-            .m_axis_tuser (resp_tuser)
+            .m_axis_tdest (),
+            .m_axis_tid   (),
+            .m_axis_tuser ()
         );
 
-        axis_register #(
-            .DATA_WIDTH (AXIS_DATA_W),
-            .KEEP_ENABLE(0),
-            .KEEP_WIDTH (1),
-            .LAST_ENABLE(1),
-            .ID_ENABLE  (1),
-            .ID_WIDTH   (TID_W),
-            .DEST_ENABLE(1),
-            .DEST_WIDTH (TDEST_W),
-            .USER_ENABLE(1),
-            .USER_WIDTH (USER_W),
-            .REG_TYPE   (2)
-        ) resp_reg_inst (
+        slot_credit_source #(
+            .DATA_W(AXIS_DATA_W)
+        ) resp_inst (
             .clk          (clk),
             .rst          (rst_q),
             .s_axis_tdata (resp_tdata),
-            .s_axis_tkeep (1'b1),
             .s_axis_tvalid(resp_tvalid),
             .s_axis_tready(resp_tready),
             .s_axis_tlast (resp_tlast),
-            .s_axis_tid   (resp_tid),
-            .s_axis_tdest (resp_tdest),
-            .s_axis_tuser (resp_tuser),
-            .m_axis_tdata (m_axis_tdata),
-            .m_axis_tkeep (),
-            .m_axis_tvalid(m_axis_tvalid),
-            .m_axis_tready(m_axis_tready),
-            .m_axis_tlast (m_axis_tlast),
-            .m_axis_tid   (m_axis_tid),
-            .m_axis_tdest (m_axis_tdest),
-            .m_axis_tuser (m_axis_tuser)
+            .out_tdata    (m_axis_tdata),
+            .out_tvalid   (m_axis_tvalid),
+            .out_tlast    (m_axis_tlast),
+            .in_credit    (m_axis_credit)
         );
-
-        assign m_axis_tkeep = {KEEP_W{1'b1}};
-        assign m_axis_tstrb = {KEEP_W{1'b1}};
 
     endmodule
 
@@ -316,7 +267,7 @@ Now, unit.yaml
       files:
         - <name>.v
         - <name>_core.v
-        - ../../../../reassembly/rtl/axis_register.v
+        - ../../../../reassembly/rtl/slot_credit.v
 
     xdc:
       dir: "src/xdc"
@@ -347,7 +298,7 @@ Add your accelerator to database.
        files:
        - <name>.v
        - <name>_core.v
-       - ../../../../reassembly/rtl/axis_register.v
+       - ../../../../reassembly/rtl/slot_credit.v
      xdc:
        dir: src/xdc
        files: null

@@ -10,8 +10,8 @@ units:
     files:
     - pattern_slot.v
     - pattern_slot_core.v
-    # the boundary skid buffers; the static side uses the same file
-    - ../../../../reassembly/rtl/axis_register.v
+    # the boundary's credit ends; the static side uses the same file
+    - ../../../../reassembly/rtl/slot_credit.v
   xdc:
     dir: src/xdc
     files: null
@@ -21,9 +21,9 @@ units:
   ip:
     dir: src/ip
     files: null
-  # out-of-context synthesis, Vivado 2022.2: 1130 LUT, 2227 FF, 0 BRAM, 0 DSP
+  # out-of-context synthesis, Vivado 2022.2: 673 LUT, 1690 FF, 0 BRAM, 0 DSP
   utilization:
-    slices: 142
+    slices: 106
     ramb36: 0
     dsp: 0
 - name: or_slot
@@ -37,8 +37,8 @@ units:
     files:
     - or_slot.v
     - or_slot_core.v
-    # the boundary skid buffers; the static side uses the same file
-    - ../../../../reassembly/rtl/axis_register.v
+    # the boundary's credit ends; the static side uses the same file
+    - ../../../../reassembly/rtl/slot_credit.v
   xdc:
     dir: src/xdc
     files: null
@@ -48,9 +48,9 @@ units:
   ip:
     dir: src/ip
     files: null
-  # out-of-context synthesis, Vivado 2022.2: 83 LUT, 157 FF, 0 BRAM, 0 DSP
+  # out-of-context synthesis, Vivado 2022.2: 64 LUT, 132 FF, 0 BRAM, 0 DSP
   utilization:
-    slices: 11
+    slices: 9
     ramb36: 0
     dsp: 0
 - name: top_k
@@ -64,8 +64,8 @@ units:
     files:
     - top_k.v
     - top_k_core.v
-    # the boundary skid buffers; the static side uses the same file
-    - ../../../../reassembly/rtl/axis_register.v
+    # the boundary's credit ends; the static side uses the same file
+    - ../../../../reassembly/rtl/slot_credit.v
   xdc:
     dir: src/xdc
     files: null
@@ -75,9 +75,9 @@ units:
   ip:
     dir: src/ip
     files: null
-  # out-of-context synthesis, Vivado 2022.2: 1917 LUT, 3226 FF, 0 BRAM, 0 DSP
+  # out-of-context synthesis, Vivado 2022.2: 1483 LUT, 2710 FF, 0 BRAM, 0 DSP
   utilization:
-    slices: 240
+    slices: 186
     ramb36: 0
     dsp: 0
 - name: log
@@ -91,8 +91,8 @@ units:
     files:
     - log.v
     - log_core.v
-    # the boundary skid buffers; the static side uses the same file
-    - ../../../../reassembly/rtl/axis_register.v
+    # the boundary's credit ends; the static side uses the same file
+    - ../../../../reassembly/rtl/slot_credit.v
   xdc:
     dir: src/xdc
     files: null
@@ -103,9 +103,9 @@ units:
     dir: src/ip
     files: 
     - gen_ip.tcl
-  # out-of-context synthesis, Vivado 2022.2: 3027 LUT, 6415 FF, 0 BRAM, 6 DSP
+  # out-of-context synthesis, Vivado 2022.2: 2861 LUT, 5889 FF, 0 BRAM, 6 DSP
   utilization:
-    slices: 401
+    slices: 369
     ramb36: 0
     dsp: 6
 - name: norm
@@ -119,8 +119,8 @@ units:
     files:
     - norm.v
     - norm_core.v
-    # the boundary skid buffers; the static side uses the same file
-    - ../../../../reassembly/rtl/axis_register.v
+    # the boundary's credit ends; the static side uses the same file
+    - ../../../../reassembly/rtl/slot_credit.v
   xdc:
     dir: src/xdc
     files: null
@@ -131,8 +131,8 @@ units:
     dir: src/ip
     files: 
     - gen_ip.tcl
-  # out-of-context synthesis, Vivado 2022.2: 2792 LUT, 5461 FF, 7.5 BRAM, 2 DSP
+  # out-of-context synthesis, Vivado 2022.2: 2343 LUT, 4931 FF, 7.5 BRAM, 2 DSP
   utilization:
-    slices: 349
+    slices: 309
     ramb36: 8
     dsp: 2

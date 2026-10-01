@@ -42,8 +42,8 @@ Scope
 
 The current standalone integration targets a Xilinx Alveo U280
 (``xcu280-fsvh2892-2L-e``) and uses a 200 MHz controller, HBM, and ICAP clock. The
-integrated controller has three reconfigurable slots. The RTL module defaults to
-two slots, but ``pkt_logic.v`` overrides ``SLOT_COUNT`` to three.
+integrated controller has four reconfigurable slots. The RTL module defaults to
+two slots, but ``pkt_logic.v`` sets ``SLOT_COUNT`` to four.
 
 ======= ================ ========================================
 Slot ID Static cell      Normal workload route
@@ -51,6 +51,7 @@ Slot ID Static cell      Normal workload route
 0       ``c00_bbx_inst`` ``0x0000`` and the current default route
 1       ``c01_bbx_inst`` ``0x0001``
 2       ``c02_bbx_inst`` ``0x0002``
+3       ``c03_bbx_inst`` ``0x0003``
 ======= ================ ========================================
 
 Workload ``0x00ab`` is reserved for reconfiguration-controller requests and does

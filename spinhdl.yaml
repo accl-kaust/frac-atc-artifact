@@ -13,14 +13,17 @@ root:
   - name: frac_static
     id: 0
     cells:
-    # Both cells are in SLR1, each with static on two sides. The static pblock
-    # in frac/xdc/floorplan.xdc is carved around exactly these regions -- keep
-    # the two files consistent. SLR0 now holds no cell.
-    # Both cells carry the same set, so either slot can be swapped to any of
-    # them and the pair can run different ones at once: top_k, norm and log,
-    # then or_slot and pattern_slot, whose responses are as long as their
-    # requests (all-ones and echo) for throughput tests and probing.  The
-    # first in each list is what the full image starts with.
+    # Four cells, two in SLR1 and the same two shapes one SLR up in SLR2, each
+    # with static on two sides. The static pblock in frac/xdc/floorplan.xdc is
+    # carved around exactly these regions -- keep the two files consistent.
+    # SLR0 holds no cell. Every cell talks to static with credits, not ready
+    # (kernels/user_krnl/reassembly/rtl/slot_credit.v), so the boundary
+    # pipelines can reach SLR2 as easily as SLR1.
+    # All four carry the same set, so any slot can be swapped to any of them
+    # and the four can run different ones at once: top_k, norm and log, then
+    # or_slot and pattern_slot, whose responses are as long as their requests
+    # (all-ones and echo) for throughput tests and probing.  The first in each
+    # list is what the full image starts with.
     - name: C00
       id: 0
       slot_id: 0
@@ -66,4 +69,50 @@ root:
         unit: or_slot
       - name: pattern_slot
         id: 9
+        unit: pattern_slot
+    - name: C02
+      id: 2
+      slot_id: 2
+      region:
+        # Three clock regions along the bottom row of SLR2, C01's shape one SLR
+        # up: static X4Y8 to the left and X5Y9:X7Y9 above.
+        add: CLOCKREGION_X5Y8:CLOCKREGION_X7Y8
+      components:
+      - name: top_k
+        id: 10
+        unit: top_k
+      - name: norm
+        id: 11
+        unit: norm
+      - name: log
+        id: 12
+        unit: log
+      - name: or_slot
+        id: 13
+        unit: or_slot
+      - name: pattern_slot
+        id: 14
+        unit: pattern_slot
+    - name: C03
+      id: 3
+      slot_id: 3
+      region:
+        # Four clock regions, the top-right corner of SLR2, C00's shape one SLR
+        # up: static X5Y10:X5Y11 to the left and X6Y9:X7Y9 below.
+        add: CLOCKREGION_X6Y10:CLOCKREGION_X7Y11
+      components:
+      - name: top_k
+        id: 15
+        unit: top_k
+      - name: norm
+        id: 16
+        unit: norm
+      - name: log
+        id: 17
+        unit: log
+      - name: or_slot
+        id: 18
+        unit: or_slot
+      - name: pattern_slot
+        id: 19
         unit: pattern_slot
