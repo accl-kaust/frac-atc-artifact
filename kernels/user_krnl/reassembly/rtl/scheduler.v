@@ -68,6 +68,11 @@
 
      localparam integer ENTRY_W = 512 + 16 + 32 + 16 + 2;  // {request_end, dstPort, workload, meta, tlast, payload}
      localparam integer FIFO_W  = 584;
+     // Lines each request queue holds, upstream offrac's 4096 (axis_data_fifo_0
+     // in its gen_ip.tcl): 256 KB of payload, so a multi-segment request of up
+     // to 4096 lines fits one queue.  The single-packet and output FIFOs stay
+     // at 512.
+     localparam integer QUEUE_DEPTH = 4096;
      localparam integer SINGLE  = QUEUE_NUM;             // grant index of the single-packet FIFO
 
      // Bit positions: payload[511:0], tlast[512], meta[544:513] = {length, connID},
@@ -105,7 +110,7 @@
      genvar gi;
      generate
          for (gi = 0; gi < QUEUE_NUM; gi = gi + 1) begin : GEN_INPUT_FIFO
-             axis_data_fifo_0 fifo_inst(
+             axis_data_fifo_0 #(.DEPTH(QUEUE_DEPTH)) fifo_inst(
                .rst(rst),
                .clk(clk),
                .s_axis_tvalid(input_tvalid[gi]),
