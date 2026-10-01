@@ -13,9 +13,7 @@ endif
 NETWORK_BANDWIDTH            ?= 100
 NETWORK_INTERFACE            ?= 100
 DATA_WIDTH                   ?= 64
-# The HLS target for the network stack IPs: the 250 MHz design clock they run
-# on (frac.v). Changing it changes CMAKE_ARGS, so the IPs are rebuilt.
-CLOCK_PERIOD                 ?= 4.0
+CLOCK_PERIOD                 ?= 5.0
 TCP_STACK_EN                 ?= 0
 UDP_STACK_EN                 ?= 1
 # fpga-network-stack's CMake reads these as TCP_STACK_*. They used to be

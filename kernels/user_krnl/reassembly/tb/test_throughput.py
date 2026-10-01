@@ -91,7 +91,7 @@ async def reset(dut):
 async def test_4k_echo_throughput(dut):
     """Back-to-back 4 KB echoes from 16 connections: every response intact, and
     at least MIN_BEATS_PER_CYCLE of tx data once the pipeline is full."""
-    cocotb.start_soon(Clock(dut.clk, 4, units="ns").start())
+    cocotb.start_soon(Clock(dut.clk, 5, units="ns").start())
     await reset(dut)
 
     requests = [(0x100 + i % CONNECTIONS, make_request(REQUEST_BYTES, 0x100 + i % CONNECTIONS, i // CONNECTIONS))
@@ -179,7 +179,7 @@ async def test_4k_echo_throughput(dut):
     per_response = (last - first) / (REQUESTS - TAIL - WARMUP)
     dut._log.info(f"{beats} beats in {last - first} cycles: {rate:.4f} a cycle, "
                   f"{per_response:.2f} cycles per {REQUEST_BYTES}-byte response, "
-                  f"{rate * 512 * 250e6 / 1e9:.1f} Gb/s at 250 MHz")
+                  f"{rate * 512 * 200e6 / 1e9:.1f} Gb/s at 200 MHz")
     assert rate >= MIN_BEATS_PER_CYCLE, f"{rate:.4f} beats a cycle, want at least {MIN_BEATS_PER_CYCLE}"
 
     await ClockCycles(dut.clk, 10)

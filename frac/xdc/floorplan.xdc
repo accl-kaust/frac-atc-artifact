@@ -11,7 +11,7 @@ resize_pblock [get_pblocks pblock_cmac_krnl_inst] -add {CLOCKREGION_X0Y8:CLOCKRE
 # so Vivado still inserts dbg_hub, and without a clock on it opt_design fails
 # with [Chipscope 16-213] "The debug port 'dbg_hub/clk' has 1 unconnected
 # channels".
-set_property C_CLK_INPUT_FREQ_HZ 250000000 [get_debug_cores dbg_hub]
+set_property C_CLK_INPUT_FREQ_HZ 200000000 [get_debug_cores dbg_hub]
 set_property C_ENABLE_CLK_DIVIDER false [get_debug_cores dbg_hub]
 set_property C_USER_SCAN_CHAIN 1 [get_debug_cores dbg_hub]
 connect_debug_port dbg_hub/clk [get_nets clk]
