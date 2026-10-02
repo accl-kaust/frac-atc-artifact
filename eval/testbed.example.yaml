@@ -1,0 +1,31 @@
+# Settings for the machine eval/run.py runs on: the one cabled to the U280.
+# Copy this file to eval/testbed.yaml and edit it there; testbed.yaml is
+# gitignored.  Every key is optional, and the values below are the defaults.
+
+fpga:
+  addr: 172.24.1.52             # the design's address and port, see docs/quick-start.rst
+  port: 2888
+
+nic: ""                         # ConnectX port cabled to the U280, passed as TPA_ETH_DEV;
+                                # empty: the interface with a direct route to fpga.addr
+jtag: ""                        # JTAG target for programfpga.sh, passed as HW_TARGET, such as
+                                # localhost:3121/xilinx_tcf/Xilinx/<serial>; empty: the first
+start_cpu: 0                    # first cpu fperf pins client threads to, fperf -S
+
+tpa: ""                         # tpa launcher; empty: tpa in PATH, else ~/.local/bin/tpa
+fperf: ""                       # fperf binary; empty: ~/libtpa/build/bin/app/fperf,
+                                # else ~/.local/bin/fperf, else fperf in PATH
+tpa_id: client
+tpa_cfg: "tcp {tso = 0; } dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }"
+sudo: sudo                      # fperf needs root for DPDK; "" when run.py runs as root
+
+# Relative to the repository root, or absolute.
+programfpga: scripts/programfpga.sh
+reconfslots: go run scripts/reconfslots.go      # or a binary built from it
+reconf:
+  chunk_size: 256               # reconfslots -chunk-size
+  hbm_addr: "0x10004000"        # reconfslots -hbm-addr
+
+settle: 10                      # seconds to wait after programming, before probing
+ready_timeout: 90               # seconds to wait for the link and for ping
+pause: 3                        # seconds between runs

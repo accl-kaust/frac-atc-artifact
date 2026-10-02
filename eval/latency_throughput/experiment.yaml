@@ -1,0 +1,52 @@
+# Latency vs application throughput, with and without fRAC (Fig. 13).
+#
+#   eval/run.py latency_throughput      measure, on the machine cabled to the U280
+#   eval/plot.py latency_throughput     draw the figure from the newest run
+#
+# For each target below, run.py programs its bitstream, loads the partial
+# bitstreams its slots name, then runs fperf once per sweep point and saves
+# the output under `name`.  O_1 is the image with fRAC, which
+# reassembles requests; O_0 is the image without it.
+
+description: Latency vs application throughput, with and without fRAC (Fig. 13)
+
+# Paths are relative to the repository root.  bitstream is the full image,
+# programmed over JTAG.  partials is the directory of ICAP partial
+# bitstreams, and slots names the file to load into each slot after
+# programming.  To refuse any other full image, add
+# sha256: "<leading hex digits>"; an earlier run's manifest.yaml lists them.
+targets:
+  0:                                    # without fRAC: TCP straight back, no reassembly
+    bitstream: example/bypass/frac.bit
+  1:                                    # with fRAC
+    bitstream: build/frac/bitstreams/jtag/frac.bit
+    partials: build/frac/bitstreams/icap
+    slots:
+      0: c00_f07.bin                    # pattern_slot: echoes each request
+
+params:
+  d: 30                         # seconds per run, fperf -d
+  m: 4096                       # request and response bytes, fperf -m -X -R
+  C: 1                          # connections per client thread, fperf -C
+  f: 0                          # slot the requests go to, fperf -K
+
+sweep:                          # the first key is the outer loop
+  O: [0, 1]
+  n: [1, 4, 8, 16, 20, 22, 24, 28]      # client threads, one per cpu, fperf -n
+
+# Log names.  The figure script finds logs by this shape.
+name: "rr_d_{d}_m_{m}_n_{n}_C_{C}_f_{f}_O_{O}.log"
+
+# fperf arguments.  run.py adds -c, -p and -S from the testbed file.
+fperf: "-t rr -d {d} -n {n} -m {m} -X {m} -R {m} -C {C} -Z 1 -K {f}"
+
+plot:
+  # The paper's script, copied unchanged from
+  # github.com/accl-kaust/frac_evaluation_script at commit 164b196.  It reads
+  # data/latency_throughput and keeps the names starting with FILE_PREFIX;
+  # set points that prefix and the run length at this run's d and m.
+  - script: latency_throughput_fig_13.py
+    data: data/latency_throughput
+    set:
+      FILE_PREFIX: "rr_d_{d}_m_{m}_n_"
+      RUN_SECONDS: "{d}"

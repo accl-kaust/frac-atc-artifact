@@ -13,3 +13,8 @@ docs/_build/
 dump.fst
 dump.vcd
 accl
+
+# eval/: per-machine settings, licensed fonts, and measurement results
+eval/testbed.yaml
+eval/fonts/
+eval/*/results/

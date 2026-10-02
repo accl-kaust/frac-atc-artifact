@@ -1,0 +1,12 @@
+# A short check of the setup before the full sweep: two client counts per
+# target instead of eight, about five minutes in all.
+#
+#   eval/run.py latency_throughput -c smoke.yaml
+#
+# Everything else comes from experiment.yaml.  Results go to
+# results/<time>-smoke.
+
+base: experiment.yaml
+description: Smoke test of the latency vs throughput setup, with 1 and 22 clients
+sweep:
+  n: [1, 22]
