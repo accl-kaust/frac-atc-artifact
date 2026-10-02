@@ -3,12 +3,16 @@
 #   eval/run.py latency_throughput      measure, on the machine cabled to the U280
 #   eval/plot.py latency_throughput     draw the figure from the newest run
 #
-# For each target below, run.py programs its bitstream, loads the partial
-# bitstreams its slots name, then runs fperf once per sweep point and saves
-# the output under `name`.  O_1 is the image with fRAC, which
+# Before every run, run.py programs the target's bitstream and loads the
+# partial bitstreams its slots name, then runs fperf and saves the output
+# under `name`.  O_1 is the image with fRAC, which
 # reassembles requests; O_0 is the image without it.
 
 description: Latency vs application throughput, with and without fRAC (Fig. 13)
+
+# Program the full image and load the slots again before every run, so each
+# run starts on a freshly configured FPGA.  "once" programs each target once.
+program: every_run
 
 # Paths are relative to the repository root.  bitstream is the full image,
 # programmed over JTAG.  partials is the directory of ICAP partial

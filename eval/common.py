@@ -28,7 +28,9 @@ REPO_DIR = os.path.dirname(EVAL_DIR)
 DEFAULT_CONFIG = "experiment.yaml"
 TARGET_KEY = "O"                # the key whose value picks the target
 
-CONFIG_KEYS = ("description", "targets", "params", "sweep", "name", "fperf", "plot")
+CONFIG_KEYS = ("description", "program", "targets", "params", "sweep", "name", "fperf",
+               "plot")
+PROGRAM_MODES = ("every_run", "once")
 TARGET_KEYS = ("bitstream", "partials", "slots", "sha256")
 PLOT_KEYS = ("script", "data", "set")
 BUILD_KEYS = ("job", "payload", "frac", "spinhdl", "vivado", "started", "staged")
@@ -287,6 +289,10 @@ class Experiment:
         if unknown:
             raise ConfigError(f"{where}: unknown keys: {', '.join(sorted(map(str, unknown)))}")
         self.description = str(raw.get("description") or "")
+        self.program = str(raw.get("program") or "every_run")
+        if self.program not in PROGRAM_MODES:
+            raise ConfigError(f"{where}: program must be {' or '.join(PROGRAM_MODES)}, "
+                              f"not {self.program!r}")
 
         params = raw.get("params") or {}
         if not isinstance(params, dict):

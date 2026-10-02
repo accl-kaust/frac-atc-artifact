@@ -1,5 +1,5 @@
 # A short check of the setup before the full sweep: two client counts per
-# target instead of eight, about five minutes in all.
+# target instead of eight, about eight minutes in all.
 #
 #   eval/run.py latency_throughput -c smoke.yaml
 #

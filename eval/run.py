@@ -6,12 +6,13 @@
     eval/run.py latency_throughput --dry-run        # print the plan, touch nothing
     eval/run.py latency_throughput --resume         # finish the newest run
 
-For each target in the experiment's config, in order, run.py programs the
-target's bitstream, its full image, with scripts/programfpga.sh, waits until
-the link is up and the FPGA answers ping, and loads the partial bitstreams
-its slots name from its partials directory with scripts/reconfslots.go.
-It then runs libtpa's fperf once per sweep point and keeps each run's
-complete output, named by the config's name template, in a new directory
+run.py runs libtpa's fperf once per sweep point, one target after the
+other.  Before every run it programs the target's bitstream, its full
+image, with scripts/programfpga.sh, waits until the link is up and the FPGA
+answers ping, and loads the partial bitstreams its slots name from its
+partials directory with scripts/reconfslots.go.  With `program: once` in
+the config, it does that once per target instead.  Each run's complete
+output, named by the config's name template, goes to a new directory
 eval/<experiment>/results/<time>.  A run that fails keeps its output as
 <name>.part instead, so it is neither plotted nor kept by --resume.
 manifest.yaml there records the config, the testbed, the sha256 of every
@@ -456,12 +457,17 @@ def warn_cores(points, tb):
 
 # ---------------------------------------------------------------- the run
 
-def estimate(points, plans, tb, args):
+def estimate(exp, points, plans, tb, args):
     """Rough seconds the runs take."""
+    every_run = exp.program == "every_run" and not args.no_program
     seconds = 0
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
-        if not args.no_program:
-            seconds += PROGRAM_SECONDS + tb["settle"] + 2 * len(plans[key].slots)
+        group = list(group)
+        setup = PROGRAM_SECONDS + tb["settle"] + 2 * len(plans[key].slots)
+        if every_run:
+            seconds += setup * len(group)
+        elif not args.no_program:
+            seconds += setup
         seconds += sum(point["d"] + RUN_OVERHEAD + tb["pause"] for point in group)
     return seconds
 
@@ -498,8 +504,8 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
     if manifest.get("config", config) != config:
         raise ConfigError(f"{where} was measured with {manifest['config']}; resume it with "
                           f"-c {manifest['config']}, or start a new run")
-    for key, mine in (("params", exp.params), ("name", exp.name_template),
-                      ("fperf", exp.fperf_template)):
+    for key, mine in (("program", exp.program), ("params", exp.params),
+                      ("name", exp.name_template), ("fperf", exp.fperf_template)):
         if key in manifest and manifest[key] != mine:
             raise ConfigError(f"{where} was measured with a different {key}; "
                               "start a new run instead")
@@ -537,6 +543,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
             "sweep": {key: values for key, values in exp.sweep},
             "name": exp.name_template,
             "fperf": exp.fperf_template,
+            "program": exp.program,
             "targets": {},
             "runs": [],
         }
@@ -551,6 +558,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
         manifest.setdefault("params", exp.params)
         manifest.setdefault("name", exp.name_template)
         manifest.setdefault("fperf", exp.fperf_template)
+        manifest.setdefault("program", exp.program)
         manifest.setdefault("targets", {})
         manifest.setdefault("runs", [])
     for key, plan in plans.items():
@@ -582,6 +590,24 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
         write_yaml(manifest_path, manifest)
         statuses.append(status)
 
+    def prepare(plan, label):
+        """Program the target's image and load its slots; None, or why that failed."""
+        if args.no_program:
+            log(f"{label}: measuring the image already on the FPGA")
+        elif program(plan.bit, tb, tools):
+            log(f"settling for {tb['settle']:g} s")
+            time.sleep(tb["settle"])
+        else:
+            return "programming failed"
+        if not wait_ready(tb, state, tb["ready_timeout"]):
+            return "the FPGA did not come up"
+        if not args.no_program:
+            for slot, _, path, _ in plan.slots:
+                if not load_slot(slot, path, tb, tools):
+                    return f"loading slot {slot} failed"
+        return None
+
+    every_run = exp.program == "every_run" and not args.no_program
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
         plan, label = plans[key], f"{TARGET_KEY}_{key}"
         todo = []
@@ -596,29 +622,22 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
         if not todo:
             continue
 
-        why = None
-        if args.no_program:
-            log(f"{label}: measuring the image already on the FPGA")
-        elif program(plan.bit, tb, tools):
-            log(f"settling for {tb['settle']:g} s")
-            time.sleep(tb["settle"])
-        else:
-            why = "programming failed"
-        if not why and not wait_ready(tb, state, tb["ready_timeout"]):
-            why = "the FPGA did not come up"
-        if not why and not args.no_program:
-            for slot, _, path, _ in plan.slots:
-                if not load_slot(slot, path, tb, tools):
-                    why = f"loading slot {slot} failed"
-                    break
-        if why:
-            log(f"{label}: {why}; skipping its {len(todo)} runs")
-            for point, name, _ in todo:
-                finish(point, name, f"skipped: {why}")
-            continue
+        if not every_run:
+            why = prepare(plan, label)
+            if why:
+                log(f"{label}: {why}; skipping its {len(todo)} runs")
+                for point, name, _ in todo:
+                    finish(point, name, f"skipped: {why}")
+                continue
 
         for index, (point, name, path) in enumerate(todo):
-            if not wait_ready(tb, state, tb["ready_timeout"], quiet=True):
+            if every_run:
+                why = prepare(plan, label)
+                if why:
+                    log(f"{label}: {why}; skipping {name}")
+                    finish(point, name, f"skipped: {why}")
+                    continue
+            elif not wait_ready(tb, state, tb["ready_timeout"], quiet=True):
                 for later, later_name, _ in todo[index:]:
                     finish(later, later_name, "skipped: the FPGA stopped answering")
                 break
@@ -662,7 +681,7 @@ def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir
     if missing:
         print(f"not found   {', '.join(missing)}")
     print(f"results     {rel(resume_dir) if resume_dir else 'a new directory in ' + rel(exp.results)}")
-    print(f"runs        {len(points)}, about {estimate(points, plans, tb, args) / 60:.0f} min")
+    print(f"runs        {len(points)}, about {estimate(exp, points, plans, tb, args) / 60:.0f} min")
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
         plan = plans[key]
         print(f"\n{TARGET_KEY}_{key}  {rel(plan.bit)}")
@@ -672,11 +691,12 @@ def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir
         if args.no_program:
             print("  not programmed: --no-program")
         else:
+            print("  before every run:" if exp.program == "every_run" else "  once:")
             prefix = f"HW_TARGET={shlex.quote(tb['jtag'])} " if tb["jtag"] else ""
-            print("  $ " + prefix + shlex.join(program_argv(plan.bit, tools)))
+            print("    $ " + prefix + shlex.join(program_argv(plan.bit, tools)))
             for slot, _, path, sha in plan.slots:
-                print(f"  # slot {slot}: {rel(path)}, sha256 {sha}")
-                print("  $ " + shlex.join(slot_argv(slot, path, tb, tools)))
+                print(f"    # slot {slot}: {rel(path)}, sha256 {sha}")
+                print("    $ " + shlex.join(slot_argv(slot, path, tb, tools)))
         for point in group:
             name = exp.log_name(point)
             if resume_dir and log_complete(os.path.join(resume_dir, name), point["d"]):
@@ -761,7 +781,7 @@ def main(argv=None):
         print("run.py: interrupted", file=sys.stderr)
         return 130
     log.open(os.path.join(run_dir, "runner.out"))
-    log(f"{exp.name}: {len(points)} runs, about {estimate(points, plans, tb, args) / 60:.0f} min, "
+    log(f"{exp.name}: {len(points)} runs, about {estimate(exp, points, plans, tb, args) / 60:.0f} min, "
         f"into {rel(run_dir)}")
     code = 0
     try:
