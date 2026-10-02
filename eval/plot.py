@@ -6,10 +6,11 @@
     eval/plot.py latency_throughput --run DIR --out FIGDIR    # any directory of logs
 
 The figure scripts are the paper's, copied unchanged from
-github.com/accl-kaust/frac_evaluation_script.  Each reads its logs from a
-fixed path such as data/latency_throughput under the directory it runs in.
-plot.py runs each script in a scratch directory where that path leads to
-the run's logs, after applying the config's `set` entries to module
+github.com/accl-kaust/frac_evaluation_script.  Each reads its logs from
+fixed paths such as data/latency_throughput under the directory it runs in.
+plot.py runs each script in a scratch directory where the config's `data`
+entries make those paths lead to the run's logs, to an empty directory, or
+to another run, after applying the config's `set` entries to module
 constants such as FILE_PREFIX.  The figure lands next to the logs, or in
 --out, together with what the script printed, saved as <script>.out.
 
@@ -25,8 +26,8 @@ import subprocess
 import sys
 import tempfile
 
-from common import (DEFAULT_CONFIG, EVAL_DIR, ConfigError, Experiment, find_experiment,
-                    log_complete, read_yaml, rel)
+from common import (DEFAULT_CONFIG, EVAL_DIR, ConfigError, Experiment, abs_path,
+                    find_experiment, log_complete, read_yaml, rel)
 
 FIGURE_TYPES = (".pdf", ".png", ".svg")
 
@@ -70,7 +71,20 @@ def prepared_source(spec, params):
     return source
 
 
-def plot(spec, source, run_dir, out_dir):
+def resolve_data(spec, run_dir):
+    """Where each path the figure script reads leads, with directories checked."""
+    resolved = {}
+    for path, (kind, target) in spec.data.items():
+        if kind == "dir":
+            target = abs_path(target, run_dir)
+            if not os.path.isdir(target):
+                raise ConfigError(f"plot {os.path.basename(spec.script)}: data.{path}: "
+                                  f"{target} is not a directory")
+        resolved[path] = (kind, target)
+    return resolved
+
+
+def plot(spec, source, data, run_dir, out_dir):
     """Run one figure script on `run_dir`; 0 if it wrote a figure, else 1."""
     script = os.path.basename(spec.script)
     stem = os.path.splitext(script)[0]
@@ -82,9 +96,13 @@ def plot(spec, source, run_dir, out_dir):
         fonts = os.path.join(EVAL_DIR, "fonts")
         if os.path.isdir(fonts):
             os.symlink(fonts, os.path.join(stage, "fonts"))
-        data = os.path.join(stage, spec.data)
-        os.makedirs(os.path.dirname(data), exist_ok=True)
-        os.symlink(run_dir, data)
+        for path, (kind, target) in data.items():
+            link = os.path.join(stage, path)
+            os.makedirs(os.path.dirname(link), exist_ok=True)
+            if kind == "empty":
+                os.makedirs(link, exist_ok=True)
+            else:
+                os.symlink(run_dir if kind == "run" else target, link)
         print(f"{script}: plotting {run_dir}", flush=True)
         env = dict(os.environ, MPLBACKEND="Agg")
         with open(printed, "w") as out:
@@ -129,7 +147,8 @@ def main(argv=None):
             raise ConfigError(f"{rel(exp.config_path)} lists no figure script under plot")
         run_dir = exp.find_run(args.run)
         params = run_params(exp, run_dir)
-        jobs = [(spec, prepared_source(spec, params)) for spec in exp.plots]
+        jobs = [(spec, prepared_source(spec, params), resolve_data(spec, run_dir))
+                for spec in exp.plots]
     except ConfigError as e:
         sys.exit(f"plot.py: {e}")
     missing = [name for name in ("numpy", "matplotlib") if importlib.util.find_spec(name) is None]
@@ -147,7 +166,7 @@ def main(argv=None):
                   f"rest on fewer samples: {', '.join(short)}")
     out_dir = os.path.abspath(args.out) if args.out else run_dir
     os.makedirs(out_dir, exist_ok=True)
-    return max(plot(spec, source, run_dir, out_dir) for spec, source in jobs)
+    return max(plot(spec, source, data, run_dir, out_dir) for spec, source, data in jobs)
 
 
 if __name__ == "__main__":

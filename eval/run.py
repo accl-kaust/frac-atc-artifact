@@ -11,7 +11,9 @@ other.  Before every run it programs the target's bitstream, its full
 image, with scripts/programfpga.sh, waits until the link is up and the FPGA
 answers ping, and loads the partial bitstreams its slots name from its
 partials directory with scripts/reconfslots.go.  With `program: once` in
-the config, it does that once per target instead.  Each run's complete
+the config, it does that once per target instead.  A config with a
+functions table also loads each run's function into its slot first, unless
+that slot holds it already.  Each run's complete
 output, named by the config's name template, goes to a new directory
 eval/<experiment>/results/<time>.  A run that fails keeps its output as
 <name>.part instead, so it is neither plotted nor kept by --resume.
@@ -39,7 +41,8 @@ import threading
 import time
 import traceback
 
-from common import (DEFAULT_CONFIG, EVAL_DIR, REPO_DIR, TARGET_KEY, ConfigError, Experiment,
+from common import (DEFAULT_CONFIG, EVAL_DIR, FUNCTION_KEY, REPO_DIR, TARGET_KEY, ConfigError,
+                    Experiment,
                     abs_path, build_record, find_experiment, git_info, log_complete, merge, now,
                     read_yaml, rel, sha256_file, write_yaml)
 
@@ -196,7 +199,7 @@ class TargetPlan:
     """A target checked on disk: its full image and its partial bitstreams,
     each with its sha256."""
 
-    def __init__(self, target):
+    def __init__(self, target, functions):
         self.key = target.key
         self.bit = target.bitstream
         if not os.path.isfile(self.bit):
@@ -211,14 +214,21 @@ class TargetPlan:
         self.build = build_record(bit_dir) or build_record(os.path.dirname(bit_dir))
         self.partials = target.partials
         self.slots = []                     # (slot, file name, path, sha256)
-        if target.slots and not os.path.isdir(self.partials):
-            raise ConfigError(f"target {self.key}: partials {rel(self.partials)} is not a "
+        self.functions = {}                 # f value: (slot, file name, path, sha256)
+        if (target.slots or functions) and not (self.partials and os.path.isdir(self.partials)):
+            raise ConfigError(f"target {self.key}: partials {rel(self.partials or '.')} is not a "
                               f"directory; fix the config or pass --partials {self.key}=DIR")
         for slot, name in sorted(target.slots.items()):
             path = abs_path(name, self.partials)
             if not os.path.isfile(path):
                 raise ConfigError(f"target {self.key}: slot {slot}: {rel(path)} does not exist")
             self.slots.append((slot, name, path, sha256_file(path)))
+        for value, spec in functions.items():
+            path = abs_path(spec["partial"], self.partials)
+            if not os.path.isfile(path):
+                raise ConfigError(f"target {self.key}: functions.{value}: {rel(path)} "
+                                  "does not exist")
+            self.functions[value] = (spec["slot"], spec["partial"], path, sha256_file(path))
 
     def manifest(self, programmed=True):
         entry = {"bitstream": rel(self.bit), "sha256": self.bit_sha256}
@@ -226,10 +236,14 @@ class TargetPlan:
             entry["programmed"] = False     # --no-program: whatever was loaded was measured
         if self.build:
             entry["build"] = dict(self.build)
-        if self.slots:
+        if self.slots or self.functions:
             entry["partials"] = rel(self.partials)
+        if self.slots:
             entry["slots"] = {str(slot): {"file": name, "sha256": sha}
                               for slot, name, _, sha in self.slots}
+        if self.functions:
+            entry["functions"] = {value: {"slot": slot, "file": name, "sha256": sha}
+                                  for value, (slot, name, _, sha) in self.functions.items()}
         return entry
 
 
@@ -252,7 +266,8 @@ def fperf_argv(exp, point, tb, tools, nic):
     # timeout ends a hung run, and -k follows up with SIGKILL.  It runs under
     # sudo, since fperf runs as root and an unprivileged timeout cannot kill it.
     return (shlex.split(tb["sudo"]) + ["timeout", "-k", "15", str(point["d"] + 120)] +
-            ["env", f"TPA_ID={tb['tpa_id']}", f"TPA_ETH_DEV={nic}", f"TPA_CFG={tb['tpa_cfg']}",
+            ["env", f"TPA_ID={tb['tpa_id']}", f"TPA_ETH_DEV={nic}",
+             "TPA_CFG=" + " ".join(cfg for cfg in (tb["tpa_cfg"], exp.tpa_cfg) if cfg),
              tools["tpa"], "run", tools["fperf"],
              "-c", tb["fpga"]["addr"], "-p", str(tb["fpga"]["port"]),
              "-S", str(tb["start_cpu"])] +
@@ -468,6 +483,8 @@ def estimate(exp, points, plans, tb, args):
             seconds += setup * len(group)
         elif not args.no_program:
             seconds += setup
+        if exp.functions and not args.no_program:
+            seconds += 2 * len(group)       # a function load before each run, at most
         seconds += sum(point["d"] + RUN_OVERHEAD + tb["pause"] for point in group)
     return seconds
 
@@ -504,7 +521,8 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
     if manifest.get("config", config) != config:
         raise ConfigError(f"{where} was measured with {manifest['config']}; resume it with "
                           f"-c {manifest['config']}, or start a new run")
-    for key, mine in (("program", exp.program), ("params", exp.params),
+    for key, mine in (("program", exp.program), ("tpa_cfg", exp.tpa_cfg),
+                      ("functions", exp.functions), ("params", exp.params),
                       ("name", exp.name_template), ("fperf", exp.fperf_template)):
         if key in manifest and manifest[key] != mine:
             raise ConfigError(f"{where} was measured with a different {key}; "
@@ -519,7 +537,7 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
         if not old:
             continue
         new = plan.manifest(programmed)
-        for field in ("sha256", "slots", "programmed"):
+        for field in ("sha256", "slots", "functions", "programmed"):
             if old.get(field) != new.get(field):
                 raise ConfigError(f"{where} measured {TARGET_KEY}_{key} with other bitstreams, "
                                   "or without programming them; start a new run instead")
@@ -544,6 +562,8 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
             "name": exp.name_template,
             "fperf": exp.fperf_template,
             "program": exp.program,
+            "functions": exp.functions,
+            "tpa_cfg": exp.tpa_cfg,
             "targets": {},
             "runs": [],
         }
@@ -559,6 +579,8 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
         manifest.setdefault("name", exp.name_template)
         manifest.setdefault("fperf", exp.fperf_template)
         manifest.setdefault("program", exp.program)
+        manifest.setdefault("functions", exp.functions)
+        manifest.setdefault("tpa_cfg", exp.tpa_cfg)
         manifest.setdefault("targets", {})
         manifest.setdefault("runs", [])
     for key, plan in plans.items():
@@ -570,7 +592,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
 def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
     """Program, load and run every point in turn; return this session's statuses."""
     manifest_path = os.path.join(run_dir, "manifest.yaml")
-    state = {"nic": tb["nic"] or None}
+    state = {"nic": tb["nic"] or None, "slots": {}}     # slots: what run.py loaded where
     statuses = []
 
     def finish(point, name, status, started=None, rc=None):
@@ -595,6 +617,7 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
         if args.no_program:
             log(f"{label}: measuring the image already on the FPGA")
         elif program(plan.bit, tb, tools):
+            state["slots"] = {}
             log(f"settling for {tb['settle']:g} s")
             time.sleep(tb["settle"])
         else:
@@ -604,8 +627,24 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
         if not args.no_program:
             for slot, _, path, _ in plan.slots:
                 if not load_slot(slot, path, tb, tools):
+                    state["slots"].pop(slot, None)
                     return f"loading slot {slot} failed"
+                state["slots"][slot] = path
         return None
+
+    def load_function(plan, point):
+        """Load the point's function into its slot unless it is there already;
+        None, or why that failed."""
+        if not exp.functions or args.no_program:
+            return None
+        slot, _, path, _ = plan.functions[str(point[FUNCTION_KEY])]
+        if state["slots"].get(slot) == path:
+            return None
+        if load_slot(slot, path, tb, tools):
+            state["slots"][slot] = path
+            return None
+        state["slots"].pop(slot, None)
+        return f"loading {rel(path)} into slot {slot} failed"
 
     every_run = exp.program == "every_run" and not args.no_program
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
@@ -641,6 +680,11 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
                 for later, later_name, _ in todo[index:]:
                     finish(later, later_name, "skipped: the FPGA stopped answering")
                 break
+            why = load_function(plan, point)
+            if why:
+                log(f"{label}: {why}; skipping {name}")
+                finish(point, name, f"skipped: {why}")
+                continue
             shown = "  ".join(f"{k}={point[k]}" for k in exp.swept if k != TARGET_KEY)
             log(f"{label}  {shown}  {name}")
             started = (now(), time.monotonic())
@@ -672,6 +716,7 @@ def summarize(exp, run_dir, manifest):
 def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir):
     """What a run would do, with every command it would run."""
     nic = tb["nic"] or detect_nic(tb["fpga"]["addr"]) or "<nic>"
+    every_run = exp.program == "every_run" and not args.no_program
     testbed = rel(tb_path) if tb_path else "built-in defaults; there is no eval/testbed.yaml"
     print(f"experiment  {exp.name}, {rel(exp.config_path)}")
     if exp.description:
@@ -697,11 +742,21 @@ def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir
             for slot, _, path, sha in plan.slots:
                 print(f"    # slot {slot}: {rel(path)}, sha256 {sha}")
                 print("    $ " + shlex.join(slot_argv(slot, path, tb, tools)))
+        loaded = {slot: path for slot, _, path, _ in plan.slots}
         for point in group:
             name = exp.log_name(point)
             if resume_dir and log_complete(os.path.join(resume_dir, name), point["d"]):
                 print(f"  keep {name}")
                 continue
+            if every_run:
+                loaded = {slot: path for slot, _, path, _ in plan.slots}
+            if exp.functions and not args.no_program:
+                slot, _, path, sha = plan.functions[str(point[FUNCTION_KEY])]
+                if loaded.get(slot) != path:
+                    print(f"  # {FUNCTION_KEY}={point[FUNCTION_KEY]}: load {rel(path)} into "
+                          f"slot {slot}, sha256 {sha}")
+                    print("  $ " + shlex.join(slot_argv(slot, path, tb, tools)))
+                    loaded[slot] = path
             print("  $ " + shlex.join(fperf_argv(exp, point, tb, tools, nic)))
             print(f"      > {name}")
 
@@ -749,9 +804,14 @@ def main(argv=None):
         if args.no_program and len(keys) > 1:
             raise ConfigError("--no-program measures whatever image is loaded, so choose one "
                               f"target with --only {TARGET_KEY}=VALUE")
+        if (args.no_program and exp.functions
+                and len({str(point[FUNCTION_KEY]) for point in points}) > 1):
+            raise ConfigError("--no-program cannot switch functions, so choose one with "
+                              f"--only {FUNCTION_KEY}=VALUE")
         tb, tb_path = load_testbed(args.testbed)
-        plans = {key: TargetPlan(exp.targets[key]) for key in keys}
-        need_reconf = not args.no_program and any(plans[key].slots for key in keys)
+        plans = {key: TargetPlan(exp.targets[key], exp.functions) for key in keys}
+        need_reconf = not args.no_program and bool(
+            exp.functions or any(plans[key].slots for key in keys))
         tools, missing = find_tools(tb, not args.no_program, need_reconf)
         resume_dir = None if args.resume is None else exp.find_run(args.resume or None)
         if missing and not args.dry_run:

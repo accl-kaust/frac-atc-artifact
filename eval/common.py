@@ -8,9 +8,11 @@ result directories.
 Beside the standard library it needs only PyYAML, and it keeps to Python
 3.10, so eval/run.py works with a testbed's system Python.
 """
+import ast
 import datetime
 import hashlib
 import itertools
+import operator
 import os
 import re
 import shlex
@@ -28,9 +30,10 @@ REPO_DIR = os.path.dirname(EVAL_DIR)
 DEFAULT_CONFIG = "experiment.yaml"
 TARGET_KEY = "O"                # the key whose value picks the target
 
-CONFIG_KEYS = ("description", "program", "targets", "params", "sweep", "name", "fperf",
-               "plot")
+CONFIG_KEYS = ("description", "program", "tpa_cfg", "targets", "functions", "params", "sweep",
+               "name", "fperf", "plot")
 PROGRAM_MODES = ("every_run", "once")
+FUNCTION_KEY = "f"              # the key whose value picks an entry of the functions table
 TARGET_KEYS = ("bitstream", "partials", "slots", "sha256")
 PLOT_KEYS = ("script", "data", "set")
 BUILD_KEYS = ("job", "payload", "frac", "spinhdl", "vivado", "started", "staged")
@@ -126,6 +129,36 @@ def template_fields(template, where):
             raise ConfigError(f"{where}: use named fields such as {{n}} in {template!r}")
         names.add(name)
     return names
+
+
+_ARITH = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+          ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod}
+
+
+def arith(text):
+    """`text` as an integer when it is integer arithmetic such as "2048 - 64",
+    else `text` unchanged."""
+    def value(node):
+        if isinstance(node, ast.Constant) and type(node.value) is int:
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in _ARITH:
+            return _ARITH[type(node.op)](value(node.left), value(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return -value(node.operand)
+        raise ValueError(text)
+
+    try:
+        return value(ast.parse(text.strip(), mode="eval").body)
+    except (SyntaxError, ValueError, ZeroDivisionError):
+        return text
+
+
+def derive(field, point):
+    """A functions-table value for one sweep point: a template such as
+    "{X} - 64" is filled in from the point and, if it is arithmetic, worked out."""
+    if isinstance(field, str) and "{" in field:
+        return arith(field.format(**point))
+    return field
 
 
 def find_experiment(name):
@@ -251,9 +284,29 @@ class PlotSpec:
         if unknown:
             raise ConfigError(f"{label}: unknown keys: {', '.join(sorted(map(str, unknown)))}")
         self.script = abs_path(spec["script"], exp.dir)
-        self.data = str(spec.get("data") or f"data/{exp.name}").strip("/")
-        if not self.data or self.data == "." or os.pardir in self.data.split("/"):
-            raise ConfigError(f"{label}: data must be a relative path such as data/{exp.name}")
+        data = spec.get("data") or f"data/{exp.name}"
+        if isinstance(data, str):
+            data = {data: "run"}
+        if not isinstance(data, dict):
+            raise ConfigError(f"{label}: data must be a path such as data/{exp.name}, or map "
+                              "such paths to run, empty or a directory")
+        # Each path the script reads leads to: ("run", None), this run's directory;
+        # ("empty", None), an empty directory; or ("dir", path), another directory,
+        # relative to the run's.
+        self.data = {}
+        for path, source in data.items():
+            path = str(path).strip("/")
+            if not path or path == "." or os.pardir in path.split("/"):
+                raise ConfigError(f"{label}: {path!r} must be a relative path such as "
+                                  f"data/{exp.name}")
+            if source == "run":
+                self.data[path] = ("run", None)
+            elif source is None or source == "empty":
+                self.data[path] = ("empty", None)
+            elif isinstance(source, str) and source:
+                self.data[path] = ("dir", source)
+            else:
+                raise ConfigError(f"{label}: data.{path} must be run, empty or a directory")
         settings = spec.get("set") or {}
         if not isinstance(settings, dict):
             raise ConfigError(f"{label}: set must map module constants to values")
@@ -293,6 +346,9 @@ class Experiment:
         if self.program not in PROGRAM_MODES:
             raise ConfigError(f"{where}: program must be {' or '.join(PROGRAM_MODES)}, "
                               f"not {self.program!r}")
+        # Added to the testbed's TPA_CFG for this experiment's runs; never
+        # formatted, since libtpa's syntax is full of braces.
+        self.tpa_cfg = str(raw.get("tpa_cfg") or "").strip()
 
         params = raw.get("params") or {}
         if not isinstance(params, dict):
@@ -319,6 +375,7 @@ class Experiment:
             if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
                 raise ConfigError(f"{where}: d is the run length in whole seconds, "
                                   f"not {seconds!r}")
+        self.functions = self._functions(raw.get("functions"), where)
 
         targets = raw.get("targets")
         if not isinstance(targets, dict) or not targets:
@@ -328,6 +385,11 @@ class Experiment:
         for value in self.values(TARGET_KEY):
             if str(value) not in self.targets:
                 raise ConfigError(f"{where}: no target for {TARGET_KEY}={value}")
+        if self.functions:
+            for target in self.targets.values():
+                if not target.partials:
+                    raise ConfigError(f"{where}: targets.{target.key} needs partials, the "
+                                      "directory the functions' partial bitstreams are in")
 
         self.name_template = self._template(raw, "name", where)
         self.fperf_template = self._template(raw, "fperf", where)
@@ -346,6 +408,53 @@ class Experiment:
         if not isinstance(plots, list):
             raise ConfigError(f"{where}: plot must list figure scripts")
         self.plots = [PlotSpec(spec, self, where) for spec in plots]
+
+    def _functions(self, functions, where):
+        """The functions table: for each value of f, the slot and the partial
+        bitstream to load before its runs, plus params of its own such as its
+        response size.  Those may be templates over params and sweep keys,
+        such as "{X} - 64".  Its keys join the fields templates can use."""
+        if not functions:
+            return {}
+        if not isinstance(functions, dict):
+            raise ConfigError(f"{where}: functions must map values of {FUNCTION_KEY} to a slot "
+                              "and a partial bitstream")
+        if FUNCTION_KEY not in self.keys:
+            raise ConfigError(f"{where}: functions needs {FUNCTION_KEY} as a param or a sweep key")
+        table, fields = {}, None
+        for value, spec in functions.items():
+            label = f"{where}: functions.{value}"
+            if not isinstance(spec, dict):
+                raise ConfigError(f"{label} must be a mapping with slot and partial")
+            spec = {str(key): field for key, field in spec.items()}
+            missing = [key for key in ("slot", "partial") if key not in spec]
+            if missing:
+                raise ConfigError(f"{label} needs {' and '.join(missing)}")
+            slot = spec["slot"]
+            if isinstance(slot, bool) or not isinstance(slot, int) or slot < 0:
+                raise ConfigError(f"{label}.slot must be a slot number, not {slot!r}")
+            if not isinstance(spec["partial"], str) or not spec["partial"] or "{" in spec["partial"]:
+                raise ConfigError(f"{label}.partial must name a file in the target's partials")
+            for key, field in spec.items():
+                if key in ("slot", "partial") or not isinstance(field, str):
+                    continue
+                unknown = template_fields(field, f"{label}.{key}") - self.keys
+                if unknown:
+                    raise ConfigError(f"{label}.{key} uses {', '.join(sorted(unknown))}, which "
+                                      "is neither a param nor a sweep key")
+            clash = set(spec) & self.keys
+            if clash:
+                raise ConfigError(f"{label} sets {', '.join(sorted(clash))}, which the params "
+                                  "or the sweep set already")
+            if fields is not None and set(spec) != fields:
+                raise ConfigError(f"{where}: every functions entry must set the same keys")
+            fields = set(spec)
+            table[str(value)] = spec
+        for value in self.values(FUNCTION_KEY):
+            if str(value) not in table:
+                raise ConfigError(f"{where}: functions has no entry for {FUNCTION_KEY}={value}")
+        self.keys |= fields
+        return table
 
     def _template(self, raw, key, where):
         template = raw.get(key)
@@ -404,6 +513,10 @@ class Experiment:
         for combo in itertools.product(*lists):
             point = dict(self.params)
             point.update(zip(self.swept, combo))
+            if self.functions:
+                base = dict(point)
+                for key, field in self.functions[str(point[FUNCTION_KEY])].items():
+                    point[key] = derive(field, base)
             points.append(point)
         points.sort(key=lambda point: order.index(str(point[TARGET_KEY])))
         return points

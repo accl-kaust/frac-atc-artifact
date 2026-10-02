@@ -17,6 +17,7 @@ fperf: ""                       # fperf binary; empty: ~/libtpa/build/bin/app/fp
                                 # else ~/.local/bin/fperf, else fperf in PATH
 tpa_id: client
 tpa_cfg: "tcp {tso = 0; } dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }"
+                                # an experiment's own tpa_cfg is added after this
 sudo: sudo                      # fperf needs root for DPDK; "" when run.py runs as root
 
 # Relative to the repository root, or absolute.
