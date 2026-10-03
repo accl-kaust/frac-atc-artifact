@@ -13,9 +13,13 @@ answers ping, and loads the partial bitstreams its slots name from its
 partials directory with scripts/reconfslots.go.  With `program: once` in
 the config, it does that once per target instead.  A config with a
 functions table also loads each run's function into its slot first, unless
-that slot holds it already.  Each run's complete
+that slot holds it already.  With an instances table, a sweep point runs one
+fperf per listed slot at the same time, its n clients split evenly between
+them; with samples, every client thread's per-request latencies are kept,
+in one directory per sweep point.  Each run's complete
 output, named by the config's name template, goes to a new directory
-eval/<experiment>/results/<time>.  A run that fails keeps its output as
+eval/<experiment>/results/<time>.  fperf records every request's
+latency with -L 1, unless the config sets latency_log to false.  A run that fails keeps its output as
 <name>.part instead, so it is neither plotted nor kept by --resume.
 manifest.yaml there records the config, the testbed, the sha256 of every
 bitstream loaded and how each run ended; runner.out keeps run.py's own
@@ -28,8 +32,10 @@ eval/testbed.example.yaml to start one.  Plot the results with eval/plot.py.
 import argparse
 import copy
 import fcntl
+import glob
 import itertools
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -262,16 +268,16 @@ def slot_argv(slot, path, tb, tools):
         "-query-status", path]
 
 
-def fperf_argv(exp, point, tb, tools, nic):
+def fperf_argv(exp, point, tb, tools, nic, tpa_id=None, cpu=None, extra=()):
     # timeout ends a hung run, and -k follows up with SIGKILL.  It runs under
     # sudo, since fperf runs as root and an unprivileged timeout cannot kill it.
     return (shlex.split(tb["sudo"]) + ["timeout", "-k", "15", str(point["d"] + 120)] +
-            ["env", f"TPA_ID={tb['tpa_id']}", f"TPA_ETH_DEV={nic}",
+            ["env", f"TPA_ID={tpa_id or tb['tpa_id']}", f"TPA_ETH_DEV={nic}",
              "TPA_CFG=" + " ".join(cfg for cfg in (tb["tpa_cfg"], exp.tpa_cfg) if cfg),
              tools["tpa"], "run", tools["fperf"],
              "-c", tb["fpga"]["addr"], "-p", str(tb["fpga"]["port"]),
-             "-S", str(tb["start_cpu"])] +
-            exp.fperf_args(point))
+             "-S", str(tb["start_cpu"] if cpu is None else cpu)] +
+            exp.fperf_args(point) + list(extra))
 
 
 def stop(proc):
@@ -396,22 +402,176 @@ def load_slot(slot, path, tb, tools):
     return rc == 0
 
 
+def latency_dir(exp):
+    """A short, fresh directory for fperf -D, or None without latency_log.
+    fperf joins -D and the file name in a 64-byte buffer, so it lives in /tmp."""
+    return tempfile.mkdtemp(prefix="fe", dir="/tmp") if exp.latency_log else None
+
+
+def latency_args(temp):
+    return ["-L", "1", "-D", temp] if temp else []
+
+
 def run_fperf(exp, point, tb, tools, nic, path):
     """One fperf run; (status, exit status).  The output goes to `path`.part
-    and takes its final name only when the run completed."""
+    and takes its final name only when the run completed.  The per-request
+    latencies are recorded but not kept: only samples keeps them."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     part = path + ".part"
-    with open(part, "w") as out:
-        def save(text):
-            out.write(text)
-            out.flush()
-        rc = run_streamed(fperf_argv(exp, point, tb, tools, nic), [save, console])
+    temp = latency_dir(exp)
+    try:
+        with open(part, "w") as out:
+            def save(text):
+                out.write(text)
+                out.flush()
+            rc = run_streamed(fperf_argv(exp, point, tb, tools, nic, extra=latency_args(temp)),
+                              [save, console])
+    finally:
+        if temp:
+            shutil.rmtree(temp, ignore_errors=True)
     if rc == 0 and log_complete(part, point["d"]):
         os.replace(part, path)
         return "ok", rc
     if rc == 124:
         return "timed out", rc
     return ("failed" if rc else "incomplete"), rc
+
+
+def together(exp):
+    """Whether sweep points run through run_together: with an instances table
+    or kept latency samples."""
+    return bool(exp.instances or exp.samples_template)
+
+
+def processes(exp, point, tb):
+    """(run point, TPA_ID, first cpu, threads) for each fperf process of a
+    sweep point.  Processes that run together each need a libtpa instance
+    and cpus of their own."""
+    runs = exp.instance_points(point)
+    threads = exp.threads(point)
+    if len(runs) == 1:
+        return [(runs[0], tb["tpa_id"], tb["start_cpu"], threads)]
+    return [(run, f"{tb['tpa_id']}{index}", tb["start_cpu"] + index * threads, threads)
+            for index, run in enumerate(runs)]
+
+
+def thread_number(path):
+    match = re.search(r"(\d+)\.txt$", path)
+    return int(match.group(1)) if match else -1
+
+
+def counts_before(log_path, seconds):
+    """Requests each client thread completed in its first `seconds` seconds,
+    from the per-second lines of its fperf log: {thread: requests}.  fperf
+    logs one latency per completed request, so this is also how many lines
+    of the thread's latency file those seconds fill."""
+    line = re.compile(r"^\s*(\d+)\s+\S+\s+\.(\d+)\s.*\bcount=(\d+)")
+    counts = {}
+    with open(log_path, errors="replace") as f:
+        for text in f:
+            match = line.match(text)
+            if match and int(match.group(1)) < seconds:
+                thread = int(match.group(2))
+                counts[thread] = counts.get(thread, 0) + int(match.group(3))
+    return counts
+
+
+def gather_samples(temps, procs, logs, samples, skip):
+    """Move each process's per-thread latency files into `samples`, numbered
+    across the processes, dropping each thread's first `skip` seconds; None,
+    or what is missing."""
+    found = []
+    for temp, (run, _, _, threads), log_path in zip(temps, procs, logs):
+        files = sorted(glob.glob(os.path.join(temp, "hugepage_thread_*.txt")), key=thread_number)
+        if len(files) != threads:
+            who = f"slot {run['slot']}" if "slot" in run else "fperf"
+            return f"{who} left {len(files)} latency files, not {threads}"
+        early = counts_before(log_path, skip) if skip else {}
+        found.extend((path, early.get(thread_number(path), 0)) for path in files)
+    os.makedirs(samples, exist_ok=True)
+    for old in glob.glob(os.path.join(samples, "hugepage_thread_*.txt")):
+        os.remove(old)
+    for index, (path, drop) in enumerate(found):
+        target = os.path.join(samples, f"hugepage_thread_{index}.txt")
+        if drop:
+            with open(path, errors="replace") as source, open(target, "w") as kept:
+                kept.writelines(itertools.islice(source, drop, None))
+            os.remove(path)
+        else:
+            shutil.move(path, target)
+    return None
+
+
+def run_together(exp, point, tb, tools, nic, run_dir):
+    """Run the fperf processes of one sweep point at the same time, each into
+    a log of its own, and gather their per-thread latency files into the
+    point's samples directory; (status, exit statuses).  The logs take their
+    final names only when the whole point succeeded."""
+    procs = processes(exp, point, tb)
+    samples = os.path.join(run_dir, exp.samples_name(point)) if exp.samples_template else None
+    children, outs, paths, temps = [], [], [], []
+    try:
+        for run, tpa_id, cpu, _ in procs:
+            path = os.path.join(run_dir, exp.log_name(run))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            paths.append(path)
+            temp = latency_dir(exp)
+            temps.append(temp)
+            extra = latency_args(temp)
+            out = open(path + ".part", "w")
+            outs.append(out)
+            children.append(subprocess.Popen(
+                fperf_argv(exp, run, tb, tools, nic, tpa_id, cpu, extra), cwd=REPO_DIR,
+                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT))
+        if len(children) > 1:
+            log(f"{len(children)} fperf processes running together, one log each")
+        rcs = [child.wait() for child in children]
+        for out in outs:
+            out.close()
+        complete = [rc == 0 and log_complete(path + ".part", point["d"])
+                    for path, rc in zip(paths, rcs)]
+        if any(rc == 124 for rc in rcs):
+            status = "timed out"
+        elif any(rcs):
+            status = "failed"
+        elif not all(complete):
+            status = "incomplete"
+        else:
+            missing = (gather_samples(temps, procs, [path + ".part" for path in paths], samples,
+                                      exp.samples_skip) if samples else None)
+            status = f"incomplete: {missing}" if missing else "ok"
+        if status == "ok":
+            for path in paths:
+                os.replace(path + ".part", path)
+        return status, rcs
+    except BaseException:
+        for child in children:
+            stop(child)
+        raise
+    finally:
+        for out in outs:
+            out.close()
+        for temp in temps:
+            if temp:
+                shutil.rmtree(temp, ignore_errors=True)
+
+
+def point_complete(exp, point, run_dir):
+    """Whether a sweep point finished in an earlier session: every log of it
+    complete and, with samples, a latency file for every client thread."""
+    runs = exp.instance_points(point)
+    for run in runs:
+        if not log_complete(os.path.join(run_dir, exp.log_name(run)), point["d"]):
+            return False
+    if exp.samples_template:
+        files = glob.glob(os.path.join(run_dir, exp.samples_name(point), "hugepage_thread_*.txt"))
+        return len(files) == exp.threads(point) * len(runs)
+    return True
+
+
+def describe(exp, point):
+    """A sweep point's swept values other than O, such as "m=1024  k=2  n=8"."""
+    return "  ".join(f"{key}={point[key]}" for key in exp.swept if key != TARGET_KEY)
 
 
 class SudoKeeper:
@@ -521,9 +681,18 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
     if manifest.get("config", config) != config:
         raise ConfigError(f"{where} was measured with {manifest['config']}; resume it with "
                           f"-c {manifest['config']}, or start a new run")
+    if manifest.get("samples") is None or isinstance(manifest.get("samples"), str):
+        # manifests written before samples had a skip held just the template
+        manifest["samples"] = {"dir": manifest.get("samples"), "skip": 0}
+    if "latency_log" not in manifest:
+        # before latency_log, fperf recorded latencies only to keep samples
+        manifest["latency_log"] = bool(manifest["samples"].get("dir"))
     for key, mine in (("program", exp.program), ("tpa_cfg", exp.tpa_cfg),
-                      ("functions", exp.functions), ("params", exp.params),
-                      ("name", exp.name_template), ("fperf", exp.fperf_template)):
+                      ("latency_log", exp.latency_log),
+                      ("functions", exp.functions), ("instances", exp.instances),
+                      ("params", exp.params), ("name", exp.name_template),
+                      ("samples", {"dir": exp.samples_template, "skip": exp.samples_skip}),
+                      ("fperf", exp.fperf_template)):
         if key in manifest and manifest[key] != mine:
             raise ConfigError(f"{where} was measured with a different {key}; "
                               "start a new run instead")
@@ -564,6 +733,9 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
             "program": exp.program,
             "functions": exp.functions,
             "tpa_cfg": exp.tpa_cfg,
+            "latency_log": exp.latency_log,
+            "instances": exp.instances,
+            "samples": {"dir": exp.samples_template, "skip": exp.samples_skip},
             "targets": {},
             "runs": [],
         }
@@ -581,6 +753,8 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
         manifest.setdefault("program", exp.program)
         manifest.setdefault("functions", exp.functions)
         manifest.setdefault("tpa_cfg", exp.tpa_cfg)
+        manifest.setdefault("instances", exp.instances)
+        manifest.setdefault("samples", {"dir": exp.samples_template, "skip": exp.samples_skip})
         manifest.setdefault("targets", {})
         manifest.setdefault("runs", [])
     for key, plan in plans.items():
@@ -651,13 +825,12 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
         plan, label = plans[key], f"{TARGET_KEY}_{key}"
         todo = []
         for point in group:
-            name = exp.log_name(point)
-            path = os.path.join(run_dir, name)
-            if args.resume is not None and log_complete(path, point["d"]):
+            name = exp.point_id(point)
+            if args.resume is not None and point_complete(exp, point, run_dir):
                 log(f"keep {name}")
                 statuses.append("kept")
             else:
-                todo.append((point, name, path))
+                todo.append((point, name))
         if not todo:
             continue
 
@@ -665,11 +838,11 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
             why = prepare(plan, label)
             if why:
                 log(f"{label}: {why}; skipping its {len(todo)} runs")
-                for point, name, _ in todo:
+                for point, name in todo:
                     finish(point, name, f"skipped: {why}")
                 continue
 
-        for index, (point, name, path) in enumerate(todo):
+        for index, (point, name) in enumerate(todo):
             if every_run:
                 why = prepare(plan, label)
                 if why:
@@ -677,7 +850,7 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
                     finish(point, name, f"skipped: {why}")
                     continue
             elif not wait_ready(tb, state, tb["ready_timeout"], quiet=True):
-                for later, later_name, _ in todo[index:]:
+                for later, later_name in todo[index:]:
                     finish(later, later_name, "skipped: the FPGA stopped answering")
                 break
             why = load_function(plan, point)
@@ -685,11 +858,14 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
                 log(f"{label}: {why}; skipping {name}")
                 finish(point, name, f"skipped: {why}")
                 continue
-            shown = "  ".join(f"{k}={point[k]}" for k in exp.swept if k != TARGET_KEY)
-            log(f"{label}  {shown}  {name}")
+            log(f"{label}  {describe(exp, point)}  {name}")
             started = (now(), time.monotonic())
             try:
-                status, rc = run_fperf(exp, point, tb, tools, state["nic"], path)
+                if together(exp):
+                    status, rc = run_together(exp, point, tb, tools, state["nic"], run_dir)
+                else:
+                    status, rc = run_fperf(exp, point, tb, tools, state["nic"],
+                                           os.path.join(run_dir, name))
             except KeyboardInterrupt:
                 finish(point, name, "interrupted", started)
                 raise
@@ -713,7 +889,7 @@ def summarize(exp, run_dir, manifest):
     log(f"plot with: eval/plot.py {exp.name}{config} --run {name}")
 
 
-def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir):
+def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, resume_dir):
     """What a run would do, with every command it would run."""
     nic = tb["nic"] or detect_nic(tb["fpga"]["addr"]) or "<nic>"
     every_run = exp.program == "every_run" and not args.no_program
@@ -727,6 +903,8 @@ def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir
         print(f"not found   {', '.join(missing)}")
     print(f"results     {rel(resume_dir) if resume_dir else 'a new directory in ' + rel(exp.results)}")
     print(f"runs        {len(points)}, about {estimate(exp, points, plans, tb, args) / 60:.0f} min")
+    for point, why in excluded:
+        print(f"left out    {describe(exp, point)}: {why}")
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
         plan = plans[key]
         print(f"\n{TARGET_KEY}_{key}  {rel(plan.bit)}")
@@ -744,8 +922,8 @@ def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir
                 print("    $ " + shlex.join(slot_argv(slot, path, tb, tools)))
         loaded = {slot: path for slot, _, path, _ in plan.slots}
         for point in group:
-            name = exp.log_name(point)
-            if resume_dir and log_complete(os.path.join(resume_dir, name), point["d"]):
+            name = exp.point_id(point)
+            if resume_dir and point_complete(exp, point, resume_dir):
                 print(f"  keep {name}")
                 continue
             if every_run:
@@ -757,8 +935,19 @@ def print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir
                           f"slot {slot}, sha256 {sha}")
                     print("  $ " + shlex.join(slot_argv(slot, path, tb, tools)))
                     loaded[slot] = path
-            print("  $ " + shlex.join(fperf_argv(exp, point, tb, tools, nic)))
-            print(f"      > {name}")
+            shown = latency_args("/tmp/feXXXXXXXX" if exp.latency_log else None)
+            if not together(exp):
+                print("  $ " + shlex.join(fperf_argv(exp, point, tb, tools, nic, extra=shown)))
+                print(f"      > {name}")
+                continue
+            procs = processes(exp, point, tb)
+            if exp.samples_template:
+                skip = f", first {exp.samples_skip} s dropped" if exp.samples_skip else ""
+                print(f"  # {describe(exp, point)}: latencies of {len(procs) * exp.threads(point)} "
+                      f"clients into {name}{skip}")
+            for run, tpa_id, cpu, _ in procs:
+                print("  $ " + shlex.join(fperf_argv(exp, run, tb, tools, nic, tpa_id, cpu, shown)))
+                print(f"      > {exp.log_name(run)}")
 
 
 def parse_args(argv):
@@ -799,7 +988,11 @@ def main(argv=None):
                 if key not in exp.targets:
                     raise ConfigError(f"{option} {spec}: the config has no target {key}")
                 getattr(exp.targets[key], setter)(path, os.getcwd())
-        points = exp.points(exp.parse_only(args.only))
+        only = exp.parse_only(args.only)
+        points = exp.points(only)
+        excluded = exp.excluded(only)
+        if not points:
+            raise ConfigError("no sweep point is left to run")
         keys = list(dict.fromkeys(str(point[TARGET_KEY]) for point in points))
         if args.no_program and len(keys) > 1:
             raise ConfigError("--no-program measures whatever image is loaded, so choose one "
@@ -821,7 +1014,7 @@ def main(argv=None):
         sys.exit(f"run.py: {e}")
 
     if args.dry_run:
-        print_plan(exp, points, plans, tb, tb_path, tools, missing, args, resume_dir)
+        print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, resume_dir)
         return 0
 
     signal.signal(signal.SIGTERM, interrupted)
@@ -843,6 +1036,8 @@ def main(argv=None):
     log.open(os.path.join(run_dir, "runner.out"))
     log(f"{exp.name}: {len(points)} runs, about {estimate(exp, points, plans, tb, args) / 60:.0f} min, "
         f"into {rel(run_dir)}")
+    for point, why in excluded:
+        log(f"left out {describe(exp, point)}: {why}")
     code = 0
     try:
         warn_cores(points, tb)

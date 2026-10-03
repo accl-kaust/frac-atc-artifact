@@ -89,6 +89,10 @@ def plot(spec, source, data, run_dir, out_dir):
     script = os.path.basename(spec.script)
     stem = os.path.splitext(script)[0]
     printed = os.path.join(out_dir, stem + ".out")
+    for name in spec.fresh:
+        stale = os.path.join(run_dir, name)
+        if os.path.isfile(stale):
+            os.remove(stale)
     with tempfile.TemporaryDirectory(prefix="frac-plot-") as stage:
         with open(os.path.join(stage, script), "w") as f:
             f.write(source)
@@ -106,13 +110,17 @@ def plot(spec, source, data, run_dir, out_dir):
         print(f"{script}: plotting {run_dir}", flush=True)
         env = dict(os.environ, MPLBACKEND="Agg")
         with open(printed, "w") as out:
-            proc = subprocess.Popen([sys.executable, script], cwd=stage, env=env,
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, errors="replace")
-            for line in proc.stdout:
-                sys.stdout.write(line)
-                out.write(line)
-            rc = proc.wait()
+            for step in spec.prepare + [os.path.join(stage, script)]:
+                proc = subprocess.Popen([sys.executable, step], cwd=stage, env=env,
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True, errors="replace")
+                for line in proc.stdout:
+                    sys.stdout.write(line)
+                    out.write(line)
+                rc = proc.wait()
+                if rc != 0:
+                    script = os.path.basename(step)
+                    break
         figures = [name for name in sorted(os.listdir(stage))
                    if os.path.splitext(name)[1] in FIGURE_TYPES]
         for name in figures:
@@ -149,6 +157,10 @@ def main(argv=None):
         params = run_params(exp, run_dir)
         jobs = [(spec, prepared_source(spec, params), resolve_data(spec, run_dir))
                 for spec in exp.plots]
+        for spec in exp.plots:
+            for step in spec.prepare:
+                if not os.path.isfile(step):
+                    raise ConfigError(f"{rel(step)} is missing")
     except ConfigError as e:
         sys.exit(f"plot.py: {e}")
     missing = [name for name in ("numpy", "matplotlib") if importlib.util.find_spec(name) is None]

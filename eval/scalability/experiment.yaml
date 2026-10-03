@@ -1,0 +1,74 @@
+# Scalability: latency as clients grow, with 1, 2 and 4 top_k accelerators
+# serving them (Fig. 16).
+#
+#   eval/run.py scalability       measure, on the machine cabled to the U280
+#   eval/plot.py scalability      draw the figure from the newest run
+#
+# run.py programs the full image once and loads top_k into all four slots.
+# For each sweep point it then starts one fperf per slot the point uses, all
+# at the same time, with the clients split evenly between them.  Every
+# client's per-request latencies are kept, and the figure is drawn from those.
+
+description: Latency vs clients with 1, 2 and 4 top_k accelerators (Fig. 16)
+
+# One programming for the whole experiment; nothing changes between runs.
+program: once
+
+targets:
+  1:                                    # with fRAC; needs a build with four cells
+    bitstream: example/jtag/frac.bit
+    partials: example/icap
+    slots:                              # top_k in every slot, RM ids from spinhdl.yaml
+      0: c00_f00.bin
+      1: c01_f03.bin
+      2: c02_f10.bin
+      3: c03_f15.bin
+
+# k accelerators: one fperf per listed slot, running together, with the n
+# clients split evenly between them.  A point whose n does not split evenly,
+# such as 1 client over 2 slots, is left out.
+instances:
+  1: [0]
+  2: [0, 1]
+  4: [0, 1, 2, 3]
+
+params:
+  O: 1
+  d: 30                         # seconds per run
+  C: 1                          # connections per client thread, fperf -C
+  f: 1                          # top_k, the paper's function id; only in the names
+
+sweep:                          # the first key is the outer loop
+  m: [1024, 4096]               # request bytes, fperf -m and -X; top_k answers 64
+  k: [1, 2, 4]                  # accelerators
+  n: [1, 4, 8, 16, 20, 28]      # clients in total, one cpu each
+
+# One log per fperf process, next to the latencies it measured.
+name: "top_k_{k}_inst/rr_d_{d}_m_{m}_n_{n_per}_f_{f}_O_{O}/fperf_slot{slot}.log"
+
+# Every client thread's per-request latencies, one file each.  The figure
+# reads n in the directory name as clients per accelerator, hence n_per.
+# skip drops each client's first 10 seconds, because the processes of a
+# point do not start at exactly the same moment.
+samples:
+  dir: "top_k_{k}_inst/rr_d_{d}_m_{m}_n_{n_per}_f_{f}_O_{O}"
+  skip: 10
+
+# fperf arguments for one process.  run.py adds -c, -p and -S, and -L and -D
+# for the latencies.
+fperf: "-t rr -d {d} -n {n_per} -m {m} -X {m} -R 64 -C {C} -Z 1 -K {slot}"
+
+plot:
+  # The paper's script, copied unchanged from
+  # github.com/accl-kaust/frac_evaluation_script at commit 164b196.  It reads
+  # data/scalability/top_k_<k>_inst and caches its numbers in
+  # processed_latency_cache.txt there; fresh deletes that file before each
+  # plot, so new runs are never hidden behind old numbers.  Parsing every
+  # sample in pure Python is very slow, so fast_cache.py first writes the
+  # accelerator rows of that cache with numpy, by the script's own rules, and
+  # the script then only draws.  Its CPU and DPU lines stay empty: there are
+  # no such runs here.
+  - script: scalability_fig_16.py
+    data: data/scalability
+    fresh: [processed_latency_cache.txt]
+    prepare: fast_cache.py

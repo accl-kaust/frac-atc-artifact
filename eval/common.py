@@ -30,12 +30,13 @@ REPO_DIR = os.path.dirname(EVAL_DIR)
 DEFAULT_CONFIG = "experiment.yaml"
 TARGET_KEY = "O"                # the key whose value picks the target
 
-CONFIG_KEYS = ("description", "program", "tpa_cfg", "targets", "functions", "params", "sweep",
-               "name", "fperf", "plot")
+CONFIG_KEYS = ("description", "program", "tpa_cfg", "latency_log", "targets", "functions",
+               "instances", "params", "sweep", "name", "samples", "fperf", "plot")
 PROGRAM_MODES = ("every_run", "once")
 FUNCTION_KEY = "f"              # the key whose value picks an entry of the functions table
+INSTANCE_KEY = "k"              # the key whose value picks an entry of the instances table
 TARGET_KEYS = ("bitstream", "partials", "slots", "sha256")
-PLOT_KEYS = ("script", "data", "set")
+PLOT_KEYS = ("script", "data", "set", "fresh", "prepare")
 BUILD_KEYS = ("job", "payload", "frac", "spinhdl", "vivado", "started", "staged")
 
 
@@ -307,6 +308,19 @@ class PlotSpec:
                 self.data[path] = ("dir", source)
             else:
                 raise ConfigError(f"{label}: data.{path} must be run, empty or a directory")
+        fresh = spec.get("fresh") or []
+        fresh = [fresh] if isinstance(fresh, str) else fresh
+        if not isinstance(fresh, list) or not all(
+                isinstance(name, str) and name and "/" not in name and name not in (".", "..")
+                for name in fresh):
+            raise ConfigError(f"{label}: fresh must list file names in the run directory")
+        self.fresh = list(fresh)     # files the script caches results in: removed before it runs
+        prepare = spec.get("prepare") or []
+        prepare = [prepare] if isinstance(prepare, str) else prepare
+        if not isinstance(prepare, list) or not all(isinstance(name, str) and name for name in prepare):
+            raise ConfigError(f"{label}: prepare must list scripts in the experiment directory")
+        # scripts run just before the figure script, in its scratch directory
+        self.prepare = [abs_path(name, exp.dir) for name in prepare]
         settings = spec.get("set") or {}
         if not isinstance(settings, dict):
             raise ConfigError(f"{label}: set must map module constants to values")
@@ -349,6 +363,11 @@ class Experiment:
         # Added to the testbed's TPA_CFG for this experiment's runs; never
         # formatted, since libtpa's syntax is full of braces.
         self.tpa_cfg = str(raw.get("tpa_cfg") or "").strip()
+        # fperf -L 1: record every request's latency, as the paper's runs did.
+        # On unless the config says otherwise; samples keeps the records.
+        self.latency_log = raw.get("latency_log", True)
+        if not isinstance(self.latency_log, bool):
+            raise ConfigError(f"{where}: latency_log must be true or false")
 
         params = raw.get("params") or {}
         if not isinstance(params, dict):
@@ -376,6 +395,7 @@ class Experiment:
                 raise ConfigError(f"{where}: d is the run length in whole seconds, "
                                   f"not {seconds!r}")
         self.functions = self._functions(raw.get("functions"), where)
+        self.instances = self._instances(raw.get("instances"), where)
 
         targets = raw.get("targets")
         if not isinstance(targets, dict) or not targets:
@@ -393,14 +413,48 @@ class Experiment:
 
         self.name_template = self._template(raw, "name", where)
         self.fperf_template = self._template(raw, "fperf", where)
-        names = set()
+        # samples: where every client thread's per-request latencies gather, one
+        # directory per sweep point, and how many seconds to drop from the start
+        # of each thread's file.
+        self.samples_template, self.samples_skip = None, 0
+        samples = raw.get("samples")
+        if samples is not None:
+            samples = {"dir": samples} if isinstance(samples, str) else samples
+            if not isinstance(samples, dict) or not samples.get("dir"):
+                raise ConfigError(f"{where}: samples needs dir, a directory for each sweep point")
+            unknown = set(samples) - {"dir", "skip"}
+            if unknown:
+                raise ConfigError(f"{where}: samples: unknown keys: "
+                                  f"{', '.join(sorted(map(str, unknown)))}")
+            self.samples_template = self._template(samples, "dir", f"{where}: samples")
+            shared = template_fields(self.samples_template, f"{where}: samples") & {"slot", "instance"}
+            if shared:
+                raise ConfigError(f"{where}: samples.dir is one directory per sweep point, for "
+                                  f"all its processes; it cannot use {', '.join(sorted(shared))}")
+            skip = samples.get("skip", 0)
+            if isinstance(skip, bool) or not isinstance(skip, int) or skip < 0:
+                raise ConfigError(f"{where}: samples.skip is whole seconds, not {skip!r}")
+            if skip >= min(self.values("d")):
+                raise ConfigError(f"{where}: samples.skip of {skip} s would drop every run")
+            self.samples_skip = skip
+            if not self.latency_log:
+                raise ConfigError(f"{where}: samples needs latency_log, which records them")
+        hint = "every swept key" + (" and {slot}" if self.instances else "")
+        names, samples = set(), set()
         for point in self.points():
-            name = self.log_name(point)
-            if name in names:
-                raise ConfigError(f"{where}: two sweep points share the log name {name}; "
-                                  "name must use every swept key")
-            names.add(name)
-            self.fperf_args(point)
+            if self.samples_template:
+                directory = self.samples_name(point)
+                if directory in samples:
+                    raise ConfigError(f"{where}: two sweep points share the samples directory "
+                                      f"{directory}; samples must use every swept key")
+                samples.add(directory)
+            for run in self.instance_points(point):
+                name = self.log_name(run)
+                if name in names:
+                    raise ConfigError(f"{where}: two runs share the log name {name}; name must "
+                                      f"use {hint}")
+                names.add(name)
+                self.fperf_args(run)
 
         plots = raw.get("plot") or []
         if isinstance(plots, (str, dict)):
@@ -456,6 +510,45 @@ class Experiment:
         self.keys |= fields
         return table
 
+    def _instances(self, instances, where):
+        """The instances table: for each value of k, the slots that one fperf
+        process each drives at the same time, with the n clients split evenly
+        between them.  Adds n_per, slot and instance to the template fields."""
+        if not instances:
+            return {}
+        if not isinstance(instances, dict):
+            raise ConfigError(f"{where}: instances must map values of {INSTANCE_KEY} to lists "
+                              "of slots")
+        if self.functions:
+            raise ConfigError(f"{where}: instances and functions cannot be combined; both set "
+                              "the slot")
+        for key in (INSTANCE_KEY, "n"):
+            if key not in self.keys:
+                raise ConfigError(f"{where}: instances needs {key} as a param or a sweep key")
+        clash = {"n_per", "slot", "instance"} & self.keys
+        if clash:
+            raise ConfigError(f"{where}: instances sets {', '.join(sorted(clash))}, which the "
+                              "params or the sweep set already")
+        table = {}
+        for value, slots in instances.items():
+            label = f"{where}: instances.{value}"
+            if not isinstance(slots, list) or not slots:
+                raise ConfigError(f"{label} must list the slots, such as [0, 1]")
+            for slot in slots:
+                if isinstance(slot, bool) or not isinstance(slot, int) or slot < 0:
+                    raise ConfigError(f"{label}: {slot!r} is not a slot number")
+            if len(set(slots)) != len(slots):
+                raise ConfigError(f"{label} lists a slot twice")
+            table[str(value)] = list(slots)
+        for value in self.values(INSTANCE_KEY):
+            if str(value) not in table:
+                raise ConfigError(f"{where}: instances has no entry for {INSTANCE_KEY}={value}")
+        for clients in self.values("n"):
+            if isinstance(clients, bool) or not isinstance(clients, int) or clients < 1:
+                raise ConfigError(f"{where}: n must be a whole number of clients, not {clients!r}")
+        self.keys |= {"n_per", "slot", "instance"}
+        return table
+
     def _template(self, raw, key, where):
         template = raw.get(key)
         if not isinstance(template, str) or not template.strip():
@@ -498,37 +591,82 @@ class Experiment:
             only.setdefault(key, set()).update(chosen)
         return only
 
-    def points(self, only=None):
-        """Every sweep point as a dict of params and sweep values.  The points
-        of one target stay together, in the order of the O values, so each
-        image is programmed once."""
+    def _expand(self, only):
+        """Every sweep point as (point, None), or (point, why) for one that
+        cannot run: n clients that do not split evenly over its slots."""
         only = only or {}
         lists = []
         for key, values in self.sweep:
             if key in only:
                 values = [value for value in values if str(value) in only[key]]
             lists.append(values)
-        order = [str(value) for value in self.values(TARGET_KEY)]
-        points = []
         for combo in itertools.product(*lists):
             point = dict(self.params)
             point.update(zip(self.swept, combo))
+            why = None
             if self.functions:
                 base = dict(point)
                 for key, field in self.functions[str(point[FUNCTION_KEY])].items():
                     point[key] = derive(field, base)
-            points.append(point)
-        points.sort(key=lambda point: order.index(str(point[TARGET_KEY])))
-        return points
+            if self.instances:
+                slots = self.instances[str(point[INSTANCE_KEY])]
+                if point["n"] % len(slots):
+                    why = (f"{point['n']} clients do not split evenly over "
+                           f"{len(slots)} slots")
+                else:
+                    point["n_per"] = point["n"] // len(slots)
+            yield point, why
+
+    def _ordered(self, points):
+        """`points` with those of one target together, in the order of the O
+        values, so each image is programmed once."""
+        order = [str(value) for value in self.values(TARGET_KEY)]
+        return sorted(points, key=lambda point: order.index(str(point[TARGET_KEY])))
+
+    def points(self, only=None):
+        """Every sweep point that can run, as a dict of params and sweep
+        values, ordered so each target's image is programmed once."""
+        return self._ordered([point for point, why in self._expand(only) if why is None])
+
+    def excluded(self, only=None):
+        """(point, why) for each sweep point left out."""
+        return [(point, why) for point, why in self._expand(only) if why is not None]
+
+    def instance_points(self, point):
+        """One point per fperf process of a sweep point: one for each slot of
+        its instances entry, or the point itself without an instances table."""
+        if not self.instances:
+            return [point]
+        slots = self.instances[str(point[INSTANCE_KEY])]
+        return [dict(point, slot=slot, instance=index) for index, slot in enumerate(slots)]
+
+    def threads(self, point):
+        """Client threads of each fperf process of a sweep point."""
+        return point["n_per"] if self.instances else int(point.get("n", 1))
+
+    def samples_name(self, point):
+        """The directory, relative to the run, where a sweep point's per-request
+        latencies gather."""
+        return self._relative(self.samples_template, point, "samples")
+
+    def point_id(self, point):
+        """What names a sweep point in the manifest: its samples directory,
+        else its one log."""
+        if self.samples_template:
+            return self.samples_name(point)
+        return self.log_name(point)
 
     def log_name(self, point):
-        """The log file name of one sweep point, relative to the run directory."""
+        """The log file name of one fperf run, relative to the run directory."""
+        return self._relative(self.name_template, point, "name")
+
+    def _relative(self, template, point, label):
         try:
-            name = self.name_template.format(**point)
+            name = template.format(**point)
         except (KeyError, IndexError, ValueError) as e:
-            raise ConfigError(f"name template {self.name_template!r}: {e!r}")
+            raise ConfigError(f"{label} template {template!r}: {e!r}")
         if os.path.isabs(name) or os.pardir in name.split("/"):
-            raise ConfigError(f"log name {name!r} must stay inside the run directory")
+            raise ConfigError(f"{label} {name!r} must stay inside the run directory")
         return name
 
     def fperf_args(self, point):
