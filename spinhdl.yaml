@@ -22,8 +22,9 @@ root:
     # All four carry the same set, so any slot can be swapped to any of them
     # and the four can run different ones at once: top_k, norm and log, then
     # or_slot and pattern_slot, whose responses are as long as their requests
-    # (all-ones and echo) for throughput tests and probing.  The first in each
-    # list is what the full image starts with.
+    # (all-ones and echo) for throughput tests and probing.  C02 also carries
+    # cnn, which needs 140 URAM; no other cell has that many.  The first in
+    # each list is what the full image starts with.
     - name: C00
       id: 0
       slot_id: 0
@@ -52,7 +53,7 @@ root:
       slot_id: 1
       region:
         # Six clock regions, the bottom two rows of SLR2 in X5-X7: static
-        # X4Y8:X4Y9 to the left and X5Y7 below; C00 above, C02 below X6-X7.
+        # X4Y8:X4Y9 to the left; C00 above, C02 below.
         add: CLOCKREGION_X5Y8:CLOCKREGION_X7Y9
       components:
       - name: top_k
@@ -74,9 +75,20 @@ root:
       id: 2
       slot_id: 2
       region:
-        # Eight clock regions, all four rows of SLR1 in X6-X7: static
-        # X5Y4:X5Y7 to the left; C01 above and C03 below.
-        add: CLOCKREGION_X6Y4:CLOCKREGION_X7Y7
+        # All four rows of SLR1 from SLICE_X121 to the right edge: X4Y4:X7Y7
+        # less the left of X4 -- its I/O bank, its clocking column and the
+        # four CLB columns and one BRAM column beside them (SLICE_X117:X120,
+        # RAMB36_X8), which stay static.  Bank 69 in X4Y5 takes clk_100mhz_1
+        # (BH6/BJ6) into main_clk_mmcm_inst in that clocking column, and a
+        # reconfigurable region may hold no static cell.  Sites by type
+        # rather than clock regions, so the BUFG_GT column on the right edge
+        # stays out as well.  25920 slices, 1536 DSP, 240 RAMB36 and 192
+        # URAM, for cnn's 140 URAM.  Static X0Y4:X3Y7 and that strip to the
+        # left; C01 above and C03 below.
+        add: >-
+          SLICE_X121Y240:SLICE_X232Y479 DSP48E2_X16Y90:DSP48E2_X31Y185
+          LAGUNA_X16Y120:LAGUNA_X31Y359 RAMB18_X9Y96:RAMB18_X13Y191
+          RAMB36_X9Y48:RAMB36_X13Y95 URAM288_X2Y64:URAM288_X4Y127
       components:
       - name: top_k
         id: 10
@@ -93,13 +105,15 @@ root:
       - name: pattern_slot
         id: 14
         unit: pattern_slot
+      - name: cnn
+        id: 20
+        unit: cnn
     - name: C03
       id: 3
       slot_id: 3
       region:
         # Six clock regions, the top two rows of SLR0 in X5-X7: static
-        # X4Y2:X4Y3 to the left, X5Y1:X7Y1 below and X5Y4 above; C02 above
-        # X6-X7.
+        # X4Y2:X4Y3 to the left and X5Y1:X7Y1 below; C02 above.
         add: CLOCKREGION_X5Y2:CLOCKREGION_X7Y3
       components:
       - name: top_k

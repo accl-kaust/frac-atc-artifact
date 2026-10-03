@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
-// scheduler.v's request queues and its output FIFO.  The queues set DEPTH
-// themselves (scheduler.v QUEUE_DEPTH); the output FIFO keeps the default.
+// scheduler.v's request queues and its output FIFO, which set DEPTH
+// themselves (scheduler.v QUEUE_DEPTH and OUTPUT_DEPTH, both 4096 as upstream).
 module axis_data_fifo_0 #(
     parameter integer DEPTH = 512
 ) (
@@ -39,13 +39,16 @@ module axis_data_fifo_1 (
     // scheduler.v's fifo_inst_single, the single-packet FIFO, and the only
     // instance of this module.
     //
-    // Back to 512. At 16384 this one FIFO is 584 x 16384 = 9.57 Mbit, which is
-    // 79 % of all FIFO memory in this kernel -- everything else together is
-    // 2.6 Mbit -- and it sits in scheduler.v alongside the queue and output
-    // FIFOs, competing with the reworked scheduler for placement. 512 beats
-    // does cap a request at 512 beats (32 KB), which is the tradeoff being
-    // measured here.
-    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(512)) fifo_inst (
+    // Upstream offrac's depth, 16384 lines (axis_data_fifo_1 in its
+    // gen_ip.tcl).  Every request that arrives whole in one segment waits
+    // here for its slot, whatever its connection, so the depth is how much of
+    // that load is held before the TOE is pushed back on: 512 lines held
+    // eight 4 KB requests, 16384 hold 256.  584 x 16384 is 9.57 Mbit, as much
+    // as the four request queues together.  It was 16384 before (80b24fc) and
+    // went back to 512 (8b8ab93) when a build missed static timing by TNS
+    // -344 ns -- beside a half-finished scheduler, so not by itself -- so
+    // static timing is the number to watch.
+    axis_fifo_taxi #(.DATA_WIDTH(584), .DEPTH(16384)) fifo_inst (
         .clk(clk),
         .rst(rst),
         .s_axis_tvalid(s_axis_tvalid),
