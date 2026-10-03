@@ -144,3 +144,42 @@ units:
     slices: 515
     ramb36: 8
     dsp: 2
+- name: cnn
+  path: kernels/user_krnl/apps/cnn
+  moduletype: recon
+  top: cnn
+  build: synth
+  build_dir: build
+  # the CNN is a packaged Vitis HLS IP: its .xci below, found in this repository
+  ip_repo_paths:
+  - src/ip
+  rtl:
+    dir: src/rtl
+    files:
+    - cnn.v
+    - cnn_core.v
+    - CNN_workload.v
+    - packet_parser_CNN.v
+    - nukv_fifogen.v
+    # the boundary's credit ends; the static side uses the same file
+    - ../../../../reassembly/rtl/slot_credit.v
+    # the core's input and parser FIFOs
+    - ../../../../reassembly/rtl/axis_fifo_taxi.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_if.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_fifo.sv
+  xdc:
+    dir: src/xdc
+    files: null
+  xci:
+    dir: src/xci
+    files:
+    - myproject_1.xci
+  ip:
+    dir: src/ip
+    files: null
+  # out-of-context synthesis, Vivado 2022.2: 42127 LUT, 60546 FF, 79.5 BRAM,
+  # 219 DSP and 140 URAM, which these fields do not count; a cell has 64 URAM
+  utilization:
+    slices: 5266
+    ramb36: 80
+    dsp: 219

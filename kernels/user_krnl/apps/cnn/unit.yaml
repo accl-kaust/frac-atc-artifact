@@ -1,0 +1,41 @@
+name: cnn
+moduletype: recon
+top: cnn
+build: synth
+build_dir: build
+version: 0.1.0
+part: xcu280-fsvh2892-2L-e
+arch: ultraplus
+
+# The CNN itself is a Vitis HLS IP (hls4ml's myproject), packaged in
+# src/ip/myproject_1 and used through its instance src/xci/myproject_1.xci.
+# Vivado finds the IP in this repository, generates it and synthesizes it out
+# of context.  Its HDL is not listed under rtl: the IP also carries include
+# files and the .dat files its weight ROMs are read from.
+ip_repo_paths: src/ip
+
+rtl:
+  dir: "src/rtl"
+  files:
+    - cnn.v
+    - cnn_core.v
+    - CNN_workload.v
+    - packet_parser_CNN.v
+    - nukv_fifogen.v
+    - ../../../../reassembly/rtl/slot_credit.v
+    - ../../../../reassembly/rtl/axis_fifo_taxi.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_if.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_fifo.sv
+
+xdc:
+  dir: "src/xdc"
+  files:
+
+xci:
+  dir: "src/xci"
+  files:
+    - myproject_1.xci
+
+ip:
+  dir: "src/ip"
+  files:

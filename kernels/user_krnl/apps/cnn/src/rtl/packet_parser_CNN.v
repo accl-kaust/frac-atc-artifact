@@ -110,15 +110,19 @@ module packet_parser_CNN
     
     
     
-    axis_data_fifo_32_long fifo_inst (
-      .s_axis_aresetn(1'b1),  // input wire s_axis_aresetn
-      .s_axis_aclk(clk),        // input wire s_axis_aclk
-      .s_axis_tvalid(assembled_data_valid),    // input wire s_axis_tvalid
-      .s_axis_tready(),    // output wire s_axis_tready
-      .s_axis_tdata(assembled_data),      // input wire [63 : 0] s_axis_tdata
-      .m_axis_tvalid(tx_TVALID),    // output wire m_axis_tvalid
-      .m_axis_tready(tx_TREADY),    // input wire m_axis_tready
-      .m_axis_tdata(tx_TDATA)      // output wire [63 : 0] m_axis_tdata
+    // The axis_data_fifo_32_long IP upstream (48 x 16384, never reset).
+    axis_fifo_taxi #(
+      .DATA_WIDTH(ASSEMBLED_DATA_SIZE),
+      .DEPTH(16384)
+    ) fifo_inst (
+      .clk(clk),
+      .rst(1'b0),
+      .s_axis_tvalid(assembled_data_valid),
+      .s_axis_tready(),
+      .s_axis_tdata(assembled_data),
+      .m_axis_tvalid(tx_TVALID),
+      .m_axis_tready(tx_TREADY),
+      .m_axis_tdata(tx_TDATA)
     );
     
    

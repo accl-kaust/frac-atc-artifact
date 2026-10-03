@@ -12,7 +12,7 @@ rtl:
   files:
     - pattern_slot.v
     - pattern_slot_core.v
-    - ../../../../reassembly/rtl/axis_register.v
+    - ../../../../reassembly/rtl/slot_credit.v
 
 xdc:
   dir: "src/xdc"

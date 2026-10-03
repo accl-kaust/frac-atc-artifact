@@ -2,13 +2,12 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
+// CNN accelerator for one PR cell: the core of the cnn reconfigurable module.
+// cnn.v puts it between the two ends of the slot boundary's credit links.
 //
-// mm
-//
-// Slot wrapper: presents the reconfigurable-slot AXI-Stream interface
-// (identical to or_slot / pattern_slot: tdata = {meta, tlast, payload}) and
-// drives the unmodified CNN_workload core underneath. No core logic is
-// changed here -- this file only adapts the interface.
+// This file only adapts the interface: it presents the core side of the slot
+// (as top_k_core / or_slot_core: tdata = {meta, tlast, payload}) and drives
+// the CNN_workload core underneath, whose logic is the upstream offrac one.
 //
 // Mapping notes:
 //   * The core takes a packed {TLAST, data[511:0]} bus; that is exactly
@@ -21,13 +20,11 @@
 //     the core's metadata FIFO presents that as meta_TDATA_out while the
 //     response beat is valid.  It goes out on m_axis_tdata[544:513], where
 //     pkt_sender reads it from the beat that carries tlast as the TCP tx
-//     metadata.  (Before the 545-bit boundary, meta never crossed the cell and
-//     the parent re-attached the session itself; that path is gone.)
+//     metadata.
 //   * The core has no reset input. rst only gates the handshakes here; it
 //     does not clear core state.
 //
-(* DONT_TOUCH = "yes" *)
-module mm #(
+module cnn_core #(
     parameter integer AXIS_DATA_W = 512 + 1 + 32,  // {meta, tlast, payload}
     parameter integer KEEP_W      = 1,
     parameter integer TDEST_W     = 1,

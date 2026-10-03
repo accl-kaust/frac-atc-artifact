@@ -51,15 +51,20 @@ module CNN_workload
     wire FIFO_output_TREADY_int;
     wire [512+32:0] FIFO_output_TDATA;
     
-     axis_data_fifo_3 fifo_inst (
-      .s_axis_aresetn(1'b1),  // input wire s_axis_aresetn
-      .s_axis_aclk(clk),        // input wire s_axis_aclk
-      .s_axis_tvalid(rx_TVALID_int),    // input wire s_axis_tvalid
-      .s_axis_tready(rx_TREADY),    // output wire s_axis_tready
-      .s_axis_tdata({meta_TDATA, rx_TDATA}),      // input wire [551 : 0] s_axis_tdata
-      .m_axis_tvalid(FIFO_output_TVALID),    // output wire m_axis_tvalid
-      .m_axis_tready(FIFO_output_TREADY_int),    // input wire m_axis_tready
-      .m_axis_tdata(FIFO_output_TDATA)      // output wire [551 : 0] m_axis_tdata
+    // The axis_data_fifo_3 IP upstream (552 x 1024, never reset); the taxi
+    // FIFO keeps its depth and carries the 545 bits used.
+    axis_fifo_taxi #(
+      .DATA_WIDTH(512 + 1 + 32),
+      .DEPTH(1024)
+    ) fifo_inst (
+      .clk(clk),
+      .rst(1'b0),
+      .s_axis_tvalid(rx_TVALID_int),
+      .s_axis_tready(rx_TREADY),
+      .s_axis_tdata({meta_TDATA, rx_TDATA}),
+      .m_axis_tvalid(FIFO_output_TVALID),
+      .m_axis_tready(FIFO_output_TREADY_int),
+      .m_axis_tdata(FIFO_output_TDATA)
     );
    
     wire [ASSEMBLED_DATA_SIZE - 1 :0] parsed_pkt_tx_TDATA;
