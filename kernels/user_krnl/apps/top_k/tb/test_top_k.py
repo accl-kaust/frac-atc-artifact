@@ -16,10 +16,20 @@ Protocol under test (see ../src/rtl/top_k.v):
                          beat carries {64, session}, which pkt_sender hands the
                          TCP stack as the tx metadata.
 
+The core takes a line every cycle: each line is sorted whole by a bitonic
+network and merged whole into one of four running top-16 lists, which are
+merged into one after the request's last line.
+
+TWO LEVELS.  LEVEL=core (the default) drives top_k_core itself: every
+handshake, the sideband, the timing.  LEVEL=slot drives the module as it is
+built into a cell, behind the static side of its slot (reassembly/tb/tb_slot.sv):
+credits and PIPE_LEN register stages each way, which carry no sideband.
+
 Run:
 
-  make                     # verilator, TOP_K_NUM=16
-  make TOP_K_NUM=8         # override the parameter
+  make                     # verilator, the core, TOP_K_NUM=16
+  make LEVEL=slot          # the module behind its slot's static side
+  make TOP_K_NUM=8         # override the parameter (LEVEL=core)
   make WAVES=1             # dump dump.fst alongside this file
   make SIM=icarus
   pytest -n auto           # sweep TOP_K_NUM over several builds
@@ -45,14 +55,27 @@ WORDS_PER_LINE = BYTE_LANES // VALUE_BYTES  # 16
 VALUE_MAX = 2**VALUE_W - 1
 MASK_ALL = 0xffff
 
-# A line costs one cycle to accept plus one cycle per value.
-LINE_CYCLES = WORDS_PER_LINE + 1
+# A line is taken every cycle.
+LINE_CYCLES = 1
+
+# From the last data line taken to the response: the sort (5 registers), two
+# cycles to start merging the four lists, and the merge itself, 12.  A request
+# of fewer than four lines leaves lists empty, which the merge skips.
+SORT_STAGES = 5
+RESPONSE_CYCLES = SORT_STAGES + 2 + 12
+RESPONSE_CYCLES_FOR_LINES = {1: 10, 2: 14}
 
 CLK_PERIOD_NS = 4
 
 # Generous bound so a deadlocked DUT fails the run instead of hanging it; the
-# pause generators can stretch a request several times over.
-RESPONSE_TIMEOUT_NS = 64 * LINE_CYCLES * CLK_PERIOD_NS
+# pause generators can stretch a request several times over.  The core took
+# 17 cycles a line before it streamed; that still bounds it.
+RESPONSE_TIMEOUT_NS = 64 * (WORDS_PER_LINE + 1) * CLK_PERIOD_NS
+
+LEVEL = os.environ.get("LEVEL", "core")
+
+# static's response sink: its FIFO, CREDITS deep, and its output register
+SLOT_RESPONSE_LINES = 64 + 1
 
 
 # ------------------------------------------------------ slot boundary beats
@@ -219,6 +242,8 @@ class TB:
         # tstrb is not part of AxiStreamBus and the slot ignores it -- drive it
         # anyway so the input side is never X.
         dut.s_axis_tstrb.setimmediatevalue(1)   # KEEP_W = 1: one 545-bit lane
+        if LEVEL == "slot":
+            dut.decouple.setimmediatevalue(0)
 
         self.top_k_num = dut_top_k_num(dut)
         self.log.info("TOP_K_NUM = %d", self.top_k_num)
@@ -263,12 +288,11 @@ class TB:
 
 
 def core(dut):
-    """The core inside the reconfigurable module.  The top level puts a skid
-    buffer on each side of it, which takes up to two beats the core has not
-    and delays every beat a cycle; the checks about the core's own handshake
-    -- when it accepts, when it answers, when it refuses -- read its ports.
-    Everything else goes through the top level, as the slot sees it."""
-    return dut.core_inst
+    """top_k_core: the top level at LEVEL=core, inside the module at LEVEL=slot.
+    The checks about the core's own handshake -- when it accepts, when it
+    answers, when it refuses -- read its ports; everything else goes through
+    the top level."""
+    return dut if LEVEL == "core" else dut.rm_inst.core_inst
 
 
 async def wait_cycles(dut, count):
@@ -486,11 +510,11 @@ async def run_test_response_meta(dut):
 
 async def run_test_response_held(dut):
     """
-    A response is held stable until it is accepted, and the core refuses new
-    input while a response of its own is waiting.  The response-side skid
-    buffer takes the core's first two responses, so with the sink stalled it
-    is the third request whose response waits in the core, and a fourth must
-    then stay out of it.  Released, all four come back in order and intact.
+    A response is held stable until it is accepted, and the core takes one
+    request at a time: with the sink stalled its response waits in the core
+    and nothing more is taken.  At LEVEL=slot static's response sink holds
+    SLOT_RESPONSE_LINES responses first.  Released, every response comes back
+    in order and intact.
     """
     tb = TB(dut)
 
@@ -501,16 +525,26 @@ async def run_test_response_held(dut):
     tb.sink.pause = True
     await tb.reset()
 
-    requests = [await tb.send_request(random_values(WORDS_PER_LINE), mask=MASK_ALL)
-                for _ in range(4)]
+    capacity = 1 + (SLOT_RESPONSE_LINES if LEVEL == "slot" else 0)
     hs = core(dut)
 
-    for _ in range(16 * LINE_CYCLES):
-        if int(hs.m_axis_tvalid.value) and not int(hs.m_axis_tready.value):
-            break
-        await RisingEdge(dut.clk)
-    else:
-        raise AssertionError("the core never had to hold a response")
+    # one data line per request, no header, so every beat taken is a request
+    requests = [await tb.send_request(random_values(WORDS_PER_LINE), mask=None)
+                for _ in range(capacity + 3)]
+
+    taken = 0
+
+    async def count_taken():
+        nonlocal taken
+        while True:
+            await RisingEdge(dut.clk)
+            if int(hs.s_axis_tvalid.value) and int(hs.s_axis_tready.value):
+                taken += 1
+
+    counter = cocotb.start_soon(count_taken())
+    await wait_cycles(dut, (capacity + 3) * 4 * RESPONSE_CYCLES + 200)
+
+    assert taken == capacity, f"took {taken} requests with room to answer {capacity}"
 
     held = int(dut.m_axis_tdata.value)
     core_held = int(hs.m_axis_tdata.value)
@@ -521,6 +555,7 @@ async def run_test_response_held(dut):
         assert int(hs.m_axis_tvalid.value) == 1, "the core dropped its waiting response"
         assert int(hs.m_axis_tdata.value) == core_held, "the core's waiting response moved"
         assert int(hs.s_axis_tready.value) == 0, "input accepted with a response pending"
+    counter.kill()
 
     tb.sink.pause = False
 
@@ -532,8 +567,12 @@ async def run_test_response_held(dut):
     await wait_cycles(dut, 2)
 
 
-async def run_test_timing(dut):
-    """One value per cycle: a data line costs 17 cycles, a header costs one."""
+async def run_test_timing(dut, lines=2):
+    """
+    A line a cycle, a header included, and the response RESPONSE_CYCLES after
+    the last line however long the request -- sooner for one or two lines,
+    whose empty lists the final merge skips.
+    """
     tb = TB(dut)
     await tb.reset()
 
@@ -555,16 +594,18 @@ async def run_test_timing(dut):
 
     watcher = cocotb.start_soon(watch())
 
-    sent = await tb.send_request(random_values(2 * WORDS_PER_LINE), mask=MASK_ALL)
+    sent = await tb.send_request(random_values(lines * WORDS_PER_LINE), mask=MASK_ALL)
     frame = await tb.recv_response()
     watcher.kill()
 
     tb.check(frame, sent, MASK_ALL)
 
-    assert len(accepts) == 3, f"expected header + 2 data beats, got {accepts}"
-    assert accepts[1] - accepts[0] == 1, "a header beat should not stall the stream"
-    assert accepts[2] - accepts[1] == LINE_CYCLES
-    assert resp_cycle - accepts[2] == LINE_CYCLES
+    assert len(accepts) == lines + 1, f"expected header + {lines} data beats, got {accepts}"
+    gaps = [b - a for a, b in zip(accepts, accepts[1:])]
+    assert gaps == [LINE_CYCLES] * lines, f"line spacing {gaps}"
+    want = RESPONSE_CYCLES_FOR_LINES.get(lines, RESPONSE_CYCLES)
+    assert resp_cycle - accepts[-1] == want, (
+        f"response {resp_cycle - accepts[-1]} cycles after the last line, want {want}")
 
     await wait_cycles(dut, 2)
 
@@ -574,20 +615,26 @@ async def run_test_reset_mid_request(dut):
     tb = TB(dut)
     await tb.reset()
 
-    await tb.send_request([VALUE_MAX] * (8 * WORDS_PER_LINE), mask=0x0001)
-    await wait_cycles(dut, LINE_CYCLES * 2)
+    # mid request, as the last lines are sorted, while the lists merge, and
+    # with the response waiting
+    for stall in [2, 4, 9, 14, 20, 40]:
+        tb.sink.pause = stall == 40
+        await tb.send_request([VALUE_MAX] * (8 * WORDS_PER_LINE), mask=0x0001)
+        await tb.source.wait()
+        await wait_cycles(dut, stall)
 
-    await tb.reset()
-    # reset drops the frame in flight but leaves the driver queues alone
-    tb.source.clear()
-    tb.sink.clear()
+        await tb.reset()
+        # reset drops the frame in flight but leaves the driver queues alone
+        tb.source.clear()
+        tb.sink.clear()
+        tb.sink.pause = False
 
-    assert int(dut.m_axis_tvalid.value) == 0
-    assert tb.sink.empty()
+        assert int(dut.m_axis_tvalid.value) == 0
+        assert tb.sink.empty()
 
-    values = random_values(WORDS_PER_LINE, spread=0xffff)
-    frame = await tb.run_request(values, mask=None)
-    assert unpack_line(frame_payload(frame))[0] == max(values)
+        values = random_values(WORDS_PER_LINE, spread=0xffff)
+        frame = await tb.run_request(values, mask=None)
+        assert unpack_line(frame_payload(frame))[0] == max(values)
 
     assert tb.sink.empty()
     await wait_cycles(dut, 2)
@@ -601,8 +648,8 @@ async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
     tb.set_idle_generator(idle_inserter)
     tb.set_backpressure_generator(backpressure_inserter)
 
-    id_count = 2**len(tb.source.bus.tid)
-    dest_count = 2**len(tb.source.bus.tdest)
+    id_count = 2**len(tb.source.bus.tid) if LEVEL == "core" else 1
+    dest_count = 2**len(tb.source.bus.tdest) if LEVEL == "core" else 1
 
     pending = []
 
@@ -622,8 +669,9 @@ async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
     for sent, mask, tid, tdest, session in pending:
         frame = await tb.recv_response(session)
         tb.check(frame, sent, mask)
-        assert sideband(frame.tid) == tid
-        assert sideband(frame.tdest) == tdest
+        if LEVEL == "core":
+            assert sideband(frame.tid) == tid
+            assert sideband(frame.tdest) == tdest
 
     assert tb.sink.empty()
     await wait_cycles(dut, 2)
@@ -655,13 +703,20 @@ if getattr(cocotb, 'top', None) is not None:
                 run_test_header_only,
                 run_test_unsigned_compare,
                 run_test_duplicates_and_zeros,
-                run_test_sideband,
                 run_test_response_meta,
                 run_test_response_held,
-                run_test_timing,
                 run_test_reset_mid_request,
             ]:
         TestFactory(test).generate_tests()
+
+    # 1, 2 and 63 lines -- 4 KB with the header
+    factory = TestFactory(run_test_timing)
+    factory.add_option("lines", [1, 2, 63])
+    factory.generate_tests()
+
+    # the slot boundary carries no sideband
+    if LEVEL == "core":
+        TestFactory(run_test_sideband).generate_tests()
 
     factory = TestFactory(run_stress_test)
     factory.add_option("idle_inserter", [None, cycle_pause])
@@ -680,21 +735,33 @@ tests_dir = os.path.dirname(__file__)
 rtl_dir = os.path.abspath(os.path.join(tests_dir, '..', 'src', 'rtl'))
 
 
-@pytest.mark.parametrize("top_k_num", [1, 4, 8, 16])
-def test_top_k(request, top_k_num):
+@pytest.mark.parametrize("level,top_k_num", [
+    ("core", 1), ("core", 4), ("core", 8), ("core", 16), ("slot", 16),
+])
+def test_top_k(request, level, top_k_num):
     dut = "top_k"
     module = os.path.splitext(os.path.basename(__file__))[0]
-    toplevel = dut
+    reasm_dir = os.path.join(tests_dir, "..", "..", "..", "reassembly")
 
-    verilog_sources = [
-        os.path.join(rtl_dir, f"{dut}.v"),
-        os.path.join(rtl_dir, f"{dut}_core.v"),
-        os.path.join(tests_dir, "..", "..", "..", "reassembly", "rtl", "axis_register.v"),
-    ]
+    verilog_sources = [os.path.join(rtl_dir, f"{dut}_core.v")]
+    extra_args = ["--sv", "-DSIMULATION", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC"]
 
-    parameters = {'TOP_K_NUM': top_k_num}
+    if level == "slot":
+        toplevel = "tb_slot"
+        verilog_sources += [
+            os.path.join(rtl_dir, f"{dut}.v"),
+            os.path.join(reasm_dir, "rtl", "slot_credit.v"),
+            os.path.join(reasm_dir, "rtl", "slot_boundary.v"),
+            os.path.join(reasm_dir, "tb", "tb_slot.sv"),
+        ]
+        extra_args.append(f"-DSLOT_RM={dut}")
+        parameters = {}
+    else:
+        toplevel = f"{dut}_core"
+        parameters = {'TOP_K_NUM': top_k_num}
 
     extra_env = {f'PARAM_{k}': str(v) for k, v in parameters.items()}
+    extra_env['LEVEL'] = level
 
     sim_build = os.path.join(tests_dir, "sim_build",
         request.node.name.replace('[', '-').replace(']', ''))
@@ -708,5 +775,5 @@ def test_top_k(request, top_k_num):
         parameters=parameters,
         sim_build=sim_build,
         extra_env=extra_env,
-        extra_args=["--sv", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC"],
+        extra_args=extra_args,
     )

@@ -12,7 +12,10 @@ rtl:
   files:
     - norm.v
     - norm_core.v
-    - ../../../../reassembly/rtl/axis_register.v
+    - ../../../../reassembly/rtl/slot_credit.v
+    - ../../../../reassembly/rtl/axis_fifo_taxi.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_if.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_fifo.sv
 
 xdc:
   dir: "src/xdc"

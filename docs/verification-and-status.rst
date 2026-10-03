@@ -108,6 +108,38 @@ request beats it is sent):
    request for C02 waits; afterwards that request is answered, and C02 takes
    4 KB requests, which need all 64 credits, back to back.
 
+Accelerator Tests
+-----------------
+
+Each accelerator in ``kernels/user_krnl/apps`` has its own cocotb suite, run at
+one of two levels:
+
+.. code:: sh
+
+   make -C kernels/user_krnl/apps/log/tb               # log_core alone
+   make -C kernels/user_krnl/apps/log/tb LEVEL=slot    # the module in its slot
+
+``LEVEL=core``, the default, drives ``<name>_core`` directly: every handshake,
+the sideband and the cycle timing. ``LEVEL=slot`` builds the module as it goes
+into a cell and drives it through the static side of its slot
+(``reassembly/tb/tb_slot.sv``): ``slot_boundary``'s request source, response
+sink and 16 register stages each way, with credit flow control. The boundary
+carries no sideband, so the sideband checks run at ``LEVEL=core`` only.
+``log`` and ``norm`` run against ``tb/fp_stubs.v``: invertible integer
+operations at the floating-point cores' latencies, which pin the dataflow but
+not the IEEE-754 arithmetic.
+
+Beyond each response against a reference model, the suites check how long a
+request takes. ``top_k`` takes a line every cycle and answers 19 cycles after
+the request's last line, however long the request (10 for one line, 14 for
+two). ``log`` streams a value every cycle and answers its first line 84 cycles
+after taking it and the rest one every 16. ``norm`` scans a line every cycle
+and answers 65 cycles after the last line, then one line every 16. A 4 KB
+request is checked end to end in each. ``log`` and ``norm`` hold their
+responses in an output FIFO and take no line they could not answer; the suites
+stall the sink to check that, and reset each module with several lines in its
+pipeline.
+
 An additional direct SystemVerilog HBM-write test is available:
 
 .. code:: sh

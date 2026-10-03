@@ -33,6 +33,16 @@ align FIFO (the divide stub concatenates both operands, so a misaligned x and
 say nothing about IEEE-754 arithmetic, and because the stubs never deassert
 tready they do not exercise the real cores' Blocking flow control.
 
+The core streams: a line's 16 values enter the cores on 16 cycles in a row and
+the next line's follow straight after, so several lines -- of one request or
+of several -- are in the cores at once.  Their responses wait in an output
+FIFO of OUT_DEPTH lines, and the core takes no line it could not answer.
+
+TWO LEVELS.  LEVEL=core (the default) drives log_core itself: every handshake,
+the sideband, the timing.  LEVEL=slot drives the module as it is built into a
+cell, behind the static side of its slot (reassembly/tb/tb_slot.sv): credits
+and PIPE_LEN register stages each way, which carry no sideband.
+
 WHEN A RUN GOES RED.  The floating-point cores have no reset -- see
 reset_mid_request_flushes_fp_chain -- so a test that ends with values still
 in the pipeline corrupts whichever test runs next.  Fix the FIRST failure and
@@ -40,8 +50,9 @@ re-run; the ones after it are usually fallout, not separate defects.
 
 Run:
 
-  make                     # verilator, ALIGN_DEPTH=32
-  make ALIGN_DEPTH=64      # override the parameter
+  make                     # verilator, the core, ALIGN_DEPTH=32, OUT_DEPTH=8
+  make LEVEL=slot          # the module behind its slot's static side
+  make ALIGN_DEPTH=64      # override a parameter (LEVEL=core)
   make WAVES=1             # dump dump.fst alongside this file
   make SIM=icarus
   pytest -n auto           # sweep ALIGN_DEPTH over several builds
@@ -74,9 +85,30 @@ FP_DIV_LATENCY = 29
 FP_LOG_LATENCY = 23
 CHAIN_LATENCY = FP_SUB_LATENCY + FP_DIV_LATENCY + FP_LOG_LATENCY
 
-# 16 values issued one per cycle, then the chain drains, then a cycle to
-# register the response
-LINE_CYCLES = WORDS_PER_LINE + CHAIN_LATENCY + 1
+# Once the pipeline is full, lines are taken and answered one every
+# LINE_CYCLES: a value per cycle.
+LINE_CYCLES = WORDS_PER_LINE
+
+# From a data line taken to its response beat: a cycle into in_line, one into
+# cur_line, its 16 values issued, the chain, then the output FIFO
+OUT_FIFO_LATENCY = 3
+FIRST_RESPONSE_CYCLES = 2 + (WORDS_PER_LINE - 1) + CHAIN_LATENCY + OUT_FIFO_LATENCY
+
+# What one line costs taken alone, the slowest the core ever is: the bound
+# for timeouts and drains
+SOLO_LINE_CYCLES = FIRST_RESPONSE_CYCLES + 1
+
+DUT_FLUSH_CYCLES = 128                      # log_core.v default
+
+LEVEL = os.environ.get("LEVEL", "core")
+
+# static's response sink: its FIFO, CREDITS deep, and its output register
+SLOT_RESPONSE_LINES = 64 + 1
+
+# A line is about 100 cycles between being taken and leaving, so the output
+# FIFO must answer for 7 lines for a line to go in every 16 cycles.  Smaller
+# OUT_DEPTH is correct but slower; the rate checks need at least this.
+FULL_RATE_OUT_DEPTH = 8
 
 CLK_PERIOD_NS = 4
 
@@ -154,7 +186,7 @@ def check_response_meta(frame, response_bytes, session=SESSION):
 def response_timeout_ns(line_count):
     """Generous bound so a deadlocked DUT fails the run instead of hanging it;
     the pause generators can stretch a request several times over."""
-    return (line_count + 2) * LINE_CYCLES * CLK_PERIOD_NS * 10
+    return (DUT_FLUSH_CYCLES + (line_count + 2) * SOLO_LINE_CYCLES) * CLK_PERIOD_NS * 10
 
 
 # ------------------------------------------------------------------ packing
@@ -234,6 +266,13 @@ def dut_align_depth(dut):
         return int(os.environ.get("PARAM_ALIGN_DEPTH", 32))
 
 
+def dut_out_depth(dut):
+    try:
+        return int(dut.OUT_DEPTH.value)
+    except AttributeError:
+        return int(os.environ.get("PARAM_OUT_DEPTH", 8))
+
+
 def sideband(value):
     """cocotbext-axi collapses a sideband signal to a scalar when uniform."""
     if isinstance(value, (list, tuple)):
@@ -259,6 +298,8 @@ class TB:
         # tstrb is not part of AxiStreamBus and the slot ignores it -- drive it
         # anyway so the input side is never X.
         dut.s_axis_tstrb.setimmediatevalue(1)   # KEEP_W = 1: one 545-bit lane
+        if LEVEL == "slot":
+            dut.decouple.setimmediatevalue(0)
 
     def set_idle_generator(self, generator=None):
         if generator:
@@ -309,12 +350,11 @@ class TB:
 
 
 def core(dut):
-    """The core inside the reconfigurable module.  The top level puts a skid
-    buffer on each side of it, which takes up to two beats the core has not
-    and delays every beat a cycle; the checks about the core's own handshake
-    -- when it accepts, when it answers, when it refuses -- read its ports.
-    Everything else goes through the top level, as the slot sees it."""
-    return dut.core_inst
+    """log_core: the top level at LEVEL=core, inside the module at LEVEL=slot.
+    The checks about the core's own handshake -- when it accepts, when it
+    answers, when it refuses -- read its ports; everything else goes through
+    the top level."""
+    return dut if LEVEL == "core" else dut.rm_inst.core_inst
 
 
 async def wait_cycles(dut, count):
@@ -367,7 +407,7 @@ async def run_test_header_only(dut):
 
     await tb.send_request(None, header=True)
 
-    for _ in range(LINE_CYCLES):
+    for _ in range(2 * SOLO_LINE_CYCLES):
         await RisingEdge(dut.clk)
         assert int(dut.m_axis_tvalid.value) == 0, "empty request produced a response"
 
@@ -502,11 +542,11 @@ async def run_test_response_meta(dut):
 
 async def run_test_response_held(dut):
     """
-    A response is held stable until it is accepted, and the core refuses new
-    input while a response of its own is waiting.  The response-side skid
-    buffer takes the core's first two responses, so with the sink stalled it
-    is the third request whose response waits in the core, and a fourth must
-    then stay out of it.  Released, all four come back in order and intact.
+    A response is held stable until it is accepted, and the core takes no line
+    it could not answer: with the sink stalled it takes OUT_DEPTH lines beyond
+    the ones it has sent and then refuses.  At LEVEL=slot static's response
+    sink holds SLOT_RESPONSE_LINES more.  Released, every response comes back
+    in order and intact.
     """
     tb = TB(dut)
 
@@ -517,16 +557,27 @@ async def run_test_response_held(dut):
     tb.sink.pause = True
     await tb.reset()
 
-    requests = [await tb.send_request(random_values(WORDS_PER_LINE), header=True)
-                for _ in range(4)]
+    capacity = dut_out_depth(dut) + (SLOT_RESPONSE_LINES if LEVEL == "slot" else 0)
     hs = core(dut)
 
-    for _ in range(8 * LINE_CYCLES):
-        if int(hs.m_axis_tvalid.value) and not int(hs.m_axis_tready.value):
-            break
-        await RisingEdge(dut.clk)
-    else:
-        raise AssertionError("the core never had to hold a response")
+    # one data line per request, no header, so every beat taken is a line
+    requests = [await tb.send_request(random_values(WORDS_PER_LINE), header=False)
+                for _ in range(capacity + 4)]
+
+    taken = 0
+
+    async def count_taken():
+        nonlocal taken
+        while True:
+            await RisingEdge(dut.clk)
+            if int(hs.s_axis_tvalid.value) and int(hs.s_axis_tready.value):
+                taken += 1
+
+    counter = cocotb.start_soon(count_taken())
+    await wait_cycles(dut, DUT_FLUSH_CYCLES + (capacity + 4) * SOLO_LINE_CYCLES)
+
+    assert taken == capacity, f"took {taken} lines with room to answer {capacity}"
+    assert int(hs.s_axis_tready.value) == 0, "input accepted with no room for its response"
 
     held = int(dut.m_axis_tdata.value)
     core_held = int(hs.m_axis_tdata.value)
@@ -536,7 +587,8 @@ async def run_test_response_held(dut):
         assert int(dut.m_axis_tdata.value) == held, "tdata moved before tready"
         assert int(hs.m_axis_tvalid.value) == 1, "the core dropped its waiting response"
         assert int(hs.m_axis_tdata.value) == core_held, "the core's waiting response moved"
-        assert int(hs.s_axis_tready.value) == 0, "input accepted with a response pending"
+        assert int(hs.s_axis_tready.value) == 0, "input accepted with no room for its response"
+    counter.kill()
 
     tb.sink.pause = False
 
@@ -550,40 +602,134 @@ async def run_test_response_held(dut):
 
 async def run_test_timing(dut):
     """
-    Values go in one per cycle and the chain adds a fixed latency, so a line's
-    response lands a deterministic number of cycles after the line is accepted.
-    A header beat costs one cycle and nothing more.
+    The core streams.  A header costs one cycle.  The first data line goes
+    straight to cur_line and the second waits in in_line, so they are taken
+    two cycles apart; after that a line is taken as cur_line finishes, every
+    16 cycles.  The first response leaves FIRST_RESPONSE_CYCLES after its line
+    was taken and the rest follow one every 16 cycles.
     """
     tb = TB(dut)
     await tb.reset()
 
+    lines = 4
     accepts = []
-    resp_cycle = None
+    responses = []
     cycle = 0
     hs = core(dut)
 
     async def watch():
-        nonlocal resp_cycle, cycle
+        nonlocal cycle
         while True:
             await RisingEdge(dut.clk)
             cycle += 1
             if int(hs.s_axis_tvalid.value) and int(hs.s_axis_tready.value):
                 accepts.append(cycle)
-            if resp_cycle is None and int(hs.m_axis_tvalid.value):
-                resp_cycle = cycle
+            if int(hs.m_axis_tvalid.value) and int(hs.m_axis_tready.value):
+                responses.append(cycle)
 
     watcher = cocotb.start_soon(watch())
 
-    sent = await tb.send_request(random_values(WORDS_PER_LINE), header=True)
-    frame = await tb.recv_response(1)
+    sent = await tb.send_request(random_values(lines * WORDS_PER_LINE), header=True)
+    frame = await tb.recv_response(lines)
     watcher.kill()
 
     tb.check(frame, sent)
 
-    assert len(accepts) == 2, f"expected header + 1 data beat, got {accepts}"
+    assert len(accepts) == lines + 1, f"expected header + {lines} data beats, got {accepts}"
     assert accepts[1] - accepts[0] == 1, "a header beat should not stall the stream"
-    assert resp_cycle - accepts[1] == LINE_CYCLES
+    data = accepts[1:]
+    gaps = [b - a for a, b in zip(data, data[1:])]
+    assert gaps == [2] + [LINE_CYCLES] * (lines - 2), f"data line spacing {gaps}"
 
+    assert len(responses) == lines
+    assert responses[0] - data[0] == FIRST_RESPONSE_CYCLES, (
+        f"first response {responses[0] - data[0]} cycles after its line, "
+        f"want {FIRST_RESPONSE_CYCLES}")
+    gaps = [b - a for a, b in zip(responses, responses[1:])]
+    assert gaps == [LINE_CYCLES] * (lines - 1), f"response spacing {gaps}"
+
+    await wait_cycles(dut, 2)
+
+
+async def run_test_stream_4k(dut):
+    """
+    A 4 KB request -- a header and 63 data lines -- streams: its responses
+    leave a line every 16 cycles, so the last is FIRST_RESPONSE_CYCLES +
+    62 x 16 cycles after the first data line was taken, where taking one line
+    at a time cost 81 cycles a line.
+    """
+    tb = TB(dut)
+    await tb.reset()
+
+    lines = 63
+    first_take = None
+    responses = []
+    hs = core(dut)
+    cycle = 0
+
+    async def watch():
+        nonlocal cycle, first_take
+        while True:
+            await RisingEdge(dut.clk)
+            cycle += 1
+            if first_take is None and int(hs.s_axis_tvalid.value) and int(hs.s_axis_tready.value):
+                first_take = cycle
+            if int(hs.m_axis_tvalid.value) and int(hs.m_axis_tready.value):
+                responses.append(cycle)
+
+    watcher = cocotb.start_soon(watch())
+    await tb.run_request(random_values(lines * WORDS_PER_LINE), header=True)
+    watcher.kill()
+
+    # the header is taken a cycle before the first data line
+    total = responses[-1] - (first_take + 1)
+    want = FIRST_RESPONSE_CYCLES + (lines - 1) * LINE_CYCLES
+    if dut_out_depth(dut) >= FULL_RATE_OUT_DEPTH:
+        assert total == want, f"{lines} lines took {total} cycles, want {want}"
+    else:
+        tb.log.info("OUT_DEPTH %d: %d lines took %d cycles (%d at full rate)",
+                    dut_out_depth(dut), lines, total, want)
+
+    await wait_cycles(dut, 2)
+
+
+async def run_test_requests_overlap(dut):
+    """
+    Requests follow one another into the cores without waiting for the one
+    ahead to be answered, and each line still comes back with its own
+    request's meta and tlast.  Sessions differ, and the first request has a
+    header while the second does not, so the response lengths differ too.
+    """
+    tb = TB(dut)
+    await tb.reset()
+
+    hs = core(dut)
+    takes = []
+
+    async def watch():
+        while True:
+            await RisingEdge(dut.clk)
+            if int(hs.s_axis_tvalid.value) and int(hs.s_axis_tready.value):
+                takes.append(int(hs.s_axis_tlast.value))
+            if takes and int(hs.m_axis_tvalid.value):
+                # once the first response is out, both requests are already in
+                return
+
+    watcher = cocotb.start_soon(watch())
+    sent_a = await tb.send_request(random_values(3 * WORDS_PER_LINE), header=True, session=0x1111)
+    sent_b = await tb.send_request(random_values(2 * WORDS_PER_LINE), header=False, session=0x2222)
+
+    frame_a = await tb.recv_response(3, session=0x1111)
+    frame_b = await tb.recv_response(2, session=0x2222)
+    tb.check(frame_a, sent_a)
+    tb.check(frame_b, sent_b)
+    await watcher
+
+    if dut_out_depth(dut) >= FULL_RATE_OUT_DEPTH:
+        assert takes.count(1) == 2, (
+            f"the second request was not taken before the first was answered: {takes}")
+
+    assert tb.sink.empty()
     await wait_cycles(dut, 2)
 
 
@@ -659,7 +805,7 @@ async def reset_mid_request_flushes_fp_chain(dut):
     # Drain before judging.  The cores have no reset, so a test that ends with
     # values still in the pipeline corrupts whichever test runs next -- this
     # one must not leave any behind.
-    await wait_cycles(dut, 4 * LINE_CYCLES)
+    await wait_cycles(dut, 4 * SOLO_LINE_CYCLES)
 
     frames = [tb.sink.recv_nowait() for _ in range(tb.sink.count())]
     beats = sum(len(f.tdata) for f in frames)
@@ -703,7 +849,38 @@ async def reset_mid_request_realigns_operands(dut):
     await tb.run_request(random_values(WORDS_PER_LINE), header=True)
     await tb.run_request(random_values(2 * WORDS_PER_LINE), header=True)
 
-    await wait_cycles(dut, 4 * LINE_CYCLES)
+    await wait_cycles(dut, 4 * SOLO_LINE_CYCLES)
+
+
+@cocotb.test()
+async def reset_with_lines_in_flight(dut):
+    """
+    Streaming puts several lines in the cores at once, and more in in_line,
+    cur_line and the output FIFO.  A reset taken at any point of a long
+    request must drop all of it: the next request comes back alone and right.
+    """
+    tb = TB(dut)
+    await tb.reset()
+
+    # fill align_mem so a skew reads stale data rather than X
+    await tb.run_request(random_values(dut_align_depth(dut)), header=True)
+
+    for stall in [20, 40, 70, 100, 140]:
+        await tb.send_request(random_values(12 * WORDS_PER_LINE), header=True)
+        await tb.source.wait()
+        await wait_cycles(dut, stall)
+
+        await tb.reset()
+        tb.source.clear()
+        tb.sink.clear()
+
+        sent = await tb.send_request(random_values(2 * WORDS_PER_LINE), header=True)
+        await wait_cycles(dut, DUT_FLUSH_CYCLES + 4 * SOLO_LINE_CYCLES)
+
+        frames = [tb.sink.recv_nowait() for _ in range(tb.sink.count())]
+        beats = sum(len(f.tdata) for f in frames)
+        assert beats == 2, f"reset at {stall}: {beats} beats, want the 2 of the next request"
+        tb.check(frames[0], sent)
 
 
 async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
@@ -714,8 +891,8 @@ async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
     tb.set_idle_generator(idle_inserter)
     tb.set_backpressure_generator(backpressure_inserter)
 
-    id_count = 2**len(tb.source.bus.tid)
-    dest_count = 2**len(tb.source.bus.tdest)
+    id_count = 2**len(tb.source.bus.tid) if LEVEL == "core" else 1
+    dest_count = 2**len(tb.source.bus.tdest) if LEVEL == "core" else 1
 
     pending = []
 
@@ -723,8 +900,8 @@ async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
         lines = random.randint(1, 3)
         values = random_values(lines * WORDS_PER_LINE)
         header = random.choice([True, False])
-        tid = random.randrange(id_count)
-        tdest = random.randrange(dest_count)
+        tid = random.randrange(id_count) if LEVEL == "core" else 0
+        tdest = random.randrange(dest_count) if LEVEL == "core" else 0
         session = random.randrange(0x10000)
 
         sent = await tb.send_request(values, header, session, tid=tid, tdest=tdest)
@@ -733,8 +910,9 @@ async def run_stress_test(dut, idle_inserter=None, backpressure_inserter=None):
     for sent, lines, tid, tdest, session in pending:
         frame = await tb.recv_response(lines, session)
         tb.check(frame, sent)
-        assert sideband(frame.tid) == tid
-        assert sideband(frame.tdest) == tdest
+        if LEVEL == "core":
+            assert sideband(frame.tid) == tid
+            assert sideband(frame.tdest) == tdest
 
     assert tb.sink.empty()
     await wait_cycles(dut, 2)
@@ -762,13 +940,18 @@ if getattr(cocotb, 'top', None) is not None:
                 run_test_header_only,
                 run_test_operand_alignment,
                 run_test_word_order,
-                run_test_sideband,
                 run_test_response_meta,
                 run_test_response_held,
                 run_test_timing,
+                run_test_stream_4k,
+                run_test_requests_overlap,
                 run_test_reset_when_idle,
             ]:
         TestFactory(test).generate_tests()
+
+    # the slot boundary carries no sideband
+    if LEVEL == "core":
+        TestFactory(run_test_sideband).generate_tests()
 
     factory = TestFactory(run_stress_test)
     factory.add_option("idle_inserter", [None, cycle_pause])
@@ -787,22 +970,42 @@ tests_dir = os.path.dirname(__file__)
 rtl_dir = os.path.abspath(os.path.join(tests_dir, '..', 'src', 'rtl'))
 
 
-@pytest.mark.parametrize("align_depth", [16, 32, 64])
-def test_log(request, align_depth):
+@pytest.mark.parametrize("level,align_depth,out_depth", [
+    ("core", 16, 8), ("core", 32, 8), ("core", 64, 8), ("core", 32, 4), ("core", 32, 16),
+    ("slot", 32, 8),
+])
+def test_log(request, level, align_depth, out_depth):
     dut = "log"
     module = os.path.splitext(os.path.basename(__file__))[0]
-    toplevel = dut
+    reasm_dir = os.path.join(tests_dir, "..", "..", "..", "reassembly")
+    taxi_dir = os.path.join(tests_dir, "..", "..", "..", "..", "..", "lib", "taxi", "axis", "rtl")
 
     verilog_sources = [
         os.path.join(tests_dir, "fp_stubs.v"),
-        os.path.join(rtl_dir, f"{dut}.v"),
         os.path.join(rtl_dir, f"{dut}_core.v"),
-        os.path.join(tests_dir, "..", "..", "..", "reassembly", "rtl", "axis_register.v"),
+        os.path.join(taxi_dir, "taxi_axis_if.sv"),
+        os.path.join(taxi_dir, "taxi_axis_fifo.sv"),
+        os.path.join(reasm_dir, "rtl", "axis_fifo_taxi.sv"),
     ]
+    extra_args = ["--sv", "-DSIMULATION", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
+                  "-Wno-DECLFILENAME", "-Wno-UNUSEDSIGNAL"]
 
-    parameters = {'ALIGN_DEPTH': align_depth}
+    if level == "slot":
+        toplevel = "tb_slot"
+        verilog_sources += [
+            os.path.join(rtl_dir, f"{dut}.v"),
+            os.path.join(reasm_dir, "rtl", "slot_credit.v"),
+            os.path.join(reasm_dir, "rtl", "slot_boundary.v"),
+            os.path.join(reasm_dir, "tb", "tb_slot.sv"),
+        ]
+        extra_args.append(f"-DSLOT_RM={dut}")
+        parameters = {}
+    else:
+        toplevel = f"{dut}_core"
+        parameters = {'ALIGN_DEPTH': align_depth, 'OUT_DEPTH': out_depth}
 
     extra_env = {f'PARAM_{k}': str(v) for k, v in parameters.items()}
+    extra_env['LEVEL'] = level
 
     sim_build = os.path.join(tests_dir, "sim_build",
         request.node.name.replace('[', '-').replace(']', ''))
@@ -816,6 +1019,5 @@ def test_log(request, align_depth):
         parameters=parameters,
         sim_build=sim_build,
         extra_env=extra_env,
-        extra_args=["--sv", "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC",
-                    "-Wno-DECLFILENAME", "-Wno-UNUSEDSIGNAL"],
+        extra_args=extra_args,
     )

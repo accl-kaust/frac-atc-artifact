@@ -75,9 +75,9 @@ units:
   ip:
     dir: src/ip
     files: null
-  # out-of-context synthesis, Vivado 2022.2: 1483 LUT, 2710 FF, 0 BRAM, 0 DSP
+  # out-of-context synthesis, Vivado 2022.2: 9116 LUT, 7339 FF, 0 BRAM, 0 DSP
   utilization:
-    slices: 186
+    slices: 1140
     ramb36: 0
     dsp: 0
 - name: log
@@ -93,6 +93,10 @@ units:
     - log_core.v
     # the boundary's credit ends; the static side uses the same file
     - ../../../../reassembly/rtl/slot_credit.v
+    # the output FIFO the core queues its responses in
+    - ../../../../reassembly/rtl/axis_fifo_taxi.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_if.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_fifo.sv
   xdc:
     dir: src/xdc
     files: null
@@ -103,9 +107,9 @@ units:
     dir: src/ip
     files: 
     - gen_ip.tcl
-  # out-of-context synthesis, Vivado 2022.2: 2861 LUT, 5889 FF, 0 BRAM, 6 DSP
+  # out-of-context synthesis, Vivado 2022.2: 3245 LUT, 7554 FF, 0 BRAM, 6 DSP
   utilization:
-    slices: 369
+    slices: 473
     ramb36: 0
     dsp: 6
 - name: norm
@@ -121,6 +125,10 @@ units:
     - norm_core.v
     # the boundary's credit ends; the static side uses the same file
     - ../../../../reassembly/rtl/slot_credit.v
+    # the output FIFO the core queues its responses in
+    - ../../../../reassembly/rtl/axis_fifo_taxi.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_if.sv
+    - ../../../../../../lib/taxi/axis/rtl/taxi_axis_fifo.sv
   xdc:
     dir: src/xdc
     files: null
@@ -131,8 +139,8 @@ units:
     dir: src/ip
     files: 
     - gen_ip.tcl
-  # out-of-context synthesis, Vivado 2022.2: 2343 LUT, 4931 FF, 7.5 BRAM, 2 DSP
+  # out-of-context synthesis, Vivado 2022.2: 4113 LUT, 6270 FF, 7.5 BRAM, 2 DSP
   utilization:
-    slices: 309
+    slices: 515
     ramb36: 8
     dsp: 2
