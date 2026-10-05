@@ -437,10 +437,10 @@ def run_fperf(exp, point, tb, tools, nic, path):
     return ("failed" if rc else "incomplete"), rc
 
 
-def together(exp):
-    """Whether sweep points run through run_together: with an instances table
-    or kept latency samples."""
-    return bool(exp.instances or exp.samples_template)
+def together(exp, point):
+    """Whether a sweep point runs through run_together: with an instances
+    table, kept latency samples, or as a together group."""
+    return bool(exp.instances or exp.samples_template) or "_members" in point
 
 
 def processes(exp, point, tb):
@@ -618,16 +618,17 @@ def lock_testbed():
     return fd
 
 
-def warn_cores(points, tb):
+def warn_cores(exp, points, tb):
     """Warn when fperf would pin more client threads than there are cpus."""
-    clients = [point["n"] for point in points if isinstance(point.get("n"), int)]
+    end = max(cpu + threads for point in points
+              for _, _, cpu, threads in processes(exp, point, tb))
     try:
         cpus = len(os.sched_getaffinity(0))
     except AttributeError:
         cpus = os.cpu_count() or 0
-    if clients and cpus and tb["start_cpu"] + max(clients) > cpus:
+    if cpus and end > cpus:
         log(f"warning: fperf pins one client thread per cpu from cpu {tb['start_cpu']}, "
-            f"and {max(clients)} threads do not fit in the {cpus} cpus here")
+            f"and {end - tb['start_cpu']} threads do not fit in the {cpus} cpus here")
 
 
 # ---------------------------------------------------------------- the run
@@ -644,7 +645,8 @@ def estimate(exp, points, plans, tb, args):
         elif not args.no_program:
             seconds += setup
         if exp.functions and not args.no_program:
-            seconds += 2 * len(group)       # a function load before each run, at most
+            # a function load before each fperf process, at most
+            seconds += 2 * sum(len(exp.instance_points(point)) for point in group)
         seconds += sum(point["d"] + RUN_OVERHEAD + tb["pause"] for point in group)
     return seconds
 
@@ -690,6 +692,7 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
     for key, mine in (("program", exp.program), ("tpa_cfg", exp.tpa_cfg),
                       ("latency_log", exp.latency_log),
                       ("functions", exp.functions), ("instances", exp.instances),
+                      ("together", exp.together_spec),
                       ("params", exp.params), ("name", exp.name_template),
                       ("samples", {"dir": exp.samples_template, "skip": exp.samples_skip}),
                       ("fperf", exp.fperf_template)):
@@ -735,6 +738,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
             "tpa_cfg": exp.tpa_cfg,
             "latency_log": exp.latency_log,
             "instances": exp.instances,
+            "together": exp.together_spec,
             "samples": {"dir": exp.samples_template, "skip": exp.samples_skip},
             "targets": {},
             "runs": [],
@@ -754,6 +758,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
         manifest.setdefault("functions", exp.functions)
         manifest.setdefault("tpa_cfg", exp.tpa_cfg)
         manifest.setdefault("instances", exp.instances)
+        manifest.setdefault("together", exp.together_spec)
         manifest.setdefault("samples", {"dir": exp.samples_template, "skip": exp.samples_skip})
         manifest.setdefault("targets", {})
         manifest.setdefault("runs", [])
@@ -770,17 +775,21 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
     statuses = []
 
     def finish(point, name, status, started=None, rc=None):
-        entry = {"log": name}
-        entry.update((key, point[key]) for key in exp.swept)
-        entry["status"] = status
-        if started:
-            entry["started"] = started[0]
-            entry["seconds"] = round(time.monotonic() - started[1], 1)
-        if rc is not None:
-            entry["exit"] = rc
-        if status != "ok" and os.path.exists(os.path.join(run_dir, name + ".part")):
-            entry["partial"] = name + ".part"
-        record(manifest, entry)
+        # A together group is recorded as its members' runs, one entry per log.
+        group = point.get("_members")
+        for index, run in enumerate(group or [point]):
+            log_name = exp.log_name(run) if group else name
+            entry = {"log": log_name}
+            entry.update((key, run[key]) for key in exp.swept)
+            entry["status"] = status
+            if started:
+                entry["started"] = started[0]
+                entry["seconds"] = round(time.monotonic() - started[1], 1)
+            if rc is not None:
+                entry["exit"] = rc[index] if group and isinstance(rc, list) else rc
+            if status != "ok" and os.path.exists(os.path.join(run_dir, log_name + ".part")):
+                entry["partial"] = log_name + ".part"
+            record(manifest, entry)
         if state["nic"] and isinstance(manifest.get("testbed"), dict):
             manifest["testbed"]["nic"] = state["nic"]
         write_yaml(manifest_path, manifest)
@@ -807,18 +816,19 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
         return None
 
     def load_function(plan, point):
-        """Load the point's function into its slot unless it is there already;
-        None, or why that failed."""
+        """Load the function of each of the point's runs into its slot unless
+        it is there already; None, or why that failed."""
         if not exp.functions or args.no_program:
             return None
-        slot, _, path, _ = plan.functions[str(point[FUNCTION_KEY])]
-        if state["slots"].get(slot) == path:
-            return None
-        if load_slot(slot, path, tb, tools):
+        for run in exp.instance_points(point):
+            slot, _, path, _ = plan.functions[str(run[FUNCTION_KEY])]
+            if state["slots"].get(slot) == path:
+                continue
+            if not load_slot(slot, path, tb, tools):
+                state["slots"].pop(slot, None)
+                return f"loading {rel(path)} into slot {slot} failed"
             state["slots"][slot] = path
-            return None
-        state["slots"].pop(slot, None)
-        return f"loading {rel(path)} into slot {slot} failed"
+        return None
 
     every_run = exp.program == "every_run" and not args.no_program
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
@@ -861,7 +871,7 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
             log(f"{label}  {describe(exp, point)}  {name}")
             started = (now(), time.monotonic())
             try:
-                if together(exp):
+                if together(exp, point):
                     status, rc = run_together(exp, point, tb, tools, state["nic"], run_dir)
                 else:
                     status, rc = run_fperf(exp, point, tb, tools, state["nic"],
@@ -929,18 +939,21 @@ def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, 
             if every_run:
                 loaded = {slot: path for slot, _, path, _ in plan.slots}
             if exp.functions and not args.no_program:
-                slot, _, path, sha = plan.functions[str(point[FUNCTION_KEY])]
-                if loaded.get(slot) != path:
-                    print(f"  # {FUNCTION_KEY}={point[FUNCTION_KEY]}: load {rel(path)} into "
-                          f"slot {slot}, sha256 {sha}")
-                    print("  $ " + shlex.join(slot_argv(slot, path, tb, tools)))
-                    loaded[slot] = path
+                for run in exp.instance_points(point):
+                    slot, _, path, sha = plan.functions[str(run[FUNCTION_KEY])]
+                    if loaded.get(slot) != path:
+                        print(f"  # {FUNCTION_KEY}={run[FUNCTION_KEY]}: load {rel(path)} into "
+                              f"slot {slot}, sha256 {sha}")
+                        print("  $ " + shlex.join(slot_argv(slot, path, tb, tools)))
+                        loaded[slot] = path
             shown = latency_args("/tmp/feXXXXXXXX" if exp.latency_log else None)
-            if not together(exp):
+            if not together(exp, point):
                 print("  $ " + shlex.join(fperf_argv(exp, point, tb, tools, nic, extra=shown)))
                 print(f"      > {name}")
                 continue
             procs = processes(exp, point, tb)
+            if "_members" in point:
+                print(f"  # {describe(exp, point)}: {len(procs)} fperf processes at once")
             if exp.samples_template:
                 skip = f", first {exp.samples_skip} s dropped" if exp.samples_skip else ""
                 print(f"  # {describe(exp, point)}: latencies of {len(procs) * exp.threads(point)} "
@@ -998,7 +1011,8 @@ def main(argv=None):
             raise ConfigError("--no-program measures whatever image is loaded, so choose one "
                               f"target with --only {TARGET_KEY}=VALUE")
         if (args.no_program and exp.functions
-                and len({str(point[FUNCTION_KEY]) for point in points}) > 1):
+                and len({str(run[FUNCTION_KEY]) for point in points
+                         for run in exp.instance_points(point)}) > 1):
             raise ConfigError("--no-program cannot switch functions, so choose one with "
                               f"--only {FUNCTION_KEY}=VALUE")
         tb, tb_path = load_testbed(args.testbed)
@@ -1040,7 +1054,7 @@ def main(argv=None):
         log(f"left out {describe(exp, point)}: {why}")
     code = 0
     try:
-        warn_cores(points, tb)
+        warn_cores(exp, points, tb)
         statuses = measure(exp, args, points, plans, tb, tools, run_dir, manifest)
         code = 0 if all(status in ("ok", "kept") for status in statuses) else 1
     except KeyboardInterrupt:

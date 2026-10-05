@@ -101,7 +101,7 @@ def create_mixed_figure():
         
         # Extract latencies for single workloads - filter first 10 seconds
         print(f"Processing single workloads in {single_dir} - filtering first 10 seconds")
-        latencies_single[function_id] = extract_latencies_for_function(single_dir, function_id, filter_initial_seconds=10)
+        latencies_single[function_id] = extract_latencies_for_function(single_dir, function_id, filter_initial_seconds=2)
         
         # Extract latencies for mixed workloads - no filtering
         print(f"Processing mixed workloads in {mixed_dir}")

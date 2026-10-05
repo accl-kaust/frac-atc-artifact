@@ -31,7 +31,7 @@ DEFAULT_CONFIG = "experiment.yaml"
 TARGET_KEY = "O"                # the key whose value picks the target
 
 CONFIG_KEYS = ("description", "program", "tpa_cfg", "latency_log", "targets", "functions",
-               "instances", "params", "sweep", "name", "samples", "fperf", "plot")
+               "instances", "together", "params", "sweep", "name", "samples", "fperf", "plot")
 PROGRAM_MODES = ("every_run", "once")
 FUNCTION_KEY = "f"              # the key whose value picks an entry of the functions table
 INSTANCE_KEY = "k"              # the key whose value picks an entry of the instances table
@@ -396,6 +396,7 @@ class Experiment:
                                   f"not {seconds!r}")
         self.functions = self._functions(raw.get("functions"), where)
         self.instances = self._instances(raw.get("instances"), where)
+        self.together = self._together(raw.get("together"), where)
 
         targets = raw.get("targets")
         if not isinstance(targets, dict) or not targets:
@@ -439,6 +440,8 @@ class Experiment:
             self.samples_skip = skip
             if not self.latency_log:
                 raise ConfigError(f"{where}: samples needs latency_log, which records them")
+            if self.together:
+                raise ConfigError(f"{where}: samples and together cannot be combined")
         hint = "every swept key" + (" and {slot}" if self.instances else "")
         names, samples = set(), set()
         for point in self.points():
@@ -455,6 +458,13 @@ class Experiment:
                                       f"use {hint}")
                 names.add(name)
                 self.fperf_args(run)
+            if "_members" in point:
+                slots = [run["slot"] for run in point["_members"]]
+                shared = sorted({slot for slot in slots if slots.count(slot) > 1})
+                if shared:
+                    raise ConfigError(f"{where}: together runs {FUNCTION_KEY}={point[FUNCTION_KEY]} "
+                                      f"at once, but they share slot {shared[0]}; give each "
+                                      "function a slot of its own")
 
         plots = raw.get("plot") or []
         if isinstance(plots, (str, dict)):
@@ -549,6 +559,32 @@ class Experiment:
         self.keys |= {"n_per", "slot", "instance"}
         return table
 
+    def _together(self, together, where):
+        """together: {KEY: VALUE}.  The sweep points whose KEY is VALUE, alike
+        in every other swept key but f, run at the same time: one fperf
+        process for each value of f, each its function's own run, with its
+        slot, partial, fields and log.  The other points run one at a time."""
+        if not together:
+            return None
+        if not isinstance(together, dict) or len(together) != 1:
+            raise ConfigError(f"{where}: together must be one KEY: VALUE, such as mix: mixed")
+        (key, value), = together.items()
+        key = str(key)
+        if not self.functions:
+            raise ConfigError(f"{where}: together runs functions at once, so it needs a "
+                              "functions table")
+        if self.instances:
+            raise ConfigError(f"{where}: together and instances cannot be combined")
+        if FUNCTION_KEY not in self.swept:
+            raise ConfigError(f"{where}: together needs {FUNCTION_KEY} swept, for functions "
+                              "to run at once")
+        if key not in self.swept or key in (FUNCTION_KEY, TARGET_KEY):
+            raise ConfigError(f"{where}: together.{key} must be a swept key other than "
+                              f"{FUNCTION_KEY} and {TARGET_KEY}")
+        if str(value) not in [str(known) for known in self.values(key)]:
+            raise ConfigError(f"{where}: together.{key} is {value!r}, which the sweep never sets")
+        return key, value
+
     def _template(self, raw, key, where):
         template = raw.get(key)
         if not isinstance(template, str) or not template.strip():
@@ -558,6 +594,11 @@ class Experiment:
             raise ConfigError(f"{where}: {key} uses {', '.join(sorted(unknown))}, "
                               "which is neither a param nor a sweep key")
         return template
+
+    @property
+    def together_spec(self):
+        """together as the config wrote it, for the manifest: {KEY: VALUE} or None."""
+        return {self.together[0]: self.together[1]} if self.together else None
 
     @property
     def swept(self):
@@ -623,10 +664,35 @@ class Experiment:
         order = [str(value) for value in self.values(TARGET_KEY)]
         return sorted(points, key=lambda point: order.index(str(point[TARGET_KEY])))
 
+    def _grouped(self, points):
+        """`points` with each together group merged into one point, whose
+        members, in `_members`, run at the same time.  The merged point keeps
+        what its members share; its f lists theirs, such as "1,3,5,2"."""
+        if not self.together:
+            return points
+        key, value = self.together
+        fields = set(next(iter(self.functions.values())))
+        merged, groups = [], {}
+        for point in points:
+            if str(point[key]) != str(value):
+                merged.append(point)
+                continue
+            ident = tuple(str(point[other]) for other in self.swept if other != FUNCTION_KEY)
+            if ident not in groups:
+                groups[ident] = {field: point[field] for field in point if field not in fields}
+                groups[ident]["_members"] = []
+                merged.append(groups[ident])
+            groups[ident]["_members"].append(point)
+        for group in groups.values():
+            group[FUNCTION_KEY] = ",".join(str(run[FUNCTION_KEY]) for run in group["_members"])
+        return merged
+
     def points(self, only=None):
         """Every sweep point that can run, as a dict of params and sweep
-        values, ordered so each target's image is programmed once."""
-        return self._ordered([point for point, why in self._expand(only) if why is None])
+        values, ordered so each target's image is programmed once.  A together
+        group is one point, whose members run at once."""
+        return self._ordered(self._grouped([point for point, why in self._expand(only)
+                                            if why is None]))
 
     def excluded(self, only=None):
         """(point, why) for each sweep point left out."""
@@ -634,7 +700,10 @@ class Experiment:
 
     def instance_points(self, point):
         """One point per fperf process of a sweep point: one for each slot of
-        its instances entry, or the point itself without an instances table."""
+        its instances entry, the members of a together group, or the point
+        itself."""
+        if "_members" in point:
+            return list(point["_members"])
         if not self.instances:
             return [point]
         slots = self.instances[str(point[INSTANCE_KEY])]
@@ -650,10 +719,16 @@ class Experiment:
         return self._relative(self.samples_template, point, "samples")
 
     def point_id(self, point):
-        """What names a sweep point in the manifest: its samples directory,
-        else its one log."""
+        """What names a sweep point: its samples directory, its one log, or
+        for a together group the directory its logs share."""
         if self.samples_template:
             return self.samples_name(point)
+        if "_members" in point:
+            names = [self.log_name(run) for run in point["_members"]]
+            folders = {os.path.dirname(name) for name in names}
+            if len(folders) == 1 and "" not in folders:
+                return folders.pop() + "/"
+            return " + ".join(names)
         return self.log_name(point)
 
     def log_name(self, point):

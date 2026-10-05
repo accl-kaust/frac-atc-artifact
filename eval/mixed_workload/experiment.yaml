@@ -1,45 +1,57 @@
-# Latency of top_k, logit and norm, one function at a time: the isolated half
-# of Fig. 14.
+# Latency of top_k, logit, norm and the CNN, first each alone and then all
+# four at once: Fig. 14.
 #
 #   eval/run.py mixed_workload      measure, on the machine cabled to the U280
 #   eval/plot.py mixed_workload     draw the figure from the newest run
 #
-# run.py programs the full image once, then for each function loads its
-# partial bitstream into slot 0 and runs one client against it.
+# run.py programs the full image once.  Each function has a slot of its own
+# and is loaded there before its first run.  The isolated runs go one at a
+# time; the mixed run then starts one client per function at the same time,
+# with all four already loaded.
 
-description: Latency of top_k, logit and norm, one at a time (Fig. 14, isolated half)
+description: Latency of top_k, logit, norm and the CNN, alone and all at once (Fig. 14)
 
-# One programming for the whole experiment; only slot 0 changes between runs.
-program: once
+# One programming for the whole experiment.
+program: every_run
 
 targets:
   1:                                    # with fRAC; there is no bypass run here
+    # The CNN needs a build with cnn in C02 (spinhdl.yaml), 1768 or later.
     bitstream: build/frac/bitstreams/jtag/frac.bit
     partials: build/frac/bitstreams/icap
 
 # f is the paper's function id, which the figure script finds in the log
-# names.  Before the runs of each f, run.py loads `partial`, a file in the
-# target's partials, into `slot`.  R is the response size fperf waits for:
-# top_k always answers one 64-byte line, while logit and norm answer one line
-# per data line, so the request less its 64-byte header.
+# names.  Each function has a slot of its own, so that all four can be loaded
+# at once for the mixed run; the CNN is only in C02.  m and X are fperf's
+# message and request sizes, the request including its 64-byte header, as in
+# the paper's runs: 1 KB for the three small functions, and for the CNN 24 KB
+# sent as six 4 KB writes.  R is the response size fperf waits for: top_k and
+# the CNN answer one 64-byte line (the CNN's is its ten 16-bit class scores),
+# logit and norm one line per data line, so the request less its header.
 functions:
-  1: {slot: 0, partial: c00_f00.bin, R: 64}     # top_k
-  3: {slot: 0, partial: c00_f02.bin, R: 960}    # log, the logit
-  5: {slot: 0, partial: c00_f01.bin, R: 960}    # norm
+  1: {slot: 0, partial: c00_f00.bin, m: 1024, X: 1024, R: 64}      # top_k
+  3: {slot: 1, partial: c01_f05.bin, m: 1024, X: 1024, R: 960}     # log, the logit
+  5: {slot: 3, partial: c03_f16.bin, m: 1024, X: 1024, R: 960}     # norm
+  2: {slot: 2, partial: c02_f20.bin, m: 4096, X: 24576, R: 64}     # cnn
 
 params:
   O: 1
-  d: 40                         # seconds per run; the figure drops the first 10
-  m: 1024                       # message bytes, fperf -m
-  X: 1024                       # request bytes including the header, fperf -X
-  n: 1                          # one client thread, fperf -n
+  d: 30                         # seconds per run; the figure drops the isolated runs' first 10
+  n: 1                          # one client thread per function, fperf -n
   C: 1                          # connections per client thread, fperf -C
 
 sweep:
-  f: [1, 3, 5]                  # top_k, logit, norm, in the figure's order
+  mix: [isolated, mixed]        # each function alone, then all four at once
+  f: [1, 3, 5, 2]               # top_k, logit, norm, cnn: the figure's order
 
-# Log names, as in the paper; the figure script picks logs by f_<id>.
-name: "rr_d_{d}_m_{m}_n_{n}_C_{C}_f_{f}_X_{X}_O_{O}.log"
+# The mixed points run at the same time: one fperf process per function, each
+# with its own libtpa instance, cpu and log.
+together:
+  mix: mixed
+
+# Log names, as in the paper; the figure script picks logs by f_<id> from
+# isolated/ and mixed/.
+name: "{mix}/rr_d_{d}_m_{m}_n_{n}_C_{C}_f_{f}_X_{X}_O_{O}.log"
 
 # fperf arguments.  run.py adds -c, -p and -S from the testbed file.
 fperf: "-t rr -d {d} -n {n} -m {m} -X {X} -R {R} -C {C} -Z 1 -K {slot}"
@@ -47,11 +59,10 @@ fperf: "-t rr -d {d} -n {n} -m {m} -X {X} -R {R} -C {C} -Z 1 -K {slot}"
 plot:
   # The paper's script, copied unchanged from
   # github.com/accl-kaust/frac_evaluation_script at commit 164b196.  It reads
-  # the isolated runs from data/mixed_workload/isolated, and draws nothing
-  # unless data/mixed_workload/mixed exists too.  The mixed half, with the
-  # functions running at once, is not measured yet, so that directory is
-  # empty and the figure shows the isolated bars only.
+  # the isolated runs from data/mixed_workload/isolated, without their first
+  # 10 seconds, and the mixed runs, every second of them, from
+  # data/mixed_workload/mixed.
   - script: mixed_workload_fig_14.py
     data:
-      data/mixed_workload/isolated: run
-      data/mixed_workload/mixed: empty
+      data/mixed_workload/isolated: isolated
+      data/mixed_workload/mixed: mixed

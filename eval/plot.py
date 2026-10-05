@@ -171,8 +171,10 @@ def main(argv=None):
         sys.exit(f"plot.py: no .log files in {run_dir}")
     seconds = params.get("d")
     if isinstance(seconds, int) and not isinstance(seconds, bool):
-        short = [name for name in sorted(os.listdir(run_dir)) if name.endswith(".log")
-                 and not log_complete(os.path.join(run_dir, name), seconds)]
+        short = sorted(os.path.relpath(os.path.join(folder, name), run_dir)
+                       for folder, _, names in os.walk(run_dir) for name in names
+                       if name.endswith(".log")
+                       and not log_complete(os.path.join(folder, name), seconds))
         if short:
             print(f"warning: {len(short)} logs end before second {seconds - 1}, so their points "
                   f"rest on fewer samples: {', '.join(short)}")
