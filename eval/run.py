@@ -16,7 +16,8 @@ functions table also loads each run's function into its slot first, unless
 that slot holds it already.  With an instances table, a sweep point runs one
 fperf per listed slot at the same time, its n clients split evenly between
 them; with samples, every client thread's per-request latencies are kept,
-in one directory per sweep point.  Each run's complete
+in one directory per sweep point.  With a trace, fperf replays that CSV file
+with -E, and a run lasts until its last row is answered.  Each run's complete
 output, named by the config's name template, goes to a new directory
 eval/<experiment>/results/<time>.  fperf records every request's
 latency with -L 1, unless the config sets latency_log to false.  A run that fails keeps its output as
@@ -49,7 +50,7 @@ import traceback
 
 from common import (DEFAULT_CONFIG, EVAL_DIR, FUNCTION_KEY, REPO_DIR, TARGET_KEY, ConfigError,
                     Experiment,
-                    abs_path, build_record, find_experiment, git_info, log_complete, merge, now,
+                    abs_path, build_record, find_experiment, git_info, merge, now,
                     read_yaml, rel, sha256_file, write_yaml)
 
 TESTBED_DEFAULTS = {
@@ -271,13 +272,13 @@ def slot_argv(slot, path, tb, tools):
 def fperf_argv(exp, point, tb, tools, nic, tpa_id=None, cpu=None, extra=()):
     # timeout ends a hung run, and -k follows up with SIGKILL.  It runs under
     # sudo, since fperf runs as root and an unprivileged timeout cannot kill it.
-    return (shlex.split(tb["sudo"]) + ["timeout", "-k", "15", str(point["d"] + 120)] +
+    return (shlex.split(tb["sudo"]) + ["timeout", "-k", "15", str(exp.timeout(point))] +
             ["env", f"TPA_ID={tpa_id or tb['tpa_id']}", f"TPA_ETH_DEV={nic}",
              "TPA_CFG=" + " ".join(cfg for cfg in (tb["tpa_cfg"], exp.tpa_cfg) if cfg),
              tools["tpa"], "run", tools["fperf"],
              "-c", tb["fpga"]["addr"], "-p", str(tb["fpga"]["port"]),
              "-S", str(tb["start_cpu"] if cpu is None else cpu)] +
-            exp.fperf_args(point) + list(extra))
+            exp.fperf_args(point) + exp.trace_args() + list(extra))
 
 
 def stop(proc):
@@ -429,7 +430,7 @@ def run_fperf(exp, point, tb, tools, nic, path):
     finally:
         if temp:
             shutil.rmtree(temp, ignore_errors=True)
-    if rc == 0 and log_complete(part, point["d"]):
+    if rc == 0 and exp.run_complete(part, point):
         os.replace(part, path)
         return "ok", rc
     if rc == 124:
@@ -528,7 +529,7 @@ def run_together(exp, point, tb, tools, nic, run_dir):
         rcs = [child.wait() for child in children]
         for out in outs:
             out.close()
-        complete = [rc == 0 and log_complete(path + ".part", point["d"])
+        complete = [rc == 0 and exp.run_complete(path + ".part", point)
                     for path, rc in zip(paths, rcs)]
         if any(rc == 124 for rc in rcs):
             status = "timed out"
@@ -561,7 +562,7 @@ def point_complete(exp, point, run_dir):
     complete and, with samples, a latency file for every client thread."""
     runs = exp.instance_points(point)
     for run in runs:
-        if not log_complete(os.path.join(run_dir, exp.log_name(run)), point["d"]):
+        if not exp.run_complete(os.path.join(run_dir, exp.log_name(run)), point):
             return False
     if exp.samples_template:
         files = glob.glob(os.path.join(run_dir, exp.samples_name(point), "hugepage_thread_*.txt"))
@@ -692,7 +693,7 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
     for key, mine in (("program", exp.program), ("tpa_cfg", exp.tpa_cfg),
                       ("latency_log", exp.latency_log),
                       ("functions", exp.functions), ("instances", exp.instances),
-                      ("together", exp.together_spec),
+                      ("together", exp.together_spec), ("trace", exp.trace_spec),
                       ("params", exp.params), ("name", exp.name_template),
                       ("samples", {"dir": exp.samples_template, "skip": exp.samples_skip}),
                       ("fperf", exp.fperf_template)):
@@ -739,6 +740,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
             "latency_log": exp.latency_log,
             "instances": exp.instances,
             "together": exp.together_spec,
+            "trace": exp.trace_spec,
             "samples": {"dir": exp.samples_template, "skip": exp.samples_skip},
             "targets": {},
             "runs": [],
@@ -759,6 +761,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
         manifest.setdefault("tpa_cfg", exp.tpa_cfg)
         manifest.setdefault("instances", exp.instances)
         manifest.setdefault("together", exp.together_spec)
+        manifest.setdefault("trace", exp.trace_spec)
         manifest.setdefault("samples", {"dir": exp.samples_template, "skip": exp.samples_skip})
         manifest.setdefault("targets", {})
         manifest.setdefault("runs", [])
@@ -909,6 +912,10 @@ def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, 
         print(f"            {exp.description}")
     print(f"testbed     {testbed}")
     print(f"fpga        {tb['fpga']['addr']}:{tb['fpga']['port']} through {nic}")
+    if exp.trace:
+        slots = ", ".join(f"app {app} to slot {slot}" for slot, app in sorted(exp.trace.slots.items()))
+        print(f"trace       {rel(exp.trace.path)}: {exp.trace.rows} rows, sleep_time adding up "
+              f"to {exp.trace.seconds / 60:.0f} min; {slots}")
     if missing:
         print(f"not found   {', '.join(missing)}")
     print(f"results     {rel(resume_dir) if resume_dir else 'a new directory in ' + rel(exp.results)}")
@@ -956,7 +963,8 @@ def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, 
                 print(f"  # {describe(exp, point)}: {len(procs)} fperf processes at once")
             if exp.samples_template:
                 skip = f", first {exp.samples_skip} s dropped" if exp.samples_skip else ""
-                print(f"  # {describe(exp, point)}: latencies of {len(procs) * exp.threads(point)} "
+                head = f"{describe(exp, point)}: " if describe(exp, point) else ""
+                print(f"  # {head}latencies of {len(procs) * exp.threads(point)} "
                       f"clients into {name}{skip}")
             for run, tpa_id, cpu, _ in procs:
                 print("  $ " + shlex.join(fperf_argv(exp, run, tb, tools, nic, tpa_id, cpu, shown)))

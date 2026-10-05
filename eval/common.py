@@ -12,6 +12,7 @@ import ast
 import datetime
 import hashlib
 import itertools
+import math
 import operator
 import os
 import re
@@ -31,10 +32,16 @@ DEFAULT_CONFIG = "experiment.yaml"
 TARGET_KEY = "O"                # the key whose value picks the target
 
 CONFIG_KEYS = ("description", "program", "tpa_cfg", "latency_log", "targets", "functions",
-               "instances", "together", "params", "sweep", "name", "samples", "fperf", "plot")
+               "instances", "together", "trace", "params", "sweep", "name", "samples", "fperf",
+               "plot")
 PROGRAM_MODES = ("every_run", "once")
 FUNCTION_KEY = "f"              # the key whose value picks an entry of the functions table
 INSTANCE_KEY = "k"              # the key whose value picks an entry of the instances table
+# fperf -E sends each row of a trace to the slot of its app, as func_slots[] in
+# libtpa's app/fperf/trace.c maps them: top_k (1) to slot 0, logit (3) to 1,
+# the CNN (2) to 2 and norm (5) to 3.
+TRACE_SLOTS = {1: 0, 3: 1, 2: 2, 5: 3}
+TRACE_HEADER = "app,sleep_time,request_size,response_size"
 TARGET_KEYS = ("bitstream", "partials", "slots", "sha256")
 PLOT_KEYS = ("script", "data", "set", "fresh", "prepare")
 BUILD_KEYS = ("job", "payload", "frac", "spinhdl", "vivado", "started", "staged")
@@ -227,6 +234,61 @@ def log_complete(path, seconds):
         return False
 
 
+def trace_replayed(path, rows=None):
+    """Whether an fperf -E log says it replayed its whole trace, of `rows`
+    rows when that is given."""
+    done = re.compile(r"^trace: all (\d+) rows replayed")
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                match = done.match(line)
+                if match and (rows is None or int(match.group(1)) == rows):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+class Trace:
+    """A CSV trace for fperf -E, checked the way fperf reads it: the header,
+    then one request per row, sent sleep_time seconds after the response to
+    the row before, with request_size bytes after its 64-byte header."""
+
+    def __init__(self, path, where):
+        self.path = path
+        label = f"{where}: trace {rel(path)}"
+        try:
+            with open(path, errors="replace") as f:
+                lines = f.read().split("\n")
+        except OSError as e:
+            raise ConfigError(f"{label}: {e.strerror}")
+        if lines[0].rstrip("\r") != TRACE_HEADER:
+            raise ConfigError(f"{label}: its first line must be the header {TRACE_HEADER}")
+        self.rows, self.seconds, apps = 0, 0.0, set()
+        for number, line in enumerate(lines[1:], 2):
+            line = line.rstrip("\r")
+            if not line:
+                continue
+            try:
+                app, sleep, request, response = line.split(",")
+                app, sleep, request, response = int(app), float(sleep), int(request), int(response)
+            except ValueError:
+                raise ConfigError(f"{label}:{number}: expected {TRACE_HEADER}, not {line!r}")
+            if app not in TRACE_SLOTS:
+                raise ConfigError(f"{label}:{number}: app {app} has no slot; fperf knows apps "
+                                  f"{', '.join(map(str, sorted(TRACE_SLOTS)))}")
+            if not (0 <= sleep < 1e9 and request > 0 and response > 0):
+                raise ConfigError(f"{label}:{number}: sleep_time must be 0 or more, and the "
+                                  "sizes more than 0")
+            self.rows += 1
+            self.seconds += sleep
+            apps.add(app)
+        if not self.rows:
+            raise ConfigError(f"{label}: it has no rows")
+        self.slots = {TRACE_SLOTS[app]: app for app in apps}     # slot: the app sent there
+        self.sha256 = sha256_file(path)
+
+
 class Target:
     """What one value of O runs on: the full image to program over JTAG, and
     the partial bitstreams to load into slots after programming it."""
@@ -387,6 +449,7 @@ class Experiment:
                 raise ConfigError(f"{where}: {key} is both a param and a sweep key")
             self.sweep.append((key, values))
         self.keys = set(self.params) | set(self.swept)
+        self.trace = self._trace(raw.get("trace"), where)
         for key in (TARGET_KEY, "d"):
             if key not in self.keys:
                 raise ConfigError(f"{where}: {key} must be a param or a sweep key")
@@ -397,6 +460,10 @@ class Experiment:
         self.functions = self._functions(raw.get("functions"), where)
         self.instances = self._instances(raw.get("instances"), where)
         self.together = self._together(raw.get("together"), where)
+        if self.trace and (self.functions or self.instances or self.together):
+            raise ConfigError(f"{where}: a trace picks each request's slot itself and replays "
+                              "on one connection, so it cannot be combined with functions, "
+                              "instances or together")
 
         targets = raw.get("targets")
         if not isinstance(targets, dict) or not targets:
@@ -411,9 +478,22 @@ class Experiment:
                 if not target.partials:
                     raise ConfigError(f"{where}: targets.{target.key} needs partials, the "
                                       "directory the functions' partial bitstreams are in")
+        if self.trace:
+            # A slot left with whatever the full image put there answers too,
+            # and often with the size fperf waits for, so check here.
+            for target in self.targets.values():
+                for slot, app in sorted(self.trace.slots.items()):
+                    if slot not in target.slots:
+                        raise ConfigError(f"{where}: the trace sends app {app} to slot {slot}, "
+                                          f"but targets.{target.key}.slots loads nothing there")
 
         self.name_template = self._template(raw, "name", where)
         self.fperf_template = self._template(raw, "fperf", where)
+        if self.trace:
+            given = {"-E", "-d"} & set(shlex.split(self.fperf_template))
+            if given:
+                raise ConfigError(f"{where}: leave {' and '.join(sorted(given))} out of fperf: "
+                                  "run.py adds -E with the trace, and the replay ends with it")
         # samples: where every client thread's per-request latencies gather, one
         # directory per sweep point, and how many seconds to drop from the start
         # of each thread's file.
@@ -585,6 +665,23 @@ class Experiment:
             raise ConfigError(f"{where}: together.{key} is {value!r}, which the sweep never sets")
         return key, value
 
+    def _trace(self, trace, where):
+        """trace: the CSV file fperf -E replays, relative to the experiment
+        directory.  The replay lasts as long as the trace, so d is not given
+        but taken from it: its sleep times in whole seconds, the least the
+        replay can take."""
+        if trace is None:
+            return None
+        if not isinstance(trace, str) or not trace:
+            raise ConfigError(f"{where}: trace must name a CSV file for fperf -E")
+        if "d" in self.keys:
+            raise ConfigError(f"{where}: a trace run lasts as long as its replay, so leave d "
+                              "out; run.py takes it from the trace's sleep times")
+        trace = Trace(abs_path(trace, self.dir), where)
+        self.params["d"] = max(1, math.ceil(trace.seconds))
+        self.keys.add("d")
+        return trace
+
     def _template(self, raw, key, where):
         template = raw.get(key)
         if not isinstance(template, str) or not template.strip():
@@ -599,6 +696,32 @@ class Experiment:
     def together_spec(self):
         """together as the config wrote it, for the manifest: {KEY: VALUE} or None."""
         return {self.together[0]: self.together[1]} if self.together else None
+
+    @property
+    def trace_spec(self):
+        """The trace for the manifest: its file, sha256, rows and sleep seconds, or None."""
+        if not self.trace:
+            return None
+        return {"file": rel(self.trace.path), "sha256": self.trace.sha256,
+                "rows": self.trace.rows, "seconds": round(self.trace.seconds, 1)}
+
+    def trace_args(self):
+        """What run.py adds to every fperf command for the trace: -E FILE."""
+        return ["-E", self.trace.path] if self.trace else []
+
+    def run_complete(self, path, point):
+        """Whether the fperf log at `path` shows a whole run: its last second,
+        or with a trace, every row replayed."""
+        if self.trace:
+            return trace_replayed(path, self.trace.rows)
+        return log_complete(path, point["d"])
+
+    def timeout(self, point):
+        """Seconds after which run.py stops a run as hung: two minutes past its
+        length, and with a trace a quarter more, for the latencies its sleep
+        times leave out."""
+        seconds = point["d"] + 120
+        return seconds + point["d"] // 4 if self.trace else seconds
 
     @property
     def swept(self):

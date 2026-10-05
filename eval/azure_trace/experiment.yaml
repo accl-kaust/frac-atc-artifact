@@ -1,0 +1,68 @@
+# Latency of every request of an Azure Functions trace, replayed on four
+# slots: Fig. 18.
+#
+#   eval/run.py azure_trace      measure, on the machine cabled to the U280
+#   eval/plot.py azure_trace     draw the figure from the newest run
+#
+# run.py programs the full image once and loads top_k, logit, the CNN and
+# norm into slots 0 to 3.  One fperf then replays the trace with -E on one
+# connection: each row is one request to the slot of its app, sent
+# sleep_time seconds after the response to the row before.  The replay takes
+# as long as the trace, about an hour.
+
+description: Latency of every request of an Azure Functions trace on four slots (Fig. 18)
+
+# One programming for the whole experiment.
+program: once
+
+targets:
+  1:                                    # with fRAC; there is no bypass run here
+    # The CNN needs a build with cnn in C02 (spinhdl.yaml), 1768 or later.
+    bitstream: build/frac/bitstreams/jtag/frac.bit
+    partials: build/frac/bitstreams/icap
+    # fperf sends each app to a fixed slot, func_slots[] in libtpa's
+    # app/fperf/trace.c; RM ids from spinhdl.yaml.
+    slots:
+      0: c00_f00.bin                    # top_k, app 1
+      1: c01_f05.bin                    # log, the logit, app 3
+      2: c02_f20.bin                    # cnn, app 2
+      3: c03_f16.bin                    # norm, app 5
+
+# The trace, copied unchanged from github.com/accl-kaust/frac_evaluation_script,
+# branch trace, at commit 964875b (trace/processed_trace.csv): 46394 requests
+# from the busiest hour of the Azure Functions invocation trace, preprocessed
+# as the paper's appendix describes.  Each row is
+# app,sleep_time,request_size,response_size, the request size without the
+# 64-byte header fperf puts in front.  run.py passes the file to fperf -E,
+# takes d from its sleep times, the least the replay can take, and counts the
+# run complete once fperf has replayed every row.
+trace: processed_trace.csv
+
+params:
+  m: 512                        # fperf -m: each request goes out in 512-byte writes, as in the paper's run
+
+sweep:
+  O: [1]                        # one run
+
+# The run's log, as fperf printed it.
+name: "trace_m_{m}_O_{O}.log"
+
+# Keeps fperf's -L 1 record of the requests, a trace_send, a latency and a
+# trace_resp line each, as azure_trace/hugepage_thread_0.txt in the run: the
+# figure reads it.
+samples:
+  dir: azure_trace
+
+# fperf arguments.  run.py adds -c, -p and -S from the testbed file, and -E
+# with the trace.  fperf -E replays on one connection of one thread, and
+# stops at the trace's end.
+fperf: "-t rr -n 1 -C 1 -Z 1 -m {m}"
+
+plot:
+  # The paper's script, copied unchanged from the same branch and commit.  It
+  # reads every hugepage_thread_*.txt in data/azure_trace and needs pandas and
+  # scipy besides numpy and matplotlib.  Its right panel spans 8820-8860 us,
+  # where the paper's CNN answered.
+  - script: azure_trace_fig_18.py
+    data:
+      data/azure_trace: azure_trace

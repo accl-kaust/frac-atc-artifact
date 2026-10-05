@@ -27,7 +27,7 @@ import sys
 import tempfile
 
 from common import (DEFAULT_CONFIG, EVAL_DIR, ConfigError, Experiment, abs_path,
-                    find_experiment, log_complete, read_yaml, rel)
+                    find_experiment, log_complete, read_yaml, rel, trace_replayed)
 
 FIGURE_TYPES = (".pdf", ".png", ".svg")
 
@@ -170,13 +170,17 @@ def main(argv=None):
     if not any(name.endswith(".log") for _, _, names in os.walk(run_dir) for name in names):
         sys.exit(f"plot.py: no .log files in {run_dir}")
     seconds = params.get("d")
-    if isinstance(seconds, int) and not isinstance(seconds, bool):
+    complete = None
+    if exp.trace:
+        complete, end = trace_replayed, "the trace's last row"
+    elif isinstance(seconds, int) and not isinstance(seconds, bool):
+        complete, end = (lambda path: log_complete(path, seconds)), f"second {seconds - 1}"
+    if complete:
         short = sorted(os.path.relpath(os.path.join(folder, name), run_dir)
                        for folder, _, names in os.walk(run_dir) for name in names
-                       if name.endswith(".log")
-                       and not log_complete(os.path.join(folder, name), seconds))
+                       if name.endswith(".log") and not complete(os.path.join(folder, name)))
         if short:
-            print(f"warning: {len(short)} logs end before second {seconds - 1}, so their points "
+            print(f"warning: {len(short)} logs end before {end}, so their points "
                   f"rest on fewer samples: {', '.join(short)}")
     out_dir = os.path.abspath(args.out) if args.out else run_dir
     os.makedirs(out_dir, exist_ok=True)
