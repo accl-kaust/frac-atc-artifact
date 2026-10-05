@@ -14,8 +14,8 @@ program: once
 
 targets:
   1:                                    # with fRAC; there is no bypass run here
-    bitstream: example/jtag/frac.bit
-    partials: example/icap
+    bitstream: build/frac/bitstreams/jtag/frac.bit
+    partials: build/frac/bitstreams/icap
 
 # f is the paper's function id, which the figure script reads from the log
 # names.  R is the response size fperf waits for: top_k always answers one
