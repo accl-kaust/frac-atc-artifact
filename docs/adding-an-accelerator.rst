@@ -325,7 +325,7 @@ Add your accelerator to database.
      components:
        # Existing components
        - name: <name>
-         id: 8
+         id: 50
          unit: <name>
 
 
@@ -372,7 +372,7 @@ Try It on Hardware
 
 .. code-block:: sh
 
-   $ go run ./scripts/reconfslots.go -slot 0 -chunk-size 256 -hbm-addr 0x10004000 -query-status out/icap/c00_f08.bin
+   $ go run ./scripts/reconfslots.go -slot 0 -chunk-size 256 -hbm-addr 0x10004000 -query-status out/icap/c00_f50.bin
 
 4. Send a request again to see the change
 

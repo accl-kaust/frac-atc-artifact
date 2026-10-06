@@ -114,11 +114,11 @@ Program the Alveo U280 FPGA with the generated bitstream. We have a shell script
 .. code-block:: sh
 
    $ cd ~/frac-atc-artifact
-   $ ./scripts/programfpga.sh example/jtag/frac.bit
+   $ ./scripts/programfpga.sh example/frac/jtag/frac.bit
 
 .. code-block:: output
 
-   programming ~/frac-atc-artifact/example/jtag/frac.bit
+   programming ~/frac-atc-artifact/example/frac/jtag/frac.bit
    PROGRAM_OK: xcu280_u55c_0
 
 .. note::
@@ -202,7 +202,7 @@ Try reconfiguring with any acclerator
 
    $ cd ~/frac-atc-artifact
    $ go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
-            -hbm-addr 0x10004000 -query-status example/icap/c01_f03.bin
+            -hbm-addr 0x10004000 -query-status example/frac/icap/c01_f03.bin
 
 Then try sending packets and it should change the response.
 
@@ -211,7 +211,7 @@ Finally, program with echo for the next step
 .. code-block:: sh
 
    $ go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
-            -hbm-addr 0x10004000 -query-status example/icap/c01_f09.bin
+            -hbm-addr 0x10004000 -query-status example/frac/icap/c01_f09.bin
 
 
 .. code-block:: sh
