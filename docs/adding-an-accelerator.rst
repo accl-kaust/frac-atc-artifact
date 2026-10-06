@@ -1,10 +1,14 @@
 Integrating Your Own Accelerator
 ================================
 
-fRAC provides abstract shells that let developers integrate accelerators without rebuilding the entire stack. An accelerator needs little to no knowledge of the network.
+The full fRAC build writes an abstract shell for each cell, which lets developers integrate accelerators without rebuilding the entire stack. An accelerator needs little to no knowledge of the network.
 This guide shows how to bring your own accelerator into fRAC. It covers where the accelerator connects, the interface it must implement, how to implement the hardware, and how a client sends it requests.
 
-Please follow  `quick-start <https://accl-kaust.github.io/frac-atc-artifact/>`_ before proceeding.
+Please follow :doc:`quick-start` before proceeding. This guide needs what its
+**Generating bitstream** step builds: the abstract shells in
+``build/frac/abstract_shell/`` and the full image they were written from,
+``build/frac/bitstreams/jtag/frac.bit``. The bitstreams under ``example/`` come
+without abstract shells, so this guide cannot use them.
 
 Creating files
 --------------
@@ -282,7 +286,7 @@ Now, unit.yaml
       dir: "src/ip"
       files:
 
-Add your accelerator to database.
+Add your accelerator to the unit catalogue, at the end of ``units:``.
 
 
 .. code-block:: yaml
@@ -315,6 +319,11 @@ Add your accelerator to database.
        ramb36: 0
        dsp: 0
 
+Then list it as a component of the cell it is built for, C00 here. Add it after
+the cell's last component, at the same indentation as the others, with an id
+that no other component in the file uses. The id names the partial bitstream:
+id 50 in C00 makes it ``c00_f50``.
+
 .. code-block:: yaml
    :caption: spinhdl.yaml
 
@@ -322,26 +331,37 @@ Add your accelerator to database.
      id: 0
      slot_id: 0
      region:
-       # Existing region settings
+       # unchanged
      components:
-       # Existing components
-       - name: <name>
-         id: 50
-         unit: <name>
+     - name: top_k        # the components already listed
+       id: 0
+       unit: top_k
+     # ...
+     - name: <name>       # yours, at the same indentation
+       id: 50
+       unit: <name>
 
 
-Now just build with a abstract shell.
+Build the partial bitstream against C00's abstract shell.
 
 .. code-block:: sh
 
    $ ./bin/spinhdl spin <name> --shell build/frac/abstract_shell/ab_sh_c00_bbx_inst.dcp \
                     --cell C00 --out-dir out
 
+``spinhdl`` synthesizes the unit, implements it into C00 against the shell, and
+writes ``out/jtag/c00_f50.bit``, ``out/icap/c00_f50.bin`` and
+``out/pcap/c00_f50.bin``. For another cell, use that cell's shell, for example
+``ab_sh_c01_bbx_inst.dcp`` with ``--cell C01``, and list the component under
+that cell in ``spinhdl.yaml``.
+
 
 Try It on Hardware
 --------------------------
 
-1. Program the FPGA with the full image
+1. Program the FPGA with the full image from the same build as the abstract
+   shell. A partial bitstream only works on the full image its shell was
+   written from.
 
 .. code-block:: sh
 
