@@ -15,6 +15,6 @@ dump.vcd
 accl
 
 # eval/: per-machine settings, licensed fonts, and measurement results
-eval/testbed.yaml
+#eval/testbed.yaml
 eval/fonts/
 eval/*/results/

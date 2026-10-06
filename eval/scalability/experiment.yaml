@@ -16,8 +16,8 @@ program: once
 
 targets:
   1:                                    # with fRAC; needs a build with four cells
-    bitstream: build/frac/bitstreams/jtag/frac.bit
-    partials: build/frac/bitstreams/icap
+    bitstream: example/frac/jtag/frac.bit
+    partials: example/frac/icap
     slots:                              # top_k in every slot, RM ids from spinhdl.yaml
       0: c00_f00.bin
       1: c01_f03.bin

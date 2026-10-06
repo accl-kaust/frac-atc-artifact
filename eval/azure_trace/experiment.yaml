@@ -18,8 +18,8 @@ program: once
 targets:
   1:                                    # with fRAC; there is no bypass run here
     # The CNN needs a build with cnn in C02 (spinhdl.yaml), 1768 or later.
-    bitstream: build/frac/bitstreams/jtag/frac.bit
-    partials: build/frac/bitstreams/icap
+    bitstream: example/frac/jtag/frac.bit
+    partials: example/frac/icap
     # fperf sends each app to a fixed slot, func_slots[] in libtpa's
     # app/fperf/trace.c; RM ids from spinhdl.yaml.
     slots:

@@ -17,8 +17,8 @@ program: every_run
 targets:
   1:                                    # with fRAC; there is no bypass run here
     # The CNN needs a build with cnn in C02 (spinhdl.yaml), 1768 or later.
-    bitstream: build/frac/bitstreams/jtag/frac.bit
-    partials: build/frac/bitstreams/icap
+    bitstream: example/frac/jtag/frac.bit
+    partials: example/frac/icap
 
 # f is the paper's function id, which the figure script finds in the log
 # names.  Each function has a slot of its own, so that all four can be loaded
