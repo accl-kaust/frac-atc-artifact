@@ -23,8 +23,8 @@ targets:
   0:                                    # without fRAC: TCP straight back, no reassembly
     bitstream: example/bypass/frac.bit
   1:                                    # with fRAC
-    bitstream: build/frac/bitstreams/jtag/frac.bit
-    partials: build/frac/bitstreams/icap
+    bitstream: example/frac/jtag/frac.bit
+    partials: example/frac/jtag/icap
     slots:
       0: c00_f07.bin                    # pattern_slot: echoes each request
 
