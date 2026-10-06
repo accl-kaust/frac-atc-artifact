@@ -24,7 +24,7 @@ targets:
     bitstream: example/bypass/frac.bit
   1:                                    # with fRAC
     bitstream: example/frac/jtag/frac.bit
-    partials: example/frac/jtag/icap
+    partials: example/frac/icap
     slots:
       0: c00_f07.bin                    # pattern_slot: echoes each request
 
