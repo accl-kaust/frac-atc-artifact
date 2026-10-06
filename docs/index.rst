@@ -13,6 +13,7 @@ the FPGA to serve different workloads as requirements change.
 
    quick-start
    adding-an-accelerator
+   reproducing-results.rst
    reconfiguration-controller
    protocol
    build-and-deployment

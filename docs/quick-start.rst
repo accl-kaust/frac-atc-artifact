@@ -38,7 +38,7 @@ Generating bitstream
 .. code-block:: sh
 
    $ cd ~
-   $ git clone --branch main \
+   $ git clone --branch artifact-eval \
                 --single-branch https://github.com/accl-kaust/frac-atc-artifact.git
    $ cd frac-atc-artifact
    $ make ip CMAKE=/usr/bin/cmake
