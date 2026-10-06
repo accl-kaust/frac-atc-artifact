@@ -233,6 +233,7 @@ Check if your files and directory looks like this
 
 .. code-block:: sh
 
+   $ cd ~/frac-atc-artifact
    $ tree kernels/user_krnl/apps/<name>/
 
 .. code-block:: output
