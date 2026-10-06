@@ -29,7 +29,7 @@ Latency Throughput (Figure 13)
 .. code-block:: sh
 
   $ cd ~/frac-atc-artifact
-  $ NIC=enp67s0f0np0
+  $ NIC=enp33s0f0np0
   $ sed -i -E 's/^(nic:[[:space:]]*)"[^"]*"/\1"'"$NIC"'"/' eval/testbed.yaml && grep -n '^nic:' eval/testbed.yaml
   $ python3 eval/run.py latency_throughput
   $ python3 eval/plot.py latency_throughput
