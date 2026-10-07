@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: CERN-OHL-S-2.0
+// SPDX-License-Identifier: MIT
 //
 // AXI-Stream PR cell blackbox shell.
 //

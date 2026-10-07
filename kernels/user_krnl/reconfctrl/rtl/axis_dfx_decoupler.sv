@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: CERN-OHL-S-2.0
+// SPDX-License-Identifier: MIT
 //
 // Small AXI-Stream decoupler for PR slot boundaries.
 //

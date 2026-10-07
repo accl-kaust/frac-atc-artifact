@@ -1,3 +1,6 @@
+# Adapted from Alex Forencich's Xilinx Vivado FPGA Makefile, as shipped with
+# Corundum. Copyright (c) 2016 Alex Forencich, MIT License.
+
 .PHONY: frac synth vivado tmpclean clean distclean
 
 .PRECIOUS: %.xpr %.bit %.bin %.mcs %.prm
