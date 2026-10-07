@@ -14,11 +14,18 @@ fRAC achieves low latency at 100G. fRAC is currently built on top of EasyNet, a 
 - Archived artifact: TODO(authors): Zenodo DOI.
 
 ```bibtex
-@inproceedings{frac-atc26,
-  title     = {{fRAC}: Remote Accelerator Calls on {FPGAs}},
-  author    = {TODO(authors)},
-  booktitle = {ACM ATC '26},
-  year      = {2026},
+@inproceedings{yang2026frac,
+  author    = {Ziyi Yang and Krishnan B. Iyer and Yixi Chen and Ran Shu and Zsolt Istv{\’a}n and Marco Canini and Suhaib A. Fahmy},
+  title     = {{fRAC}: {R}emote {A}ccelerator {C}alls on {H}ostless {FPGA}},
+  booktitle = {Proceedings of the 2026 ACM SIGOPS Annual Technical Conference},
+  series    = {SIGOPS ATC ’26},
+  year      = {2026},
+  month     = nov,
+  address   = {Hong Kong},
+  publisher = {ACM},
+  doi       = {10.1145/3828523.3857070},
+  isbn      = {979-8-4007-2818-1},
+  url       = {https://doi.org/10.1145/3828523.3857070},
 }
 ```
 
