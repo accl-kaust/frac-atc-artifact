@@ -1,15 +1,16 @@
 Quick Start
 ===========
 
-fRAC includes an Ethernet and TCP stack and few accelerators, all implemented on the FPGA.
+fRAC includes an Ethernet and TCP stack and a few accelerators, all implemented on the FPGA.
 A TCP client can send application requests over TCP and receive responses with low latency.
-Accelerators are placed in a slot which are reconfigurable through partial reconfiguration.
-We use libtpa, a DPDK based TCP stack to measure latency and throughput.
+Accelerators sit in slots, which can be swapped at runtime through partial reconfiguration.
+We use libtpa, a DPDK-based TCP stack, to measure latency and throughput.
 
 .. note:: Artifact evaluators using the provided testbed
 
    The FPGA, host network, and required software are already configured.
-   Skip the **Setting up the NIC**, **Setup Hugepages**, **Connect the hardware**, **Configure the Host Network**, and **Software Installation** sections.
+   Skip the **Setting up the NIC**, **Building libtpa**, **Setup Hugepages**,
+   **Connect the Hardware**, and **Configure the Host Network** sections.
 
 Requirements
 ------------
@@ -21,17 +22,33 @@ Hardware
 2. ConnectX-6 Dx 100GbE NIC.
 3. USB cable for JTAG.
 4. 100G QSFP cable.
+5. A host with at least 28 cores to spare: the experiments pin up to 28 client
+   threads, one per core.
 
 Software
 ~~~~~~~~
 
-1. Ubuntu 22.04 LTS.
-2. Vivado 2022.2.
-3. `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/>`_.
-4. `Go <https://go.dev/doc/install>`_ compiler
-5. Cmake >= 3.5
+1. Ubuntu. The paper's measurements ran on 20.04, and the evaluation testbeds
+   run 24.04.
+2. Vivado 2022.2, whose hardware manager programs the FPGA over JTAG. Building
+   bitstreams also needs Vitis HLS 2022.2 and a license for the UltraScale+
+   Integrated 100G Ethernet Subsystem (CMAC).
+3. `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/>`_;
+   we used 24.07-0.6.1.0.
+4. `Go <https://go.dev/doc/install>`_ compiler; we used 1.22.
+5. CMake >= 3.5, for building bitstreams.
+6. Python 3 with the packages in ``eval/requirements.txt``, for the experiments
+   (see :doc:`reproducing-results`).
 
 If you don't have access to hardware, you can request access to our infrastructure by contacting us.
+
+.. warning::
+
+   Programming the U280 over JTAG takes it off PCIe if it was up there, for
+   example running the XRT shell from its flash. Some servers treat that
+   surprise link-down as a fatal error and reset. Take the card off the bus
+   and disable its link first (``scripts/flashfpga.sh --help`` shows the
+   commands), or use a host on which the card is not enumerated.
 
 Testbed
 -------
@@ -61,11 +78,18 @@ Generating bitstream
 
 
 Setting up the NIC (Skip to the next section)
-------------------
+---------------------------------------------
 
-Make sure you have a ConnectX-6 Dx, other NICs might also work but we haven't tested anything else yet.
+Make sure you have a ConnectX-6 Dx; other NICs might also work, but we haven't tested them.
 
-Download `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/>`_.
+Download `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/>`_
+for your Ubuntu release. The commands below are for version 24.07-0.6.1.0 on
+Ubuntu 22.04; change the file names to match yours.
+
+.. warning::
+
+   ``mlnxofedinstall`` replaces the distribution's RDMA and NIC driver
+   packages with its own.
 
 .. code-block:: sh
 
@@ -74,43 +98,49 @@ Download `MLNX_OFED <https://network.nvidia.com/products/infiniband-drivers/linu
    $ cd MLNX_OFED_LINUX-24.07-0.6.1.0-ubuntu22.04-x86_64
    $ sudo ./mlnxofedinstall --dpdk --upstream-libs
 
-Install libtpa build dependencies
+Building libtpa (Skip to the next section)
+------------------------------------------
+
+The client we measure with, fperf, is part of our libtpa fork. Clone it and
+install its build dependencies:
 
 .. code-block:: sh
 
-   $ cd ~/libtpa
+   $ cd ~
+   $ git clone --branch frac_hdr_fmt \
+                --single-branch https://github.com/accl-kaust/libtpa.git
+   $ cd libtpa
+   $ git checkout 2f81dd4    # the commit this artifact was tested with
    $ sudo ./buildtools/install-dep.deb.sh --with-meson
 
-Building libtpa
----------------
+Then build and install it:
 
 .. code-block:: sh
 
    # export or add to ~/.bashrc or ~/.zshrc
-   $ cd ~
    $ export DPDK_VERSION=v22.11
-   $ git clone --branch frac_hdr_fmt \
-                --single-branch https://github.com/accl-kaust/libtpa.git
-   $ cd libtpa
    $ make
    $ make install
 
 Setup Hugepages  (Skip to the next section)
 -------------------------------------------
 
-Allocate hugepages for libtpa's DPDK memory pools. Please adjust the number of pages according to available DRAM
+Allocate hugepages for libtpa's DPDK memory pools. Please adjust the number of
+pages according to available DRAM. Each fperf process takes 8 GB of them
+(``socket-mem = 8192`` in ``TPA_CFG``), and the mixed-workload and scalability
+experiments run four at once, so we allocate 20000 pages (40 GB).
 
 .. code-block:: sh
 
-   # allocating 2000 hugepages each 2MB
+   # allocating 20000 hugepages each 2MB, after the kernel parameters already there
    # please allocate more if required
-   $ sudo sed -i.bak 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="default_hugepagesz=2M hugepagesz=2M hugepages=2000"|' \
+   $ sudo sed -i.bak 's|^GRUB_CMDLINE_LINUX="\(.*\)"|GRUB_CMDLINE_LINUX="\1 default_hugepagesz=2M hugepagesz=2M hugepages=20000"|' \
               /etc/default/grub
    $ sudo update-grub
    $ sudo reboot
 
 Connect the Hardware  (Skip to the next section)
------------------------------------------------
+------------------------------------------------
 
 1. Connect (``qsfp0``) (port 0) of U280 to the ConnectX-6 Dx with 100G QSFP cable.
 2. Connect the U280's JTAG USB interface to the machine.
@@ -118,7 +148,9 @@ Connect the Hardware  (Skip to the next section)
 Program the FPGA
 ----------------
 
-Program the Alveo U280 FPGA with the generated bitstream. We have a shell script to this. The full bitstreams come with default accelerators with ID:0 in ``spinhdl.yaml``.
+Program the Alveo U280 FPGA with the full image. We have a shell script for
+this. The full image starts with top_k, the first accelerator listed for each
+cell in ``spinhdl.yaml``, in every slot.
 
 .. code-block:: sh
 
@@ -130,9 +162,13 @@ Program the Alveo U280 FPGA with the generated bitstream. We have a shell script
    programming ~/frac-atc-artifact/example/frac/jtag/frac.bit
    PROGRAM_OK: xcu280_u55c_0
 
+``programfpga.sh`` uses the Vivado in ``/tools/Xilinx/Vivado/2022.2``. Set
+``VIVADO_ROOT`` if yours is elsewhere, and ``HW_TARGET`` if the host has more
+than one JTAG cable; ``--help`` lists the options.
+
 .. note::
 
-   Wait a few seconds after flashing the FPGA before sending it any packets
+   Wait a few seconds after programming the FPGA before sending it any packets
    or requests.
 
 Configure the Host Network  (Skip to the next section)
@@ -140,9 +176,12 @@ Configure the Host Network  (Skip to the next section)
 
 The checked-in fRAC design uses FPGA address ``172.24.1.52`` and TCP port
 ``2888``. Configure the connected host interface with a different address in
-the same subnet. The example uses ``172.24.1.2/24``.
+the same subnet. The example uses ``172.24.1.2/24``. The MTU must be at least
+8232, because fRAC's TCP stack sends 8192-byte segments; we use 9000.
 
-You will need the ConnectX-6 Dx interface connected to the Alveo U280 by a QSFP cable. We prefer configuring network interface through netplan.
+You will need the ConnectX-6 Dx interface connected to the Alveo U280 by a
+QSFP cable. We configure it through netplan; add it to your netplan file and
+keep what is already there.
 
 .. code-block:: sh
 
@@ -154,10 +193,10 @@ You will need the ConnectX-6 Dx interface connected to the Alveo U280 by a QSFP 
       version: 2
       renderer: NetworkManager
       ethernets:
-        enp33s0f0np0: # ConnectX-6 Dx Intf to U280
-        dhcp4: no
-        addresses: [172.24.1.2/24]
-        mtu: 9000
+        enp33s0f0np0: # ConnectX-6 Dx interface cabled to the U280
+          dhcp4: no
+          addresses: [172.24.1.2/24]
+          mtu: 9000
 
 Now apply network settings
 
@@ -175,7 +214,7 @@ Just try ping-ing FPGA.
 
    $ ping 172.24.1.52
 
-If ping is sucessfull then your machine can reach FPGA and possibly fRAC.
+If ping succeeds, your machine can reach the FPGA and possibly fRAC.
 
 You can also send some test packets to fRAC accelerators and see if they are live.
 
@@ -184,7 +223,9 @@ You can also send some test packets to fRAC accelerators and see if they are liv
    $ cd ~/frac-atc-artifact
    $ go run ./scripts/testfuncs.go -slots 0,1 -counter
 
-You will get a response something like this.
+You will get a response something like this. Both slots hold top_k, which
+answers with a single line that ``testfuncs`` does not recognise; the 300 ms is
+``testfuncs`` waiting for further lines that do not come. Both are expected.
 
 .. code-block:: output
 
@@ -205,7 +246,7 @@ You will get a response something like this.
 Reconfigure with an Accelerator
 -------------------------------
 
-Try reconfiguring with any acclerator
+Try reconfiguring with any accelerator
 
 .. code-block:: sh
 
@@ -253,7 +294,8 @@ Performance Measurements
 .. note::
 
    Before proceeding, make sure the ``pattern`` function is loaded into at
-   least one slot. It echoes requests back to the client.
+   least one slot. It echoes requests back to the client. The command below
+   sends to slot 1 (``-K 1``), which the previous step loaded.
 
 
 We measure performance with our libtpa based perf tool.
@@ -267,6 +309,10 @@ We measure performance with our libtpa based perf tool.
    $ cd ~/libtpa
 
    $ sudo TPA_ID=client TPA_ETH_DEV=enp33s0f0np0 TPA_CFG="tcp {tso = 0; } dpdk { socket-mem = 8192; mbuf_mem_size = 6GB; }" ~/.local/bin/tpa run build/bin/app/fperf -c 172.24.1.52 -p 2888 -t rr -d 5 -n 22 -S 0 -m 4096 -X 4096 -R 4096  -Z 1 -K 1
+
+Each line reports one client's latency and throughput for one second, and the
+``Total-Throughput`` lines the sum over all clients. The first second's
+numbers are not meaningful; ignore them.
 
 .. code-block:: output
 
