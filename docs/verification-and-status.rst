@@ -5,9 +5,12 @@ Test Environment
 ----------------
 
 The simulation tests use Python, cocotb, cocotb-test, cocotbext-axi, pytest, and
-Verilator. The repository does not currently contain a pinned Python requirements
-file for these tests, so a release should record the exact package and Verilator
-versions used.
+Verilator. ``kernels/user_krnl/requirements.txt`` pins the Python packages at
+the versions we ran the suites with, and we used Verilator 5.034:
+
+.. code:: sh
+
+   python3 -m pip install -r kernels/user_krnl/requirements.txt
 
 Controller Unit Tests
 ---------------------
@@ -25,8 +28,7 @@ Enable FST wave generation with:
    make -C kernels/user_krnl/reconfctrl/tb WAVES=1
 
 This testbench compiles ``reconfctrl.v`` directly and models HBM and the ICAP
-stream. It does not compile the physical ``ICAPE3`` wrapper. The checked-in suite
-covers:
+stream. It does not compile the physical ``ICAPE3`` wrapper. The suite covers:
 
 -  A 96-byte HBM write and final-byte strobes.
 -  A 64-byte HBM read.
@@ -40,7 +42,8 @@ covers:
 -  Idle status query.
 -  Status query after successful reconfiguration.
 
-The checked-in ``results.xml`` records 11 passing tests for this suite.
+Its 10 tests pass; cocotb writes their results to ``results.xml`` in the
+testbench directory.
 
 Network Integration Tests
 -------------------------
@@ -63,9 +66,10 @@ includes:
 -  Repeated controller requests over a connection.
 -  Draining excess request packet data after a controller response.
 
-The checked-in ``results.xml`` records 18 passing tests for the complete integration
-suite. It does not issue an integrated ``QUERY_STATUS`` request; ``test_slots``
-below issues an integrated ``RECONF_ICAP``.
+The complete integration suite has 41 tests, in ``test_reassembly``,
+``test_multiclient``, ``test_throughput`` and ``test_slots``, and they pass. It
+does not issue an integrated ``QUERY_STATUS`` request; ``test_slots`` below
+issues an integrated ``RECONF_ICAP``.
 
 The same run includes ``test_multiclient``, which drives several connections at
 once through a model of the TOE's shared RX FIFO and checks that every response
@@ -75,8 +79,8 @@ length:
 -  One-segment requests from one, four, and sixteen clients, the last with two
    requests in flight each, and single-line requests back to back with
    multi-line ones.
--  Requests framed as ``sw/app`` frames them, a header segment and then the
-   data, from two and four clients.
+-  Requests framed as a header segment and then the data, from two and four
+   clients.
 -  A TX side that refuses requests for want of window or for a closed
    connection.
 -  The same with the stack's answers delayed 0 to 40 cycles and the TX
@@ -146,6 +150,24 @@ An additional direct SystemVerilog HBM-write test is available:
 
    make -C kernels/user_krnl/reassembly/tb sv-write-hbm
 
+Hardware Correctness Check
+--------------------------
+
+``scripts/checkfuncs.sh`` checks the accelerators on the U280 itself. It loads
+top_k, norm and log into every slot in turn, sends each slot requests of known
+data with ``scripts/checkfuncs.go``, and compares every answer word with what
+the host computes for it. norm must match bit for bit; log may differ in the
+last place, because the Xilinx logarithm core does not round correctly.
+
+.. code:: sh
+
+   BIT=example/frac/jtag/frac.bit ICAP=example/frac/icap scripts/checkfuncs.sh
+
+``BIT`` programs that full image first. Without it the script checks the image
+already on the FPGA, which must come from the same build as the partials in
+``ICAP``. The script takes the testbed lock that ``eval/run.py`` takes, and
+leaves the slots holding the last unit it checked.
+
 Missing Verification
 --------------------
 
@@ -161,9 +183,9 @@ The following cases are not covered by the current automated tests:
 -  ``AVAIL=0`` behavior.
 -  Missing, simultaneous, or delayed ``PRDONE`` and ``PRERROR``.
 -  Reset during HBM upload or ICAP reconfiguration.
--  Every supported module/slot combination.
+-  Every module/slot combination in simulation; on the U280,
+   ``scripts/checkfuncs.sh`` covers top_k, norm and log in every slot.
 -  A request already in a slot or its pipeline when decoupling is asserted.
--  ICAP bit and byte ordering against the physical U280 configuration engine.
 -  Very large partial bitstreams.
 -  Go command serialization and status decoding.
 -  Authentication, artifact compatibility, digest failure, and replay handling.
@@ -235,14 +257,11 @@ Concurrent Requests
 DFX Build
 ~~~~~~~~~
 
--  The regular Make flow does not apply the PR XDC or insert RM checkpoints.
--  The YAML manifests have no checked-in orchestration command.
--  Checked-in floorplan descriptions disagree for C02.
--  The experimental bit-generation script does not generate all slots and module
-   variants.
--  Existing full and partial artifacts do not have a compatibility manifest.
--  Archived timing reports in the wider workspace show negative slack and are not
-   evidence of a timing-clean release.
+-  ``spinhdl weave`` builds the full image and every partial bitstream of every
+   cell from one static implementation, and the build in ``example/`` meets
+   timing in every configuration. The bitstreams carry no manifest that binds
+   a partial to its full image, though, so a partial from another build can
+   be loaded, and the controller reports success even then.
 
 Security
 ~~~~~~~~
@@ -271,21 +290,18 @@ The controller should ultimately implement and verify this sequence:
 9.  On failure, keep the slot isolated and expose a recovery/status interface.
 10. Record slot, artifact, result, timing, and error information.
 
-Release Checklist
------------------
+Open Items
+----------
 
-A controller and partial image should not be described as deployable until:
+The prototype covers what the paper evaluates: the full image and the partial
+bitstreams come from one reproducible build, meet timing, and load and run on
+the U280 in every slot. Before the reconfiguration path is used outside a
+trusted testbed, these remain open:
 
--  Static and reconfigurable checkpoints are built by a reproducible command.
--  The full image and partial image share the same locked static implementation.
--  The artifact manifest identifies the slot, module, floorplan, tool version,
-   size, and digest.
--  DFX verification and full DRC pass.
--  Static and all reconfigurable configurations meet timing.
--  ICAP format and word ordering are verified on hardware.
--  HBM upload, successful PR, post-PR workload behavior, ``PRERROR``, timeout, and
-   recovery are tested on the U280.
--  In-flight request behavior is tested and matches the documented safety
-   contract.
--  All slots and supported module combinations are covered.
--  The network control path is deployed only within its documented trust model.
+-  A manifest that identifies each partial bitstream's slot, module, floorplan,
+   tool version, size, digest and full image, checked before it is loaded.
+-  Tests on the U280 of ``PRERROR``, timeouts and recovery.
+-  Tests of requests in flight when a slot is decoupled, against the safety
+   sequence above.
+-  Authentication on the network control path, or deployment only on a trusted
+   network.

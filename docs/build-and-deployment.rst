@@ -1,140 +1,153 @@
 Build and Deployment
 ====================
 
-Build Status
+This page describes how the bitstreams in ``example/`` are built, what a build
+produces, and how bitstreams are loaded at runtime. Building is optional: the
+experiments in :doc:`reproducing-results` run on the prebuilt bitstreams.
+
+Requirements
 ------------
 
-The repository currently contains two related but separate flows:
+- Vitis HLS and Vivado 2022.2, licensed for the Alveo U280 part
+  (``xcu280-fsvh2892-2L-e``) and for the UltraScale+ Integrated 100G Ethernet
+  Subsystem (CMAC).
+- CMake 3.5 or newer.
+- ``bin/spinhdl``, a prebuilt x86-64 Linux binary (glibc 2.34 or newer) of
+  `spinHDL <https://github.com/krish-iyer/spinHDL>`_, which drives the
+  partial-reconfiguration flow. The bitstreams in ``example/`` were built with
+  spinHDL commit ``943f5bc``.
+- Time and memory. The build of the bitstreams in ``example/`` took 3.5 hours
+  on 48 cores with 192 GB of memory allotted. The flat baseline image in
+  ``example/bypass/`` took 66 minutes on 16 cores.
 
-1. The Make/Vivado flow builds HLS dependencies and a conventional full FPGA
-   image.
-2. The DFX manifests, partition constraints, and experimental Tcl scripts
-   describe parts of a partial-reconfiguration flow.
+Building
+--------
 
-They are not connected into one reproducible source-to-partial-bitstream target.
-In particular, the normal Make flow does not load reconfigurable-module
-checkpoints or include ``frac/xdc/pr_frac.xdc``.
+Run these commands from the repository root:
 
-The standalone README declares Xilinx 2021.2 as the tested tool version, while
-preserved implementation reports and bitstream artifacts in the wider workspace
-were generated with Vivado 2022.2. A release must select and record one validated
-tool version.
+.. code:: sh
 
-Conventional Build
+   make ip CMAKE=/usr/bin/cmake
+   ./bin/spinhdl --parallel 8 weave spinhdl.yaml --units spin.yaml --static static.yaml
+
+``make ip`` builds the TCP/IP stack's HLS cores, from
+``lib/fpga-network-stack``, into ``build/lib``. ``spinhdl weave`` then reads
+three manifests:
+
+================== ===============================================================
+``static.yaml``    The static design: its RTL, the Tcl that configures the AMD IP,
+                   and its constraints, including ``frac/xdc/floorplan.xdc``
+``spin.yaml``      The catalogue of accelerators (units) and their sources
+``spinhdl.yaml``   The four cells, the region of the device each one occupies, and
+                   the units each one can hold, with their ids
+================== ===============================================================
+
+It synthesizes the static design and every unit, implements the initial
+configuration, with the first unit listed for each cell (top_k), and writes an
+abstract shell for every cell. It then implements every other unit of every
+cell against that cell's shell and writes the bitstreams:
+
+========================================================= ==========================================
+``build/frac/bitstreams/jtag/frac.bit``                   The full image, programmed over JTAG
+``build/frac/bitstreams/jtag/c<cell>_f<id>.bit``          Partial bitstreams, for JTAG
+``build/frac/bitstreams/icap/c<cell>_f<id>.bin``          Partial bitstreams for the reconfiguration
+                                                          controller
+``build/frac/bitstreams/pcap/c<cell>_f<id>.bin``          The same without ICAP's bit swap; unused
+``build/frac/abstract_shell/ab_sh_c0<n>_bbx_inst.dcp``    Each cell's abstract shell, for building
+                                                          new accelerators (:doc:`adding-an-accelerator`)
+========================================================= ==========================================
+
+``<cell>`` is the cell's number and ``<id>`` the unit's id in
+``spinhdl.yaml``, both two digits, so ``c02_f20`` is the CNN in cell C02;
+``example/README.md`` lists them all. The regions in ``spinhdl.yaml`` and the
+static pblock in ``frac/xdc/floorplan.xdc`` describe the same floorplan; change
+them together.
+
+The Makefile's other targets (``synth``, ``frac``) drive a conventional
+single-image Vivado project. They are not used for the bitstreams in
+``example/``.
+
+Build options
+~~~~~~~~~~~~~
+
+The TCP stack's maximum segment size is set in the Makefile
+(``TCP_STACK_MSS``, 8192 bytes). The host's network must carry 8232-byte
+frames for it, an MTU of 9000 in our setup. On a network with a 1500-byte MTU,
+build the IP with ``make ip TCP_STACK_MSS=1408`` in a fresh ``build/``.
+
+Loading Bitstreams
 ------------------
 
-Run these commands from the standalone repository root.
+Full image
+~~~~~~~~~~
+
+``scripts/programfpga.sh <file.bit>`` programs a full image over JTAG with the
+Vivado hardware manager. ``VIVADO_ROOT`` selects the Vivado installation and
+``HW_TARGET`` the JTAG cable, if the host has more than one.
+
+``scripts/flashfpga.sh <file.bit>`` instead writes the image into the U280's
+configuration flash, at the address where the card keeps the image its golden
+image boots, so that the card starts fRAC at power-up. This overwrites the
+image the card shipped with, such as the XRT shell; the golden image stays as
+the fallback. The write takes 10 to 30 minutes, and the image runs after the
+next power cycle.
+
+.. warning::
+
+   Both scripts reconfigure the FPGA. If the card is up on PCIe, for example
+   running the XRT shell, its link goes down, and some servers answer that
+   with a reset. Take the card off the bus and disable its link first;
+   ``scripts/flashfpga.sh --help`` shows the commands.
+
+Partial bitstreams
+~~~~~~~~~~~~~~~~~~
+
+``scripts/reconfslots.go`` loads a partial bitstream into a slot over the
+network, through the reconfiguration controller:
 
 .. code:: sh
 
-   make ip
-   make synth
-   make frac
+   go run ./scripts/reconfslots.go -slot 1 -chunk-size 256 \
+       -hbm-addr 0x10004000 -query-status example/frac/icap/c01_f09.bin
 
-The nominal combined command is:
+It reads the file, pads it to a four-byte boundary, and uploads it into the
+FPGA's HBM with ``WRITE_HBM`` commands of at most ``-chunk-size`` bytes. It
+then sends ``RECONF_ICAP`` for the slot and waits for the controller's status
+response. With ``-query-status`` it also sends ``QUERY_STATUS``, and with
+``-post-probe`` it sends the slot a request afterwards. ``-query-only``,
+``-read-hbm`` and ``-no-reconf`` query the controller, read HBM back, or stop
+after the upload. :doc:`protocol` describes the commands.
 
-.. code:: sh
+================= ==============================================================
+Option            Default
+================= ==============================================================
+``-addr``         ``172.24.1.52:2888``
+``-slot``         ``0``; slot N is cell C0N, from 0 to 3
+``-hbm-addr``     ``0x4000``; the experiments use ``0x10004000``
+``-chunk-size``   ``64``; the experiments use ``256``
+``-timeout``      ``10s`` per connection and request
+================= ==============================================================
 
-   make all
-
-Expected conventional-build outputs include:
-
-.. code:: text
-
-   frac_top.xpr
-   frac_top.runs/synth_1/frac_top.dcp
-   frac_top.runs/impl_1/frac_top_routed.dcp
-   frac_top.runs/impl_1/frac_top.bit
-   frac_top.runs/impl_1/frac_top.bin
-   frac_top.runs/impl_1/frac_top.ltx
-   frac_top.xsa
-
-This is not currently a documented functional DFX build. The source list uses
-empty ``cell_bbx`` partition shells, and the Make constraint list contains
-``floorplan.xdc`` rather than ``pr_frac.xdc``.
-
-Known Make-Flow Issues
-~~~~~~~~~~~~~~~~~~~~~~
-
--  ``hls.mk`` prefixes ``CMAKE_ARGS`` with an extra hyphen, causing the first option
-   to expand as ``--DFDEV_NAME=...`` in a clean build.
--  ``make frac`` has no explicit dependency on ``make ip``; parallel ``make all``
-   may race IP generation and Vivado project creation.
--  The checked-in defaults set ``TCP_STACK_EN=0``, despite the controller's TCP
-   deployment path.
--  The source list includes both ``network_types.svh`` and its ``.in`` template.
-
-These items should be resolved and the build rerun from a clean checkout before
-the conventional commands are treated as release instructions.
-
-DFX Inputs
-----------
-
-The checked-in DFX-related inputs are:
-
-================================================ ==============================================================
-File                                             Intended role
-================================================ ==============================================================
-``static.yaml``                                  Static shell source and IP manifest
-``spin.yaml``                                    Reconfigurable-module units (``pattern_slot`` and ``or_slot``)
-``spinhdl.yaml``                                 Three cells, slot IDs, regions, and permitted modules
-``frac/xdc/pr_frac.xdc``                         Pblocks and ``HD.RECONFIGURABLE`` properties
-``kernels/user_krnl/reconfctrl/rtl/cell_bbx.sv`` Static partition boundary shell
-``kernels/user_krnl/apps/*/unit.yaml``           Per-module synthesis manifests
-================================================ ==============================================================
-
-No checked-in executable or Make target consumes all three YAML files. The
-orchestrator, schema version, command line, and output contract are therefore a
-build gap.
-
-The C02 region in ``spinhdl.yaml`` does not match the C02 region in
-``frac/xdc/pr_frac.xdc``. An authoritative floorplan must be chosen before
-partial images are produced.
-
-Required DFX Artifact Stages
-----------------------------
-
-A reproducible DFX build must implement these stages:
-
-1.  Build all required network-stack and Xilinx IP.
-2.  Synthesize the static design while preserving C00, C01, and C02 as
-    reconfigurable partitions.
-3.  Synthesize every reconfigurable module out of context with interface
-    parameters matching ``cell_bbx``.
-4.  Apply one authoritative PR pblock constraint set.
-5.  Insert an explicit initial module checkpoint into every cell.
-6.  Optimize, place, and route the initial configuration.
-7.  Lock or preserve the routed static design.
-8.  Build every supported cell/module configuration against that same static
-    implementation.
-9.  Run DFX compatibility verification, DRC, and timing checks.
-10. Generate a full image for initial programming and one partial image per
-    supported cell/module pair.
-11. Convert each partial image into the ICAP-compatible binary format.
-
-The wider workspace contains experimental ``bit_est/run_route.tcl`` and
-``bit_est/run_bitgen.tcl`` scripts that illustrate checkpoint insertion and
-artifact generation. They are not standalone build commands: they require
-missing ``static_synth.dcp``, RM checkpoints, ``cell_paths.tcl``, and routed alternate
-configurations, and they do not generate every slot/module combination.
+A partial bitstream works only on the full image of its own build. The
+controller cannot tell: a partial from another build can report a successful
+load and still leave the slot's old function in place.
 
 ICAP Partial-Bitstream Format
 -----------------------------
 
 The runtime client and RTL copy file bytes unchanged into HBM and then onto the
 32-bit ICAP input. The deployment input must therefore be an ICAP-prepared
-partial binary, not a raw ``.bit`` file and not a PCAP-formatted binary.
-
-The experimental bit-generation flow uses this conversion:
+partial binary, not a raw ``.bit`` file and not a PCAP-formatted binary. The
+``icap/`` files are written with this conversion; the ``.prm`` file beside
+each one records it:
 
 .. code:: tcl
 
-   write_bitstream -force -cell ${cell_path} module_partial.bit
    write_cfgmem -force -format BIN -interface SMAPx32 \
        -loadbit "up 0x0 module_partial.bit" module_icap_part.bin
 
-The ICAP form intentionally does not use ``-disablebitswap``. The experimental
-PCAP form adds ``-disablebitswap`` and is a different artifact.
+The ICAP form intentionally does not use ``-disablebitswap``; the ``pcap/``
+files add it and are a different artifact.
 
 The controller streams the file in this order:
 
@@ -147,85 +160,6 @@ The controller streams the file in this order:
 
 There is no conversion in the Go client or RTL. Supplying the wrong artifact
 format can cause ``PRERROR`` or leave the controller waiting indefinitely.
-
-Artifact Manifest
------------------
-
-Each deployable partial image should be accompanied by a manifest containing:
-
-============================================== =============================================================
-Field                                          Purpose
-============================================== =============================================================
-Static image ID and digest                     Binds the partial image to its routed static design
-Slot ID and hierarchical cell path             Prevents loading into an incompatible partition
-Reconfigurable module name and source revision Identifies accelerator behavior
-Part and board                                 Records ``xcu280-fsvh2892-2L-e`` / U280 compatibility
-Pblock/XDC revision                            Binds the image to the partition floorplan
-Vivado/Vitis versions                          Makes implementation reproducible
-Artifact format                                Distinguishes JTAG ``.bit``, ICAP ``.bin``, and PCAP ``.bin``
-Byte length and SHA-256 digest                 Detects truncation or corruption
-DFX verification, DRC, and timing results      Records release qualification
-============================================== =============================================================
-
-The current controller does not validate such a manifest. Validation must occur
-in trusted deployment software.
-
-Initial Programming
--------------------
-
-The initial full image must contain the static network design and one compatible
-module in each partition. The exact board-programming command and authoritative
-initial slot composition are not currently checked in and remain ``TBD``.
-
-Do not assume the conventional ``frac_top.bit`` and a preserved partial binary
-are compatible. Full and partial images must originate from the same routed
-static implementation.
-
-Runtime Deployment
-------------------
-
-The current client is ``sw/pr/main.go``. It uses only the Go standard library and
-can be run from the standalone repository root:
-
-.. code:: sh
-
-   go run ./sw/pr/main.go \
-       -addr 172.24.1.52:2888 \
-       -hbm-addr 0x4000 \
-       -chunk-size 64 \
-       -query-status \
-       -post-probe \
-       path/to/c00_module_icap_part.bin
-
-The client performs this sequence:
-
-1. Read the selected binary and pad it to a four-byte boundary.
-2. Upload it to HBM with one or more ``WRITE_HBM`` commands.
-3. Pad each network payload to a 64-byte boundary while preserving the actual
-   chunk size in the command.
-4. Send ``RECONF_ICAP`` for the uploaded address and padded file size.
-5. Wait for the final 64-byte status response.
-6. Optionally issue ``QUERY_STATUS`` and probe workload ``0x0000``.
-
-Current defaults and restrictions are:
-
-=================== ========================================================
-Setting             Value
-=================== ========================================================
-TCP endpoint        ``172.24.1.52:2888``
-HBM staging address ``0x4000``
-Upload chunk        64 bytes; configurable in 64-byte increments through 256
-Socket timeout      10 seconds
-Selected slot       C00 / slot 0, hard-coded by the current CLI
-=================== ========================================================
-
-Although the command ABI supports slots 0 through 2, the client does not expose
-a slot-selection flag. It also accepts any input filename and does not verify
-that it is an ICAP image paired with the running static image.
-
-``QUERY_STATUS`` is currently used only as an acceptance check. The client does
-not decode or print the status payload described in
-:ref:`Network protocol <protocol:Query Status Response>`.
 
 Recovery
 --------

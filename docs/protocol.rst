@@ -97,7 +97,7 @@ RECONF_ICAP
 ~~~~~~~~~~~
 
 The address must be 32-byte aligned. Size must be nonzero and divisible by four.
-The slot must be less than the integrated ``SLOT_COUNT``, currently three. The
+The slot must be less than the integrated ``SLOT_COUNT``, currently four. The
 specified HBM range must contain an ICAP-compatible partial bitstream.
 
 The response is delayed until the ICAP operation reports completion or error.

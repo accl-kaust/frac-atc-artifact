@@ -7,6 +7,10 @@ request data, schedules requests to accelerators, and returns their results.
 Accelerators can be swapped at runtime through partial reconfiguration, allowing
 the FPGA to serve different workloads as requirements change.
 
+This is the artifact of the ACM ATC '26 paper *fRAC: Remote Accelerator Calls
+on FPGAs*. :doc:`quick-start` sets up a testbed and :doc:`reproducing-results`
+reproduces the paper's evaluation, figure by figure.
+
 .. toctree::
    :maxdepth: 2
    :hidden:
