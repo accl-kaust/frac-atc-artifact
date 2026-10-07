@@ -1,5 +1,7 @@
 # fRAC: Remote Accelerator Calls on FPGAs
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23200153.svg)](https://doi.org/10.5281/zenodo.23200153)
+
 This repository is the artifact of the ACM ATC '26 paper **fRAC: Remote
 Accelerator Calls on FPGAs**.
 
@@ -11,7 +13,7 @@ fRAC achieves low latency at 100G. fRAC is currently built on top of EasyNet, a 
 
 - Documentation: <https://accl-kaust.github.io/frac-atc-artifact/>, built
   from `docs/` (see [Documentation](#documentation)).
-- Archived artifact: TODO(authors): Zenodo DOI.
+- Archived artifact (Zenodo): <https://doi.org/10.5281/zenodo.23200153>
 
 ```bibtex
 @inproceedings{yang2026frac,
