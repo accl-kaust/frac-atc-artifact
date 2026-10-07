@@ -10,6 +10,15 @@ Please follow :doc:`quick-start` before proceeding. This guide needs what its
 ``build/frac/bitstreams/jtag/frac.bit``. The bitstreams under ``example/`` come
 without abstract shells, so this guide cannot use them.
 
+Testbed
+-------
+
+As in the quick-start guide, you can run these experiments on the testbed machine:
+
+.. code-block:: sh
+
+   $ ssh atcae@kw61160.tailef7cee.ts.net
+
 Creating files
 --------------
 

@@ -23,6 +23,17 @@ The figure scripts need numpy, matplotlib, pandas and scipy:
 To plot on another machine, copy the run's directory to a checkout of this
 repository there and pass its path with ``--run``.
 
+Testbed
+-------
+
+The latency–throughput experiment uses a testbed without a network switch.
+To access the testbed machine:
+
+.. code-block:: sh
+
+   $ ssh atcae@kw61160.tailef7cee.ts.net
+
+
 Latency Throughput (Figure 13)
 ------------------------------
 
@@ -33,6 +44,14 @@ Latency Throughput (Figure 13)
   $ sed -i -E 's/^(nic:[[:space:]]*)"[^"]*"/\1"'"$NIC"'"/' eval/testbed.yaml && grep -n '^nic:' eval/testbed.yaml
   $ python3 eval/run.py latency_throughput
   $ python3 eval/plot.py latency_throughput
+
+
+The remaining experiments use a testbed with a network switch. To access this machine:
+
+.. code-block:: sh
+
+   $ ssh atcae@acclnode14.tailef7cee.ts.net
+
 
 Mixed Workload (Figure 14)
 --------------------------

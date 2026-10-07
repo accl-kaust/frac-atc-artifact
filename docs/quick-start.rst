@@ -33,6 +33,15 @@ Software
 
 If you don't have access to hardware, you can request access to our infrastructure by contacting us.
 
+Testbed
+-------
+
+If you have access to our testbed, follow this step before proceeding
+
+.. code-block:: sh
+
+   $ ssh atcae@kw61160.tailef7cee.ts.net
+
 Generating bitstream
 --------------------
 .. code-block:: sh
@@ -216,7 +225,7 @@ Finally, program with echo for the next step
 
 .. code-block:: sh
 
-   $ go run ./scripts/testfuncs.go -slots 0,1
+   $ go run ./scripts/testfuncs.go -slots 0,1 -counter
 
 .. code-block:: output
 
