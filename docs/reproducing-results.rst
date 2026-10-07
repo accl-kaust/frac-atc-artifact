@@ -242,16 +242,3 @@ microseconds and the CNN's at about 8.6 ms, with every curve rising steeply.
 The right panel follows the CNN: it starts just below the fastest CNN
 request.
 
-What Is Not Reproduced Here
----------------------------
-
-- The CPU and DPU baselines in Figures 16 and 17, the CNN on the CPU, and the
-  power measurements. They need a second server running libtpa and a
-  BlueField-3 DPU, which this artifact does not include.
-- The motivation and simulation figures (Figures 1, 3 and 5 to 9). Their
-  scripts and data are in
-  `frac_evaluation_script <https://github.com/accl-kaust/frac_evaluation_script>`_.
-- Tables 2, 3 and 6, the slot resources, reconfiguration times and
-  accelerator resources, which come from the build's reports and from
-  measurements of the reconfiguration controller rather than from a script
-  here.
