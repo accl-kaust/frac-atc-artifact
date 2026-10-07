@@ -1,0 +1,12 @@
+# Python packages for eval/, at the versions the paper's figures were drawn
+# with (Python 3.12).  eval/run.py needs only PyYAML; eval/plot.py and the
+# figure scripts need the rest, so they can be left out on a machine that only
+# measures.
+#
+#   python3 -m venv ~/frac-venv && . ~/frac-venv/bin/activate
+#   python3 -m pip install -r eval/requirements.txt
+PyYAML==6.0.1
+numpy==1.26.4
+matplotlib==3.9.2
+pandas==2.2.2
+scipy==1.13.1
