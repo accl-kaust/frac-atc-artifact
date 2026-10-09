@@ -34,6 +34,11 @@ experiment is one command to measure and one to plot:
      - acclnode14
      - 22 min
      - 5 GB
+   * - 16 (CPU)
+     - ``scalability_cpu``
+     - acclnode14 and a server machine
+     - 32 min
+     - 1 GB
    * - 18
      - ``azure_trace``
      - acclnode14
@@ -218,7 +223,53 @@ Expected: fRAC's latency stays nearly flat up to 28 clients, from about 7.7
 to 8.7 µs for 1 KB requests and from 8.4 µs to 10 to 12 µs for 4 KB requests;
 at 28 clients the 99th percentile stays within about 1 µs of the median.
 
-The paper's CPU and DPU curves are not part of this artifact; see below.
+Figure 16's CPU curves come from the next experiment, whose newest run
+``plot.py`` adds when there is one. The paper's DPU curves are not part of
+this artifact.
+
+CPU Baseline (Figure 16)
+------------------------
+
+On acclnode14, with a second machine as the server:
+
+.. code-block:: sh
+
+  $ cd ~/frac-atc-artifact
+  $ python3 eval/run.py scalability_cpu
+  $ python3 eval/plot.py scalability
+
+The requests of the scalability experiment, 1 KB and 4 KB from 1 to 28
+clients, go to a CPU server instead of the FPGA: fperf's own server, which
+computes Top-K in software (``qsort`` in libtpa's ``app/fperf/offrac.c``),
+answers with the same 64 bytes, and runs its threads on 1, 2 or 4 cores.
+``eval/run.py`` starts a fresh server on the server machine over ssh before
+each point and stops it after. ``eval/plot.py scalability`` draws Figure 16
+from the newest run of both experiments; ``eval/plot.py scalability_cpu``
+draws the same figure.
+
+First set up the server in ``eval/testbed.yaml``, from the ``server`` section
+of ``eval/testbed.example.yaml``:
+
+.. code-block:: yaml
+
+  server:
+    host: atcae@<server machine>    # TODO(authors)
+    addr: <its port's address>      # TODO(authors)
+    nic: <that port>                # TODO(authors)
+
+The server machine needs libtpa built as in :doc:`quick-start`, its port on
+the same switch with an MTU of 9000, 8 GB of hugepages and about 20 GB of
+free memory besides (fperf's server never frees most of its request buffers;
+a machine that swaps would slow the CPU curves down), a key-based ssh login
+from acclnode14, and sudo without a password, since ``eval/run.py`` starts
+and stops the server without a terminal. ``--dry-run`` prints the server's
+commands too.
+
+Expected: the CPU's latency grows with the number of clients, and more cores
+only slow that growth, staying well above fRAC's. In the paper's runs, the
+median at 28 clients was about 146 µs on one core and 41 µs on four for 1 KB
+requests (14 µs with one client), and 625 µs and 162 µs for 4 KB requests
+(30 µs with one client).
 
 Azure Trace (Figure 18)
 -----------------------

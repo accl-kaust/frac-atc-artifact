@@ -30,3 +30,27 @@ reconf:
 settle: 10                      # seconds to wait after programming, before probing
 ready_timeout: 90               # seconds to wait for the link and for ping
 pause: 3                        # seconds between runs
+
+# The CPU server of scalability_cpu, fperf's own server, which run.py starts
+# afresh for every sweep point and stops after it.  Only experiments with a
+# server use this; their clients run here and talk to it instead of the FPGA.
+# The server machine needs its own 8 GB of hugepages and about 20 GB of free
+# memory besides, which fperf's server fills with request buffers it never frees.
+server:
+  host: ""                      # ssh destination of the server machine, such as user@host.
+                                # ssh must log in without a password or prompt, and sudo -n
+                                # must work there.  Empty: this machine, on a port of its own
+  addr: ""                      # the server port's IPv4 address, which the clients connect to
+  port: 4096                    # fperf -p
+  nic: ""                       # that port's interface on the server machine, TPA_ETH_DEV; give
+                                # it the same MTU as nic above, 9000 in the paper
+  start_cpu: 0                  # first cpu of the server threads, fperf -S; keep them on the
+                                # NIC's NUMA node, and off the clients' cpus on this machine
+  tpa: ""                       # paths to tpa and fperf on the server machine; empty: tpa and
+  fperf: ""                     # fperf above, else ~/.local/bin/tpa, ~/libtpa/build/bin/app/fperf
+  tpa_id: server                # on this machine, it must differ from tpa_id above
+  tpa_cfg: ""                   # empty: tpa_cfg above
+  sudo: sudo                    # sudo on the server machine, run with -n; "" when ssh logs in
+                                # as root.  A server on this machine uses sudo above
+  ready_timeout: 60             # seconds to wait for a server over ssh to take connections
+  settle: 10                    # seconds to give a server on this machine before the clients

@@ -11,7 +11,9 @@ fixed paths such as data/latency_throughput under the directory it runs in.
 plot.py runs each script in a scratch directory where the config's `data`
 entries make those paths lead to the run's logs, to an empty directory, or
 to another run, after applying the config's `set` entries to module
-constants such as FILE_PREFIX.  The figure lands next to the logs, or in
+constants such as FILE_PREFIX.  A `merge` entry adds the newest run of
+another experiment to such a path, such as a baseline measured on its own,
+so that one figure shows both.  The figure lands next to the logs, or in
 --out, together with what the script printed, saved as <script>.out.
 
 plot.py needs numpy and matplotlib, which eval/run.py does not, so it can
@@ -84,7 +86,53 @@ def resolve_data(spec, run_dir):
     return resolved
 
 
-def plot(spec, source, data, run_dir, out_dir):
+def short_logs(directory, complete):
+    """The .log files under `directory` that `complete` finds cut short."""
+    return sorted(os.path.relpath(os.path.join(folder, name), directory)
+                  for folder, _, names in os.walk(directory) for name in names
+                  if name.endswith(".log") and not complete(os.path.join(folder, name)))
+
+
+def resolve_merge(spec):
+    """The runs each data path merges: {path: [(experiment, directory)]},
+    the newest run of every experiment its merge entry names that has one."""
+    script = os.path.basename(spec.script)
+    merges = {}
+    for path, names in spec.merge.items():
+        merges[path] = []
+        for name in names:
+            latest = os.path.join(find_experiment(name), "results", "latest")
+            if os.path.isdir(latest):
+                merges[path].append((name, os.path.realpath(latest)))
+            else:
+                print(f"{script}: there is no {name} run yet to add to {path}")
+    return merges
+
+
+def overlay(dest, sources, skip=(), top=True):
+    """Make `dest` a directory holding what all the `sources` directories
+    hold: an entry of one source becomes a link to it, and a directory
+    several hold a directory again, made the same way.  Of a file several
+    hold, the first source's is taken, with a warning below the top level,
+    where the runs' own files such as manifest.yaml are.  Names in `skip`
+    are left out."""
+    os.makedirs(dest, exist_ok=True)
+    entries = {}
+    for source in sources:
+        for name in sorted(os.listdir(source)):
+            if name not in skip:
+                entries.setdefault(name, []).append(os.path.join(source, name))
+    for name, paths in entries.items():
+        folders = [path for path in paths if os.path.isdir(path)]
+        if len(folders) > 1:
+            overlay(os.path.join(dest, name), folders, top=False)
+            continue
+        if len(paths) > 1 and not top:
+            print(f"warning: {len(paths)} runs hold {name}; the figure reads {paths[0]}")
+        os.symlink((folders or paths)[0], os.path.join(dest, name))
+
+
+def plot(spec, source, data, merges, run_dir, out_dir):
     """Run one figure script on `run_dir`; 0 if it wrote a figure, else 1."""
     script = os.path.basename(spec.script)
     stem = os.path.splitext(script)[0]
@@ -103,11 +151,21 @@ def plot(spec, source, data, run_dir, out_dir):
         for path, (kind, target) in data.items():
             link = os.path.join(stage, path)
             os.makedirs(os.path.dirname(link), exist_ok=True)
-            if kind == "empty":
+            others = [directory for _, directory in merges.get(path, [])]
+            if others:
+                # A real directory: what the script writes there, such as a
+                # cache, stays out of every run, and fresh files from earlier
+                # plots of any of them stay out of it.
+                mine = {"run": [run_dir], "dir": [target]}.get(kind, [])
+                overlay(link, mine + others, skip=spec.fresh)
+            elif kind == "empty":
                 os.makedirs(link, exist_ok=True)
             else:
                 os.symlink(run_dir if kind == "run" else target, link)
         print(f"{script}: plotting {run_dir}", flush=True)
+        for runs in merges.values():
+            for name, directory in runs:
+                print(f"{script}: with {name}'s run {directory}", flush=True)
         env = dict(os.environ, MPLBACKEND="Agg")
         with open(printed, "w") as out:
             for step in spec.prepare + [os.path.join(stage, script)]:
@@ -155,8 +213,8 @@ def main(argv=None):
             raise ConfigError(f"{rel(exp.config_path)} lists no figure script under plot")
         run_dir = exp.find_run(args.run)
         params = run_params(exp, run_dir)
-        jobs = [(spec, prepared_source(spec, params), resolve_data(spec, run_dir))
-                for spec in exp.plots]
+        jobs = [(spec, prepared_source(spec, params), resolve_data(spec, run_dir),
+                 resolve_merge(spec)) for spec in exp.plots]
         for spec in exp.plots:
             for step in spec.prepare:
                 if not os.path.isfile(step):
@@ -176,15 +234,24 @@ def main(argv=None):
     elif isinstance(seconds, int) and not isinstance(seconds, bool):
         complete, end = (lambda path: log_complete(path, seconds)), f"second {seconds - 1}"
     if complete:
-        short = sorted(os.path.relpath(os.path.join(folder, name), run_dir)
-                       for folder, _, names in os.walk(run_dir) for name in names
-                       if name.endswith(".log") and not complete(os.path.join(folder, name)))
+        short = short_logs(run_dir, complete)
         if short:
             print(f"warning: {len(short)} logs end before {end}, so their points "
                   f"rest on fewer samples: {', '.join(short)}")
+    # The runs merged in from other experiments may be unfinished, too.
+    merged = sorted({directory for _, _, _, merges in jobs for runs in merges.values()
+                     for _, directory in runs})
+    for directory in merged:
+        length = run_params(exp, directory).get("d")
+        if isinstance(length, int) and not isinstance(length, bool):
+            short = short_logs(directory, lambda path: log_complete(path, length))
+            if short:
+                print(f"warning: in {directory}, {len(short)} logs end before second "
+                      f"{length - 1}, so their points rest on fewer samples: {', '.join(short)}")
     out_dir = os.path.abspath(args.out) if args.out else run_dir
     os.makedirs(out_dir, exist_ok=True)
-    return max(plot(spec, source, data, run_dir, out_dir) for spec, source, data in jobs)
+    return max(plot(spec, source, data, merges, run_dir, out_dir)
+               for spec, source, data, merges in jobs)
 
 
 if __name__ == "__main__":

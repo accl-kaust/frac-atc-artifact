@@ -65,10 +65,12 @@ plot:
   # processed_latency_cache.txt there; fresh deletes that file before each
   # plot, so new runs are never hidden behind old numbers.  Parsing every
   # sample in pure Python is very slow, so fast_cache.py first writes the
-  # accelerator rows of that cache with numpy, by the script's own rules, and
-  # the script then only draws.  Its CPU and DPU lines stay empty: there are
-  # no such runs here.
+  # rows of that cache with numpy, by the script's own rules, and the script
+  # then only draws.  Its CPU curves come from the newest scalability_cpu
+  # run, which merge adds when there is one; its DPU curves stay empty, as
+  # there are no such runs here.
   - script: scalability_fig_16.py
     data: data/scalability
+    merge: {data/scalability: scalability_cpu}
     fresh: [processed_latency_cache.txt]
     prepare: fast_cache.py

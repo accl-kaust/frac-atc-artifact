@@ -31,9 +31,9 @@ REPO_DIR = os.path.dirname(EVAL_DIR)
 DEFAULT_CONFIG = "experiment.yaml"
 TARGET_KEY = "O"                # the key whose value picks the target
 
-CONFIG_KEYS = ("description", "program", "tpa_cfg", "latency_log", "targets", "functions",
-               "instances", "together", "trace", "params", "sweep", "name", "samples", "fperf",
-               "plot")
+CONFIG_KEYS = ("description", "program", "tpa_cfg", "latency_log", "targets", "server",
+               "functions", "instances", "together", "trace", "params", "sweep", "name", "samples",
+               "fperf", "plot")
 PROGRAM_MODES = ("every_run", "once")
 FUNCTION_KEY = "f"              # the key whose value picks an entry of the functions table
 INSTANCE_KEY = "k"              # the key whose value picks an entry of the instances table
@@ -43,7 +43,9 @@ INSTANCE_KEY = "k"              # the key whose value picks an entry of the inst
 TRACE_SLOTS = {1: 0, 3: 1, 2: 2, 5: 3}
 TRACE_HEADER = "app,sleep_time,request_size,response_size"
 TARGET_KEYS = ("bitstream", "partials", "slots", "sha256")
-PLOT_KEYS = ("script", "data", "set", "fresh", "prepare")
+PLOT_KEYS = ("script", "data", "merge", "set", "fresh", "prepare")
+# What run.py adds to a server's fperf arguments itself
+SERVER_OPTIONS = ("-s", "-c", "-p", "-S")
 BUILD_KEYS = ("job", "payload", "frac", "spinhdl", "vivado", "started", "staged")
 
 
@@ -383,6 +385,22 @@ class PlotSpec:
             raise ConfigError(f"{label}: prepare must list scripts in the experiment directory")
         # scripts run just before the figure script, in its scratch directory
         self.prepare = [abs_path(name, exp.dir) for name in prepare]
+        # merge: data paths that also take in the newest run of other
+        # experiments, such as a baseline measured on its own.
+        merge = spec.get("merge") or {}
+        if not isinstance(merge, dict):
+            raise ConfigError(f"{label}: merge must map data paths to experiments")
+        self.merge = {}
+        for path, names in merge.items():
+            path = str(path).strip("/")
+            if path not in self.data:
+                raise ConfigError(f"{label}: merge.{path} is not one of its data paths")
+            names = [names] if isinstance(names, str) else names
+            if not isinstance(names, list) or not names or not all(
+                    isinstance(name, str) and name for name in names):
+                raise ConfigError(f"{label}: merge.{path} must name experiments, such as "
+                                  "scalability_cpu")
+            self.merge[path] = list(names)
         settings = spec.get("set") or {}
         if not isinstance(settings, dict):
             raise ConfigError(f"{label}: set must map module constants to values")
@@ -457,6 +475,9 @@ class Experiment:
             if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
                 raise ConfigError(f"{where}: d is the run length in whole seconds, "
                                   f"not {seconds!r}")
+        self.server_template = self._server(raw, where)
+        if self.server_template:
+            self.program = None         # there is no FPGA to program
         self.functions = self._functions(raw.get("functions"), where)
         self.instances = self._instances(raw.get("instances"), where)
         self.together = self._together(raw.get("together"), where)
@@ -465,14 +486,18 @@ class Experiment:
                               "on one connection, so it cannot be combined with functions, "
                               "instances or together")
 
-        targets = raw.get("targets")
-        if not isinstance(targets, dict) or not targets:
-            raise ConfigError(f"{where}: targets must map each value of {TARGET_KEY} "
-                              "to a directory of bitstreams")
-        self.targets = {str(key): Target(str(key), spec, where) for key, spec in targets.items()}
-        for value in self.values(TARGET_KEY):
-            if str(value) not in self.targets:
-                raise ConfigError(f"{where}: no target for {TARGET_KEY}={value}")
+        if self.server_template:
+            self.targets = {}           # the clients talk to a CPU server: nothing to program
+        else:
+            targets = raw.get("targets")
+            if not isinstance(targets, dict) or not targets:
+                raise ConfigError(f"{where}: targets must map each value of {TARGET_KEY} "
+                                  "to a directory of bitstreams")
+            self.targets = {str(key): Target(str(key), spec, where)
+                            for key, spec in targets.items()}
+            for value in self.values(TARGET_KEY):
+                if str(value) not in self.targets:
+                    raise ConfigError(f"{where}: no target for {TARGET_KEY}={value}")
         if self.functions:
             for target in self.targets.values():
                 if not target.partials:
@@ -538,6 +563,8 @@ class Experiment:
                                       f"use {hint}")
                 names.add(name)
                 self.fperf_args(run)
+            if self.server_template:
+                self.server_args(point)
             if "_members" in point:
                 slots = [run["slot"] for run in point["_members"]]
                 shared = sorted({slot for slot in slots if slots.count(slot) > 1})
@@ -681,6 +708,28 @@ class Experiment:
         self.params["d"] = max(1, math.ceil(trace.seconds))
         self.keys.add("d")
         return trace
+
+    def _server(self, raw, where):
+        """server: fperf's own server arguments for one sweep point, such as
+        -n {k}.  With it the clients talk to that server, which computes the
+        function in software on the machine the testbed file's server section
+        names, instead of to the FPGA, so there is nothing to program."""
+        if raw.get("server") is None:
+            return None
+        template = self._template(raw, "server", where)
+        try:
+            given = set(SERVER_OPTIONS) & set(shlex.split(template))
+        except ValueError as e:
+            raise ConfigError(f"{where}: server {template!r}: {e}")
+        if given:
+            raise ConfigError(f"{where}: leave {' and '.join(sorted(given))} out of server: "
+                              "run.py adds -s, and -p and -S from the testbed file")
+        clash = [key for key in ("targets", "program", "functions", "instances", "together",
+                                 "trace") if raw.get(key)]
+        if clash:
+            raise ConfigError(f"{where}: server replaces the FPGA, so it cannot be combined "
+                              f"with {', '.join(clash)}")
+        return template
 
     def _template(self, raw, key, where):
         template = raw.get(key)
@@ -873,6 +922,13 @@ class Experiment:
             return shlex.split(self.fperf_template.format(**point))
         except (KeyError, IndexError, ValueError) as e:
             raise ConfigError(f"fperf template {self.fperf_template!r}: {e!r}")
+
+    def server_args(self, point):
+        """The server's fperf arguments for one sweep point, from the server template."""
+        try:
+            return shlex.split(self.server_template.format(**point))
+        except (KeyError, IndexError, ValueError) as e:
+            raise ConfigError(f"server template {self.server_template!r}: {e!r}")
 
     @property
     def results(self):

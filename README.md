@@ -56,6 +56,7 @@ fRAC achieves low latency at 100G. fRAC is currently built on top of EasyNet, a 
 | Fig. 14 | Requests to different accelerators are isolated: each one's latency is the same alone and in a mix | `mixed_workload` | 10 min |
 | Fig. 15 | With reassembly, latency grows sub-linearly with the number of fragments | `reassembly` | 9 min |
 | Figs. 16, 17 | fRAC's latency stays low and nearly flat as clients grow, with 1, 2 or 4 Top-K instances, and its tail is short | `scalability` | 22 min |
+| Fig. 16 | The baseline, Top-K computed in software by a DPDK server on 1, 2 or 4 cores, is slower than fRAC at every load, and its latency grows with the clients while fRAC's stays nearly flat | `scalability_cpu` | 32 min |
 | Fig. 18 | Latency stays stable while replaying the busiest hour of the Azure Functions trace | `azure_trace` | 62 min |
 | Correctness | Top-K, Logit and Norm compute correct results in every slot after partial reconfiguration | `scripts/checkfuncs.sh` | |
 
@@ -70,9 +71,10 @@ last.
 
 **Paper measurements (§5).** Clients ran on an AMD EPYC 7763 (64 cores) with
 512 GB of DDR4, an NVIDIA ConnectX-6 NIC and Ubuntu 20.04, one client per
-hardware thread on the NIC's NUMA node. fRAC ran on an AMD Alveo U280. Both
-were connected through an EdgeCore DCS810 switch at 100 Gb/s, with an MTU of
-9000.
+hardware thread on the NIC's NUMA node. fRAC ran on an AMD Alveo U280, and
+the CPU baseline on a second machine of the same configuration, with libtpa's
+fperf as the server. All were connected through an EdgeCore DCS810 switch at
+100 Gb/s, with an MTU of 9000.
 
 **Evaluation testbeds.**
 
@@ -168,6 +170,7 @@ with `--resume`. To plot elsewhere, copy the run's directory and pass it to
 | `mixed_workload` | 10 min | < 1 MB |
 | `reassembly` | 9 min | < 1 MB |
 | `scalability` | 22 min | 5 GB, every request's latency |
+| `scalability_cpu` | 32 min | 1 GB, every request's latency |
 | `azure_trace` | 62 min | 8 MB |
 
 - **CPU:** fperf pins one client thread per core, up to 28.
@@ -219,6 +222,9 @@ suites, what they cover and the known limitations.
   root through `sudo` and keeps sudo's credentials fresh for the length of a
   sweep. `eval/scalability/four_topk.sh`, when interrupted, stops every process
   running its fperf binary with `sudo pkill`.
+- For `scalability_cpu`, `eval/run.py` logs in to the server machine over ssh
+  and runs fperf there as root with `sudo -n`. It stops that server with
+  `sudo pkill`, matching only the mark in the server's own command line.
 - The host setup in [docs/quick-start.rst](docs/quick-start.rst) installs
   MLNX_OFED, which replaces the distribution's RDMA and NIC drivers. It also
   reserves hugepages and changes the kernel command line and the netplan

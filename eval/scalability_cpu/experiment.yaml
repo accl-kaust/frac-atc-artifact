@@ -1,0 +1,64 @@
+# Scalability baseline: the requests of the scalability experiment, top_k on
+# 1 KB and 4 KB, served in software by a CPU server pinned to 1, 2 and 4
+# cores instead of by fRAC: the CPU curves of Fig. 16.
+#
+#   eval/run.py scalability_cpu      measure, on the client machine
+#   eval/plot.py scalability_cpu     draw Fig. 16 from the newest run, with
+#                                    scalability's newest run beside it
+#
+# No FPGA is involved.  The server is fperf itself, on a second machine set
+# up like the client machine, which the server section of eval/testbed.yaml
+# names.  Before each sweep point run.py starts a fresh `fperf -s -n <k>`
+# there over ssh, waits until it takes connections, runs the clients against
+# it and stops it.  fperf's server collects each request and answers it with
+# topk() in libtpa's app/fperf/offrac.c, which sorts the request's words with
+# qsort; the first 64 bytes of the result go back, as many as the top_k unit
+# answers.  This is the code of the paper's CPU baseline, whose results the
+# figure scripts read as O_2.  That server allocates a new buffer for every
+# request and frees only a connection's last one, about 20 GB in a busy
+# point, so a fresh server for each point keeps that from adding up.
+
+description: Latency vs clients with top_k in software on 1, 2 and 4 cores of a CPU server (Fig. 16's CPU baseline)
+
+# fperf's server arguments for one sweep point; run.py adds -s, and -p and -S
+# from the testbed file.  k threads, one core each; the NIC spreads the
+# clients' connections over them by flow hash.
+server: "-n {k}"
+
+params:
+  O: 2                          # the CPU, as the figure scripts name it
+  d: 30                         # seconds per run
+  C: 1                          # connections per client thread, fperf -C
+  f: 1                          # top_k: the server's function, fperf -F
+
+sweep:                          # the first key is the outer loop
+  m: [1024, 4096]               # request bytes, fperf -m and -X; at most 4096, since
+                                # topk() copies the request into one 4096-byte mbuf
+  k: [1, 2, 4]                  # server cores
+  n: [1, 4, 8, 16, 20, 28]      # clients in total, one cpu each
+
+# One fperf client process per point, its log next to the latencies it
+# measured; the server's output goes beside it, as fperf.server.out.
+name: "top_k_{k}_inst/rr_d_{d}_m_{m}_n_{n}_f_{f}_O_{O}/fperf.log"
+
+# Every client thread's per-request latencies, as in scalability.  Here n in
+# the directory name is every client, which is how the figure scripts read
+# the CPU's directories.  skip drops each client's first 10 seconds.
+samples:
+  dir: "top_k_{k}_inst/rr_d_{d}_m_{m}_n_{n}_f_{f}_O_{O}"
+  skip: 10
+
+# fperf arguments for the clients.  run.py adds -c, -p and -S, and -L and -D
+# for the latencies.  -Z 0 starts each request with fperf's own header, which
+# tells the server the function, the request size and the response size.
+fperf: "-t rr -d {d} -n {n} -m {m} -X {m} -R 64 -C {C} -Z 0 -F {f}"
+
+plot:
+  # The scalability experiment's figure script and cache helper.  merge adds
+  # the newest scalability run, so that fRAC is drawn beside the CPU; without
+  # one, the fRAC curves stay empty.
+  - script: ../scalability/scalability_fig_16.py
+    data: data/scalability
+    merge: {data/scalability: scalability}
+    fresh: [processed_latency_cache.txt]
+    prepare: ../scalability/fast_cache.py

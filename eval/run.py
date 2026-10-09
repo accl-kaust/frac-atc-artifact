@@ -17,8 +17,14 @@ that slot holds it already.  With an instances table, a sweep point runs one
 fperf per listed slot at the same time, its n clients split evenly between
 them; with samples, every client thread's per-request latencies are kept,
 in one directory per sweep point.  With a trace, fperf replays that CSV file
-with -E, and a run lasts until its last row is answered.  Each run's complete
-output, named by the config's name template, goes to a new directory
+with -E, and a run lasts until its last row is answered.  A config with a
+server instead of targets measures no FPGA: before each sweep point run.py
+starts fperf's own server, which computes the function in software, on the
+machine the testbed file's server section names, over ssh unless that is
+this one; it waits until the server takes connections, or gives one on this
+machine a few seconds, runs the clients against it, and stops it after the
+point.  Each run's complete output,
+named by the config's name template, goes to a new directory
 eval/<experiment>/results/<time>.  fperf records every request's
 latency with -L 1, unless the config sets latency_log to false.  A run that fails keeps its output as
 <name>.part instead, so it is neither plotted nor kept by --resume.
@@ -26,8 +32,9 @@ manifest.yaml there records the config, the testbed, the sha256 of every
 bitstream loaded and how each run ended; runner.out keeps run.py's own
 output.
 
-Run it on the machine cabled to the U280.  That machine's settings, such as
-its NIC, JTAG target and tool paths, come from eval/testbed.yaml: copy
+Run it on the machine cabled to the U280, which is also where the clients of
+a server's experiment run.  That machine's settings, such as its NIC, JTAG
+target and tool paths, come from eval/testbed.yaml: copy
 eval/testbed.example.yaml to start one.  Plot the results with eval/plot.py.
 """
 import argparse
@@ -47,6 +54,7 @@ import tempfile
 import threading
 import time
 import traceback
+import uuid
 
 from common import (DEFAULT_CONFIG, EVAL_DIR, FUNCTION_KEY, REPO_DIR, TARGET_KEY, ConfigError,
                     Experiment,
@@ -69,12 +77,17 @@ TESTBED_DEFAULTS = {
     "settle": 10,
     "ready_timeout": 90,
     "pause": 3,
+    "server": {"host": "", "addr": "", "port": 4096, "nic": "", "start_cpu": 0, "tpa": "",
+               "fperf": "", "tpa_id": "server", "tpa_cfg": "", "sudo": "sudo",
+               "ready_timeout": 60, "settle": 10},
 }
 PROGRAM_SECONDS = 70            # programming plus link-up, for the time estimate only
 RUN_OVERHEAD = 5                # fperf start-up and tear-down, for the estimate only
+SERVER_SECONDS = 15             # starting and stopping a server, for the estimate only
+SERVER_RETRY = 5                # seconds before starting a server again after it failed
+SERVER_MARK = "FRAC_EVAL_SERVER"        # tags a server's command line, to find it again
 
-
-RESUME_TESTBED_KEYS = ("fpga", "start_cpu", "tpa_id", "tpa_cfg", "tpa", "fperf")
+RESUME_TESTBED_KEYS = ("fpga", "start_cpu", "tpa_id", "tpa_cfg", "tpa", "fperf", "server")
 
 
 class RunError(Exception):
@@ -141,6 +154,9 @@ def load_testbed(path=None):
                 "programfpga", "reconfslots"):
         tb[key] = "" if tb[key] is None else str(tb[key])
     tb["fpga"]["addr"] = str(tb["fpga"]["addr"])
+    server = tb["server"]
+    for key in ("host", "addr", "nic", "tpa", "fperf", "tpa_id", "tpa_cfg", "sudo"):
+        server[key] = "" if server[key] is None else str(server[key])
     hbm = tb["reconf"]["hbm_addr"]
     if isinstance(hbm, int) and not isinstance(hbm, bool):
         tb["reconf"]["hbm_addr"] = hex(hbm)
@@ -151,7 +167,11 @@ def load_testbed(path=None):
                               ("reconf.chunk_size", tb["reconf"]["chunk_size"], int),
                               ("settle", tb["settle"], (int, float)),
                               ("ready_timeout", tb["ready_timeout"], (int, float)),
-                              ("pause", tb["pause"], (int, float))):
+                              ("pause", tb["pause"], (int, float)),
+                              ("server.port", server["port"], int),
+                              ("server.start_cpu", server["start_cpu"], int),
+                              ("server.ready_timeout", server["ready_timeout"], (int, float)),
+                              ("server.settle", server["settle"], (int, float))):
         if isinstance(value, bool) or not isinstance(value, kind) or value < 0:
             raise ConfigError(f"{where}: {name} must be a non-negative number, not {value!r}")
     return tb, path
@@ -269,14 +289,22 @@ def slot_argv(slot, path, tb, tools):
         "-query-status", path]
 
 
+def peer(exp, tb):
+    """The address and port the clients connect to: the FPGA's, or for an
+    experiment with a server, the server's."""
+    side = tb["server"] if exp.server_template else tb["fpga"]
+    return side["addr"], side["port"]
+
+
 def fperf_argv(exp, point, tb, tools, nic, tpa_id=None, cpu=None, extra=()):
     # timeout ends a hung run, and -k follows up with SIGKILL.  It runs under
     # sudo, since fperf runs as root and an unprivileged timeout cannot kill it.
+    addr, port = peer(exp, tb)
     return (shlex.split(tb["sudo"]) + ["timeout", "-k", "15", str(exp.timeout(point))] +
             ["env", f"TPA_ID={tpa_id or tb['tpa_id']}", f"TPA_ETH_DEV={nic}",
              "TPA_CFG=" + " ".join(cfg for cfg in (tb["tpa_cfg"], exp.tpa_cfg) if cfg),
              tools["tpa"], "run", tools["fperf"],
-             "-c", tb["fpga"]["addr"], "-p", str(tb["fpga"]["port"]),
+             "-c", addr, "-p", str(port),
              "-S", str(tb["start_cpu"] if cpu is None else cpu)] +
             exp.fperf_args(point) + exp.trace_args() + list(extra))
 
@@ -355,10 +383,12 @@ def answers_ping(addr):
     return done is not None and done.returncode == 0
 
 
-def wait_ready(tb, state, timeout, quiet=False):
-    """Wait until the NIC facing the FPGA has an address and the FPGA answers
-    ping, and remember the NIC in state["nic"].  False after `timeout` s."""
-    addr = tb["fpga"]["addr"]
+def wait_ready(tb, state, timeout, quiet=False, server=None):
+    """Wait until the NIC facing the FPGA, or with `server` the server
+    machine, has an address and the far end answers ping, and remember the
+    NIC in state["nic"].  False after `timeout` s."""
+    addr = server.addr if server else tb["fpga"]["addr"]
+    what = "server machine" if server else "FPGA"
     deadline = time.monotonic() + timeout
     waited = False
     while True:
@@ -376,7 +406,7 @@ def wait_ready(tb, state, timeout, quiet=False):
                 log(f"{nic} ({ip4}) is up and {addr} answers ping")
             return True
         if time.monotonic() >= deadline:
-            log(f"no FPGA after {timeout:g} s: {why}")
+            log(f"no {what} after {timeout:g} s: {why}")
             return False
         waited = True
         time.sleep(2)
@@ -401,6 +431,342 @@ def load_slot(slot, path, tb, tools):
     if rc != 0:
         log(f"reconfslots failed with status {rc}")
     return rc == 0
+
+
+# ---------------------------------------------------------------- the CPU server
+
+def remote_word(word):
+    """`word` quoted for the server machine's shell, with a leading ~/ left
+    for that shell to expand."""
+    if word.startswith("~/"):
+        return "~/" + shlex.quote(word[2:])
+    return shlex.quote(word)
+
+
+def local_tool(setting):
+    """A tool setting as a path here: a path with ~ expanded, or a name from PATH."""
+    if "/" in setting or setting.startswith("~"):
+        return abs_path(setting)
+    return shutil.which(setting) or setting
+
+
+def option_value(args, flag, default):
+    """The number after `flag` in an argument list, such as 4 in -n 4."""
+    for index, word in enumerate(args[:-1]):
+        if word == flag:
+            try:
+                return int(args[index + 1])
+            except ValueError:
+                break
+    return default
+
+
+def mark_pattern(token=""):
+    """A pattern for pgrep and pkill -f matching the command line of the
+    server marked `token`, or of any server, but not their own command lines,
+    since [R] does not match itself."""
+    return f"{SERVER_MARK[:-1]}[{SERVER_MARK[-1]}]={token}"
+
+
+def stderr_line(done):
+    """The last line a finished command wrote to stderr, or what stands for it."""
+    if done is None:
+        return "no answer"
+    lines = done.stderr.strip().splitlines()
+    return lines[-1] if lines else f"exit status {done.returncode}"
+
+
+class Server:
+    """fperf's own server, which computes the function a request names in
+    software.  run.py starts a fresh one for every sweep point, with the
+    config's server arguments such as -n {k}, and stops it after the point,
+    so that no point inherits another's connections or memory.  It runs on
+    server.host over ssh, or on this machine when that is empty."""
+
+    def __init__(self, exp, tb, tools):
+        cfg = tb["server"]
+        self.exp = exp
+        self.host = cfg["host"]
+        self.addr, self.port = cfg["addr"], cfg["port"]
+        self.nic, self.start_cpu = cfg["nic"], cfg["start_cpu"]
+        self.tpa_id = cfg["tpa_id"] or "server"
+        self.tpa_cfg = cfg["tpa_cfg"] or tb["tpa_cfg"]
+        self.ready_timeout, self.settle = cfg["ready_timeout"], cfg["settle"]
+        # Nobody is there to type a password, so sudo must not ask for one.
+        self.sudo = shlex.split(cfg["sudo"] if self.host else tb["sudo"])
+        if self.sudo and os.path.basename(self.sudo[0]) == "sudo" and "-n" not in self.sudo[1:]:
+            self.sudo.insert(1, "-n")
+        if self.host:
+            self.tpa = cfg["tpa"] or tb["tpa"] or "~/.local/bin/tpa"
+            self.fperf = cfg["fperf"] or tb["fperf"] or "~/libtpa/build/bin/app/fperf"
+        else:
+            self.tpa = local_tool(cfg["tpa"]) if cfg["tpa"] else tools["tpa"]
+            self.fperf = local_tool(cfg["fperf"]) if cfg["fperf"] else tools["fperf"]
+        self.proc = self.out = self.token = None
+        self.died = False               # whether it exited before stop() asked it to
+
+    @property
+    def where(self):
+        return f"{self.host}, over ssh" if self.host else "this machine"
+
+    def wrap(self, argv):
+        """`argv` as run.py runs it on the server machine: through ssh, or as it is."""
+        if not self.host:
+            return list(argv)
+        return ["ssh", "-o", "BatchMode=yes", self.host, " ".join(map(remote_word, argv))]
+
+    def run(self, argv, timeout=30):
+        """A short command on the server machine; its CompletedProcess, or None."""
+        try:
+            return subprocess.run(self.wrap(argv), stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, errors="replace", timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    def threads(self, point):
+        """The server threads of a sweep point: -n in its arguments."""
+        return option_value(self.exp.server_args(point), "-n", 1)
+
+    def check(self, tb):
+        """Whether the server can run as the testbed file sets it up: None,
+        or what is wrong."""
+        if not self.addr or not self.nic:
+            return ("set server.addr and server.nic in the testbed file: the address the "
+                    "clients connect to, and the server machine's port that holds it")
+        if self.host:
+            route = detect_nic(self.addr)
+            if not route:
+                return f"no interface here has a direct route to {self.addr}"
+            if route == "lo":
+                return (f"{self.addr} is an address of this machine; for a server here, "
+                        "leave server.host empty")
+            if tb["nic"] and route != tb["nic"]:
+                return (f"{self.addr} is reached through {route} here, but the clients use "
+                        f"nic {tb['nic']}")
+            # sudo runs them with a PATH of its own, so a bare name may not be found
+            bare = [tool for tool in (self.tpa, self.fperf) if "/" not in tool]
+            if bare:
+                return (f"give server.tpa and server.fperf as paths on {self.host}, not "
+                        f"{' and '.join(bare)}")
+            done = self.run(["true"])
+            if done is None or done.returncode != 0:
+                return (f"ssh {self.host} failed: {stderr_line(done)}; run.py needs it to log in "
+                        "without a password or a prompt, so use a key and accept the host key "
+                        "once by hand")
+            done = self.run(self.sudo + ["true"])
+            if done is None or done.returncode != 0:
+                return (f"sudo -n on {self.host} failed: {stderr_line(done)}; run.py starts and "
+                        "stops the server there without a terminal, so the account needs "
+                        "passwordless sudo")
+            done = self.run(["sh", "-c", 'for t; do [ -x "$t" ] || exit 1; done', "sh",
+                             self.tpa, self.fperf])
+            if done is None or done.returncode != 0:
+                return (f"{self.host} has no executable {self.tpa} or no {self.fperf}; set "
+                        "server.tpa and server.fperf in the testbed file")
+        else:
+            if not tb["nic"]:
+                return ("a server on this machine needs nic set in the testbed file, the port "
+                        "the clients use: this machine routes the server's address to itself")
+            if tb["nic"] == self.nic:
+                return f"the clients and the server cannot share {self.nic}"
+            if tb["tpa_id"] == self.tpa_id:
+                return (f"the clients and a server on this machine cannot share TPA_ID "
+                        f"{self.tpa_id}; give server.tpa_id another")
+            for path in (self.tpa, self.fperf):
+                if not executable(path):
+                    return f"{path} is not an executable"
+        done = self.run(["ip", "-4", "-o", "addr", "show", "dev", self.nic])
+        if done is None or done.returncode != 0:
+            return f"cannot read the addresses of {self.nic} on {self.where}: {stderr_line(done)}"
+        held = re.findall(r"\binet\s+([0-9.]+)/", done.stdout)
+        if self.addr not in held:
+            return (f"{self.nic} on {self.where} holds {', '.join(held) or 'no IPv4 address'}, "
+                    f"not {self.addr}")
+        left = self._find(mark_pattern())
+        if left is None:
+            return f"cannot list the processes on {self.where}"
+        if left:
+            return self._leftover()
+        return None
+
+    def libtpa(self):
+        """Commit, branch and dirtiness of the server's libtpa checkout, or None."""
+        if not self.host:
+            return git_info(os.path.dirname(self.fperf))
+        script = ('cd "$(dirname "$1")" && git rev-parse --short=12 HEAD && '
+                  'git rev-parse --abbrev-ref HEAD && git status --porcelain --untracked-files=no')
+        done = self.run(["sh", "-c", script, "sh", self.fperf])
+        lines = done.stdout.splitlines() if done and done.returncode == 0 else []
+        if len(lines) < 2:
+            return None
+        return {"commit": lines[0], "branch": lines[1], "dirty": len(lines) > 2}
+
+    def summary(self):
+        """The server's settings, for the manifest."""
+        return {"host": self.host or "this machine", "addr": f"{self.addr}:{self.port}",
+                "nic": self.nic, "start_cpu": self.start_cpu, "tpa_id": self.tpa_id,
+                "tpa_cfg": self.tpa_cfg, "tpa": self.tpa, "fperf": self.fperf}
+
+    def timeout(self, point):
+        """Seconds after which a server ends by itself, should stop() fail."""
+        return int(self.ready_timeout + self.settle) + self.exp.timeout(point) + 60
+
+    def argv(self, point, token):
+        """The command that runs the server for one sweep point, on the server
+        machine.  The mark in its environment lets stop() find it again."""
+        return self.sudo + [
+            "timeout", "-k", "15", str(self.timeout(point)),
+            "env", f"{SERVER_MARK}={token}", f"TPA_ID={self.tpa_id}",
+            f"TPA_ETH_DEV={self.nic}", f"TPA_CFG={self.tpa_cfg}",
+            self.tpa, "run", self.fperf, "-s", "-p", str(self.port),
+            "-S", str(self.start_cpu)] + self.exp.server_args(point)
+
+    def start(self, point, out_path, again=False):
+        """Start the server for one sweep point, its output going to
+        `out_path`, after what is there when `again`, and wait until it
+        takes connections; None, or why not."""
+        self.token = uuid.uuid4().hex[:12]
+        self.died = False
+        # Whatever answers already is a server of an earlier run, which the
+        # wait below would take for this one.
+        if self._find(mark_pattern()) or (self.host and self._answers()):
+            return self._leftover()
+        try:
+            self.out = open(out_path, "a" if again else "w")
+            if again:
+                self.out.write("\n--- run.py starts the server again ---\n")
+                self.out.flush()
+            # Over ssh in a session of its own, so that Ctrl-C here cannot cut
+            # the connection before stop() has ended the server.  A server on
+            # this machine stays in this session, where sudo has its credentials.
+            self.proc = subprocess.Popen(self.wrap(self.argv(point, self.token)), cwd=REPO_DIR,
+                                         stdin=subprocess.DEVNULL, stdout=self.out,
+                                         stderr=subprocess.STDOUT,
+                                         start_new_session=bool(self.host))
+        except OSError as e:
+            if self.out:
+                self.out.close()
+            self.out = None
+            return f"cannot start the server: {e}"
+        if self.host:
+            deadline = time.monotonic() + self.ready_timeout
+            while self.proc.poll() is None:
+                if self._answers():
+                    return None
+                if time.monotonic() >= deadline:
+                    return (f"the server took no connection on {self.addr}:{self.port} in "
+                            f"{self.ready_timeout:g} s; its output is in {rel(out_path)}")
+                time.sleep(1)
+        else:
+            # This machine would answer a connection to its own address
+            # itself, so a server here is given settle seconds instead.
+            deadline = time.monotonic() + self.settle
+            while self.proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.5)
+        if self.proc.poll() is not None:
+            return (f"the server exited with status {self.proc.returncode}; its output is in "
+                    f"{rel(out_path)}")
+        return None
+
+    def _answers(self):
+        """Whether something takes connections on the server's address and port."""
+        try:
+            with socket.create_connection((self.addr, self.port), timeout=1):
+                return True
+        except OSError:
+            return False
+
+    def _find(self, pattern):
+        """Whether a process matching `pattern` runs on the server machine:
+        True, False, or None when that cannot be told."""
+        done = self.run(self.sudo + ["pgrep", "-f", pattern])
+        if done is not None and done.returncode == 0:
+            return True
+        if done is not None and done.returncode == 1 and not done.stderr.strip():
+            return False
+        return None                 # no answer, sudo refused, or pgrep failed
+
+    def _leftover(self):
+        return (f"a server of an earlier run still runs on {self.where}; end it there with: "
+                f"sudo pkill -f '{mark_pattern()}'")
+
+    def stop(self):
+        """Stop the server; None, or why it may still be running."""
+        if self.proc is None:
+            return None
+        pattern = mark_pattern(self.token)
+        try:
+            # Its sudo and timeout end with fperf, while over ssh the
+            # connection may outlive it a little: ask for them, not the ssh.
+            self.died = self.proc.poll() is not None or self._find(pattern) is False
+            # timeout hands SIGINT on to every process of the server.
+            self.run(self.sudo + ["pkill", "-INT", "-f", pattern])
+            try:
+                self.proc.wait(20)
+            except subprocess.TimeoutExpired:
+                pass
+            left = self._find(pattern)
+            for _ in range(10):
+                if left is False:
+                    break
+                if left:
+                    # SIGKILL is the one signal timeout cannot hand on, so send it
+                    # to the process groups of the server's sudo and timeout.
+                    self.run(self.sudo + ["sh", "-c", f"g=$(pgrep -d, -f '{pattern}') && "
+                                                      'pkill -KILL -g "$g"'])
+                time.sleep(1)
+                left = self._find(pattern)
+            if left is not False:
+                return (f"the server on {self.where} may still be running; end it there with: "
+                        f"sudo pkill -f '{pattern}'")
+            if self.host:
+                # libtpa's tpad, tidying up after fperf, can hold the connection open
+                stop(self.proc)             # the module's stop(), on this ssh
+            else:
+                try:
+                    self.proc.wait(10)      # its sudo went with it
+                except subprocess.TimeoutExpired:
+                    pass
+            return None
+        finally:
+            self.out.close()
+            self.proc = self.out = None
+
+
+def server_out(exp, point, run_dir):
+    """Where a sweep point's server output goes: next to its clients' log,
+    as <log>.server.out."""
+    path = os.path.join(run_dir, os.path.splitext(exp.log_name(point))[0] + ".server.out")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
+
+
+def start_server(server, exp, point, run_dir):
+    """Start the server for one sweep point, a second time if the first try
+    fails; None, or why it did not start."""
+    path = server_out(exp, point, run_dir)
+    why = server.start(point, path)
+    if not why:
+        return None
+    stuck = server.stop()
+    if stuck:
+        return f"{why}; then {stuck}"
+    log(f"server: {why}; trying again in {SERVER_RETRY} s")
+    time.sleep(SERVER_RETRY)
+    return server.start(point, path, again=True)
+
+
+def set_aside(exp, point, run_dir):
+    """Withdraw a sweep point found to have failed after its run: its logs go
+    back to .part, and its latencies out of the figure's reach."""
+    for run in exp.instance_points(point):
+        path = os.path.join(run_dir, exp.log_name(run))
+        if os.path.exists(path):
+            os.replace(path, path + ".part")
+    if exp.samples_template:
+        folder = os.path.join(run_dir, exp.samples_name(point))
+        for path in glob.glob(os.path.join(folder, "hugepage_thread_*.txt")):
+            os.remove(path)
 
 
 def latency_dir(exp):
@@ -477,6 +843,18 @@ def counts_before(log_path, seconds):
     return counts
 
 
+def has_line(path, skip):
+    """Whether a latency file holds a line after its first `skip`; fperf
+    ends every line with a newline."""
+    seen = 0
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            seen += block.count(b"\n")
+            if seen > skip:
+                return True
+    return False
+
+
 def gather_samples(temps, procs, logs, samples, skip):
     """Move each process's per-thread latency files into `samples`, numbered
     across the processes, dropping each thread's first `skip` seconds; None,
@@ -489,6 +867,11 @@ def gather_samples(temps, procs, logs, samples, skip):
             return f"{who} left {len(files)} latency files, not {threads}"
         early = counts_before(log_path, skip) if skip else {}
         found.extend((path, early.get(thread_number(path), 0)) for path in files)
+    # Such as clients whose server went away, while their logs ran to the end.
+    empty = sum(not has_line(path, drop) for path, drop in found)
+    if empty:
+        after = f" after the first {skip} s" if skip else ""
+        return f"{empty} of {len(found)} client threads have no latencies{after}"
     os.makedirs(samples, exist_ok=True)
     for old in glob.glob(os.path.join(samples, "hugepage_thread_*.txt")):
         os.remove(old)
@@ -619,8 +1002,9 @@ def lock_testbed():
     return fd
 
 
-def warn_cores(exp, points, tb):
-    """Warn when fperf would pin more client threads than there are cpus."""
+def warn_cores(exp, points, tb, server=None):
+    """Warn when fperf would pin more client threads than there are cpus, or
+    pin a server on this machine to the clients' cpus."""
     end = max(cpu + threads for point in points
               for _, _, cpu, threads in processes(exp, point, tb))
     try:
@@ -630,12 +1014,19 @@ def warn_cores(exp, points, tb):
     if cpus and end > cpus:
         log(f"warning: fperf pins one client thread per cpu from cpu {tb['start_cpu']}, "
             f"and {end - tb['start_cpu']} threads do not fit in the {cpus} cpus here")
+    if server and not server.host:
+        last = server.start_cpu + max(server.threads(point) for point in points)
+        if server.start_cpu < end and tb["start_cpu"] < last:
+            log(f"warning: the server's threads, from cpu {server.start_cpu}, share cpus "
+                f"with the clients', {tb['start_cpu']} to {end - 1}")
 
 
 # ---------------------------------------------------------------- the run
 
 def estimate(exp, points, plans, tb, args):
     """Rough seconds the runs take."""
+    if exp.server_template:
+        return sum(point["d"] + RUN_OVERHEAD + SERVER_SECONDS + tb["pause"] for point in points)
     every_run = exp.program == "every_run" and not args.no_program
     seconds = 0
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
@@ -662,8 +1053,8 @@ def record(manifest, entry):
     runs.append(entry)
 
 
-def testbed_summary(tb, tb_path, tools):
-    return {
+def testbed_summary(tb, tb_path, tools, server=None):
+    summary = {
         "file": rel(tb_path) if tb_path else None,
         "fpga": f"{tb['fpga']['addr']}:{tb['fpga']['port']}",
         "nic": tb["nic"] or "auto",
@@ -674,6 +1065,9 @@ def testbed_summary(tb, tb_path, tools):
         "tpa": tools["tpa"],
         "fperf": tools["fperf"],
     }
+    if server:
+        summary["server"] = server.summary()
+    return summary
 
 
 def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
@@ -691,7 +1085,7 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
         # before latency_log, fperf recorded latencies only to keep samples
         manifest["latency_log"] = bool(manifest["samples"].get("dir"))
     for key, mine in (("program", exp.program), ("tpa_cfg", exp.tpa_cfg),
-                      ("latency_log", exp.latency_log),
+                      ("latency_log", exp.latency_log), ("server", exp.server_template),
                       ("functions", exp.functions), ("instances", exp.instances),
                       ("together", exp.together_spec), ("trace", exp.trace_spec),
                       ("params", exp.params), ("name", exp.name_template),
@@ -702,9 +1096,9 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
                               "start a new run instead")
     old_testbed = manifest.get("testbed") or {}
     for key in RESUME_TESTBED_KEYS:
-        if key in old_testbed and old_testbed[key] != testbed[key]:
+        if key in old_testbed and old_testbed[key] != testbed.get(key):
             raise ConfigError(f"{where} was measured with testbed {key} {old_testbed[key]!r}, "
-                              f"not {testbed[key]!r}; start a new run instead")
+                              f"not {testbed.get(key)!r}; start a new run instead")
     for key, plan in plans.items():
         old = (manifest.get("targets") or {}).get(key)
         if not old:
@@ -716,9 +1110,9 @@ def check_resumable(manifest, exp, plans, testbed, programmed, run_dir):
                                   "or without programming them; start a new run instead")
 
 
-def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
+def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed, server=None):
     """The run directory and its manifest: a new one, or the one to resume."""
-    testbed = testbed_summary(tb, tb_path, tools)
+    testbed = testbed_summary(tb, tb_path, tools, server)
     if resume_dir is None:
         run_dir = exp.new_run()
         manifest = {
@@ -734,6 +1128,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
             "sweep": {key: values for key, values in exp.sweep},
             "name": exp.name_template,
             "fperf": exp.fperf_template,
+            "server": exp.server_template,
             "program": exp.program,
             "functions": exp.functions,
             "tpa_cfg": exp.tpa_cfg,
@@ -756,6 +1151,7 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
         manifest.setdefault("params", exp.params)
         manifest.setdefault("name", exp.name_template)
         manifest.setdefault("fperf", exp.fperf_template)
+        manifest.setdefault("server", exp.server_template)
         manifest.setdefault("program", exp.program)
         manifest.setdefault("functions", exp.functions)
         manifest.setdefault("tpa_cfg", exp.tpa_cfg)
@@ -767,12 +1163,16 @@ def open_run(exp, plans, tb, tb_path, tools, resume_dir, programmed):
         manifest.setdefault("runs", [])
     for key, plan in plans.items():
         manifest["targets"][key] = plan.manifest(programmed)
+    if server:
+        # the server's own libtpa checkout, which may differ from the clients'
+        manifest["server_libtpa"] = server.libtpa()
     write_yaml(os.path.join(run_dir, "manifest.yaml"), manifest)
     return run_dir, manifest
 
 
-def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
-    """Program, load and run every point in turn; return this session's statuses."""
+def measure(exp, args, points, plans, tb, tools, run_dir, manifest, server=None):
+    """Program, load and run every point in turn, or with `server` start a
+    server for each; return this session's statuses."""
     manifest_path = os.path.join(run_dir, "manifest.yaml")
     state = {"nic": tb["nic"] or None, "slots": {}}     # slots: what run.py loaded where
     statuses = []
@@ -833,9 +1233,10 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
             state["slots"][slot] = path
         return None
 
-    every_run = exp.program == "every_run" and not args.no_program
+    every_run = exp.program == "every_run" and not args.no_program and not server
+    far_end = "server machine" if server else "FPGA"
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
-        plan, label = plans[key], f"{TARGET_KEY}_{key}"
+        plan, label = plans.get(key), f"{TARGET_KEY}_{key}"
         todo = []
         for point in group:
             name = exp.point_id(point)
@@ -847,7 +1248,13 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
         if not todo:
             continue
 
-        if not every_run:
+        if server:
+            # Nothing to program: the clients need only reach the server machine.
+            if not wait_ready(tb, state, tb["ready_timeout"], server=server):
+                for point, name in todo:
+                    finish(point, name, "skipped: the server machine does not answer ping")
+                continue
+        elif not every_run:
             why = prepare(plan, label)
             if why:
                 log(f"{label}: {why}; skipping its {len(todo)} runs")
@@ -862,9 +1269,9 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
                     log(f"{label}: {why}; skipping {name}")
                     finish(point, name, f"skipped: {why}")
                     continue
-            elif not wait_ready(tb, state, tb["ready_timeout"], quiet=True):
+            elif not wait_ready(tb, state, tb["ready_timeout"], quiet=True, server=server):
                 for later, later_name in todo[index:]:
-                    finish(later, later_name, "skipped: the FPGA stopped answering")
+                    finish(later, later_name, f"skipped: the {far_end} stopped answering")
                 break
             why = load_function(plan, point)
             if why:
@@ -873,18 +1280,37 @@ def measure(exp, args, points, plans, tb, tools, run_dir, manifest):
                 continue
             log(f"{label}  {describe(exp, point)}  {name}")
             started = (now(), time.monotonic())
+            why = stuck = None
             try:
-                if together(exp, point):
-                    status, rc = run_together(exp, point, tb, tools, state["nic"], run_dir)
-                else:
-                    status, rc = run_fperf(exp, point, tb, tools, state["nic"],
-                                           os.path.join(run_dir, name))
+                try:
+                    why = start_server(server, exp, point, run_dir) if server else None
+                    if why:
+                        status, rc = f"skipped: {why}", None
+                    elif together(exp, point):
+                        status, rc = run_together(exp, point, tb, tools, state["nic"], run_dir)
+                    else:
+                        status, rc = run_fperf(exp, point, tb, tools, state["nic"],
+                                               os.path.join(run_dir, name))
+                finally:
+                    if server:
+                        stuck = server.stop()
+                        if stuck:       # said here too, should an interrupt be on its way
+                            log(f"server: {stuck}")
             except KeyboardInterrupt:
                 finish(point, name, "interrupted", started)
                 raise
+            if status == "ok" and server and server.died:
+                status = "failed: the server exited during the run"
+                set_aside(exp, point, run_dir)      # so neither plotted nor kept by --resume
             finish(point, name, status, started, rc)
             if status != "ok":
                 log(f"{name}: {status}, exit status {rc}")
+            # The next point needs a server of its own, which cannot start
+            # beside one that would not stop, nor where this one would not.
+            if stuck:
+                raise RunError("a server would not stop, so no other can start")
+            if why:
+                raise RunError(f"the server would not start: {why}")
             time.sleep(tb["pause"])
     return statuses
 
@@ -902,16 +1328,25 @@ def summarize(exp, run_dir, manifest):
     log(f"plot with: eval/plot.py {exp.name}{config} --run {name}")
 
 
-def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, resume_dir):
+def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, resume_dir,
+               server=None):
     """What a run would do, with every command it would run."""
-    nic = tb["nic"] or detect_nic(tb["fpga"]["addr"]) or "<nic>"
-    every_run = exp.program == "every_run" and not args.no_program
+    addr, port = peer(exp, tb)
+    nic = tb["nic"]
+    if not nic and addr and (not server or server.host):    # a server here is routed to lo
+        nic = detect_nic(addr)
+    nic = nic or "<nic>"
+    every_run = exp.program == "every_run" and not args.no_program and not server
     testbed = rel(tb_path) if tb_path else "built-in defaults; there is no eval/testbed.yaml"
     print(f"experiment  {exp.name}, {rel(exp.config_path)}")
     if exp.description:
         print(f"            {exp.description}")
     print(f"testbed     {testbed}")
-    print(f"fpga        {tb['fpga']['addr']}:{tb['fpga']['port']} through {nic}")
+    if server:
+        print(f"server      {addr or '<server.addr>'}:{port}, on {server.nic or '<server.nic>'} of "
+              f"{server.where}, threads from cpu {server.start_cpu}; clients through {nic}")
+    else:
+        print(f"fpga        {addr}:{port} through {nic}")
     if exp.trace:
         slots = ", ".join(f"app {app} to slot {slot}" for slot, app in sorted(exp.trace.slots.items()))
         print(f"trace       {rel(exp.trace.path)}: {exp.trace.rows} rows, sleep_time adding up "
@@ -923,26 +1358,33 @@ def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, 
     for point, why in excluded:
         print(f"left out    {describe(exp, point)}: {why}")
     for key, group in itertools.groupby(points, key=lambda point: str(point[TARGET_KEY])):
-        plan = plans[key]
-        print(f"\n{TARGET_KEY}_{key}  {rel(plan.bit)}")
-        print(f"  sha256 {plan.bit_sha256}")
-        if plan.build:
-            print("  built " + ", ".join(f"{k} {v}" for k, v in plan.build.items()))
-        if args.no_program:
-            print("  not programmed: --no-program")
+        plan = plans.get(key)
+        if server:
+            print(f"\n{TARGET_KEY}_{key}  no FPGA: a fresh server for every point, stopped after it")
         else:
-            print("  before every run:" if exp.program == "every_run" else "  once:")
-            prefix = f"HW_TARGET={shlex.quote(tb['jtag'])} " if tb["jtag"] else ""
-            print("    $ " + prefix + shlex.join(program_argv(plan.bit, tools)))
-            for slot, _, path, sha in plan.slots:
-                print(f"    # slot {slot}: {rel(path)}, sha256 {sha}")
-                print("    $ " + shlex.join(slot_argv(slot, path, tb, tools)))
-        loaded = {slot: path for slot, _, path, _ in plan.slots}
+            print(f"\n{TARGET_KEY}_{key}  {rel(plan.bit)}")
+            print(f"  sha256 {plan.bit_sha256}")
+            if plan.build:
+                print("  built " + ", ".join(f"{k} {v}" for k, v in plan.build.items()))
+            if args.no_program:
+                print("  not programmed: --no-program")
+            else:
+                print("  before every run:" if exp.program == "every_run" else "  once:")
+                prefix = f"HW_TARGET={shlex.quote(tb['jtag'])} " if tb["jtag"] else ""
+                print("    $ " + prefix + shlex.join(program_argv(plan.bit, tools)))
+                for slot, _, path, sha in plan.slots:
+                    print(f"    # slot {slot}: {rel(path)}, sha256 {sha}")
+                    print("    $ " + shlex.join(slot_argv(slot, path, tb, tools)))
+        loaded = {slot: path for slot, _, path, _ in plan.slots} if plan else {}
         for point in group:
             name = exp.point_id(point)
             if resume_dir and point_complete(exp, point, resume_dir):
                 print(f"  keep {name}")
                 continue
+            server_lines = []       # the server's command, shown just before the clients'
+            if server:
+                server_lines = ["  $ " + shlex.join(server.wrap(server.argv(point, "X" * 12))),
+                                f"      > {os.path.splitext(exp.log_name(point))[0]}.server.out"]
             if every_run:
                 loaded = {slot: path for slot, _, path, _ in plan.slots}
             if exp.functions and not args.no_program:
@@ -955,6 +1397,8 @@ def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, 
                         loaded[slot] = path
             shown = latency_args("/tmp/feXXXXXXXX" if exp.latency_log else None)
             if not together(exp, point):
+                for line in server_lines:
+                    print(line)
                 print("  $ " + shlex.join(fperf_argv(exp, point, tb, tools, nic, extra=shown)))
                 print(f"      > {name}")
                 continue
@@ -966,6 +1410,8 @@ def print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, 
                 head = f"{describe(exp, point)}: " if describe(exp, point) else ""
                 print(f"  # {head}latencies of {len(procs) * exp.threads(point)} "
                       f"clients into {name}{skip}")
+            for line in server_lines:
+                print(line)
             for run, tpa_id, cpu, _ in procs:
                 print("  $ " + shlex.join(fperf_argv(exp, run, tb, tools, nic, tpa_id, cpu, shown)))
                 print(f"      > {exp.log_name(run)}")
@@ -1024,10 +1470,19 @@ def main(argv=None):
             raise ConfigError("--no-program cannot switch functions, so choose one with "
                               f"--only {FUNCTION_KEY}=VALUE")
         tb, tb_path = load_testbed(args.testbed)
-        plans = {key: TargetPlan(exp.targets[key], exp.functions) for key in keys}
-        need_reconf = not args.no_program and bool(
-            exp.functions or any(plans[key].slots for key in keys))
-        tools, missing = find_tools(tb, not args.no_program, need_reconf)
+        server = None
+        if exp.server_template:
+            if args.no_program:
+                raise ConfigError("--no-program: this experiment programs nothing; its clients "
+                                  "talk to fperf's own server")
+            plans = {}
+            tools, missing = find_tools(tb, False, False)
+            server = Server(exp, tb, tools)
+        else:
+            plans = {key: TargetPlan(exp.targets[key], exp.functions) for key in keys}
+            need_reconf = not args.no_program and bool(
+                exp.functions or any(plans[key].slots for key in keys))
+            tools, missing = find_tools(tb, not args.no_program, need_reconf)
         resume_dir = None if args.resume is None else exp.find_run(args.resume or None)
         if missing and not args.dry_run:
             where = rel(tb_path) if tb_path else "eval/testbed.yaml, starting from testbed.example.yaml"
@@ -1036,7 +1491,8 @@ def main(argv=None):
         sys.exit(f"run.py: {e}")
 
     if args.dry_run:
-        print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, resume_dir)
+        print_plan(exp, points, excluded, plans, tb, tb_path, tools, missing, args, resume_dir,
+                   server)
         return 0
 
     signal.signal(signal.SIGTERM, interrupted)
@@ -1046,8 +1502,11 @@ def main(argv=None):
     try:
         lock = lock_testbed()
         keeper = SudoKeeper(tb["sudo"])     # before any run directory exists
+        why = server.check(tb) if server else None
+        if why:
+            raise RunError(f"server: {why}")
         run_dir, manifest = open_run(exp, plans, tb, tb_path, tools, resume_dir,
-                                     not args.no_program)
+                                     not args.no_program, server)
     except (ConfigError, RunError, OSError) as e:
         if keeper:
             keeper.stop()
@@ -1062,8 +1521,8 @@ def main(argv=None):
         log(f"left out {describe(exp, point)}: {why}")
     code = 0
     try:
-        warn_cores(exp, points, tb)
-        statuses = measure(exp, args, points, plans, tb, tools, run_dir, manifest)
+        warn_cores(exp, points, tb, server)
+        statuses = measure(exp, args, points, plans, tb, tools, run_dir, manifest, server)
         code = 0 if all(status in ("ok", "kept") for status in statuses) else 1
     except KeyboardInterrupt:
         log("interrupted")
